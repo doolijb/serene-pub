@@ -21,11 +21,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -55,10 +55,10 @@ async function lorebook(userId: number, timelineEnabled: boolean) {
 	return row!
 }
 
-async function session(userId: number, lorebookId: number | null = null) {
+async function session(userId: number, lorebookId: number | null = null, genreId?: string) {
 	const [row] = await testDb
 		.insert(schema.sessions)
-		.values({ userId, isGroup: false, name: `Run ${++n}`, lorebookId })
+		.values({ userId, isGroup: false, name: `Run ${++n}`, lorebookId, ...(genreId ? { genreId } : {}) })
 		.returning()
 	return row!
 }
@@ -76,13 +76,16 @@ const notesOf = (sessionId: number, userId: number, overlayOf: number | null) =>
 	)
 
 describe("notes copy the switch", () => {
-	test("made over an off book they are off, over an on book on, over none the default (on)", async () => {
+	test("made over an off book they are off, over an on book on, over none the genre's rule (Story, no preset: off; a required-timeline genre: on)", async () => {
 		const me = await person()
 		const off = await lorebook(me.id, false)
 		const on = await lorebook(me.id, true)
 		expect((await notesOf((await session(me.id, off.id)).id, me.id, off.id)).timelineEnabled).toBe(false)
 		expect((await notesOf((await session(me.id, on.id)).id, me.id, on.id)).timelineEnabled).toBe(true)
-		expect((await notesOf((await session(me.id)).id, me.id, null)).timelineEnabled).toBe(true)
+		expect((await notesOf((await session(me.id)).id, me.id, null)).timelineEnabled).toBe(false)
+		expect(
+			(await notesOf((await session(me.id, null, "core:genre/lair")).id, me.id, null)).timelineEnabled
+		).toBe(true)
 	})
 
 	test("a branch's notes copy an off parent's value", async () => {

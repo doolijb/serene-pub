@@ -24,8 +24,11 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { rejectedAtReview } from "$lib/server/pipelines/runtime/haltExplanation"
 import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
+import { announceRun } from "$lib/server/pipelines/runtime/runsInProgress"
 import {
 	fieldsFindings,
 	getDefinition,
@@ -466,7 +469,28 @@ export function createReviewer(scope: {
 				return
 			}
 
-			parked.set(entry.id, { entry, resolve })
+			// A review waiting parks its run: the run holds no re-run or remove
+			// action while it waits (`runHoldsReruns`), and the page is told. The
+			// count lives in the registry (`setParked`), so a run at two gates
+			// stays parked until both are decided.
+			const run = scope.signal ? runRegistry.runOfSignal(scope.signal) : undefined
+			let unparked = false
+			const unpark = () => {
+				if (!run || unparked) return
+				unparked = true
+				runRegistry.setParked(run.runId, false)
+				void announceRun(run.runId)
+			}
+			if (run) {
+				runRegistry.setParked(run.runId, true)
+				void announceRun(run.runId)
+			}
+			const settle = (decision: ReviewDecision) => {
+				unpark()
+				resolve(decision)
+			}
+
+			parked.set(entry.id, { entry, resolve: settle })
 
 			// The guard is what keeps a decided review from being "cancelled"
 			// a moment later: absent from `parked` now means settled, never
@@ -474,7 +498,7 @@ export function createReviewer(scope: {
 			const onAbort = () => {
 				if (!parked.has(entry.id)) return
 				parked.delete(entry.id)
-				resolve(cancelled())
+				settle(cancelled())
 				pushToUser?.(scope.userId, "pipelines:reviewClosed", {
 					id: entry.id
 				})
@@ -534,9 +558,6 @@ export const previewReviewer: Reviewer = async () => ({
  */
 export type AnswerStanding = "answered" | "no-answer" | "unsettled"
 
-/** The executor's halt reason for a write the reviewer rejected (`executor.ts`, the review gate). */
-const REVIEW_REJECTED_REASON = "rejected at review"
-
 export async function answerStanding(
 	db: Db,
 	receipt: {
@@ -547,14 +568,7 @@ export async function answerStanding(
 	}
 ): Promise<AnswerStanding> {
 	if (receipt.outcome === "ok") return "answered"
-	// The review record, or — on a compacted receipt, whose reviews are
-	// dropped with its nodes (an event-triggered halt) — the executor's
-	// halt reason for a reject (`REVIEW_REJECTED_REASON`).
-	const rejected =
-		receipt.outcome === "halt" &&
-		((receipt.reviews ?? []).some((r) => r.action === "reject") ||
-			receipt.haltReason === REVIEW_REJECTED_REASON)
-	if (!rejected) return "unsettled"
+	if (!rejectedAtReview(receipt)) return "unsettled"
 	const [wrote] = await db
 		.select({ n: sql<number>`count(*)::int` })
 		.from(schema.pipelineRunArtifacts)

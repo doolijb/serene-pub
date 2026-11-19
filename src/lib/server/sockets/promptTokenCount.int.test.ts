@@ -28,6 +28,8 @@ import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 let db: TestDb
 let dataDir: string
 let userId: number
+let guestId: number
+let adminGuestId: number
 let sessionId: number
 
 vi.mock("$lib/server/db", async () => {
@@ -43,9 +45,9 @@ vi.mock("$lib/server/embedding", () => ({
 	batchEmbed: async () => []
 }))
 
-const fakeSocket = (id: number) =>
+const fakeSocket = (id: number, isAdmin = true) =>
 	({
-		user: { id, isAdmin: true },
+		user: { id, isAdmin },
 		io: { to: () => ({ emit: () => {} }) }
 	}) as any
 
@@ -142,6 +144,22 @@ beforeAll(async () => {
 		.values({ userId, isGroup: false, lorebookId: lorebook.id })
 		.returning()
 	sessionId = session.id
+
+	// A guest reads the counts, never the text; an administrator guest reads both.
+	const [guest] = await db
+		.insert(schema.users)
+		.values({ username: "ptc-guest", isAdmin: false })
+		.returning()
+	guestId = guest.id
+	const [adminGuest] = await db
+		.insert(schema.users)
+		.values({ username: "ptc-admin-guest", isAdmin: true })
+		.returning()
+	adminGuestId = adminGuest.id
+	await db.insert(schema.sessionGuests).values([
+		{ sessionId, userId: guestId },
+		{ sessionId, userId: adminGuestId }
+	])
 
 	await db.insert(schema.sessionCharacters).values({
 		sessionId,
@@ -248,6 +266,53 @@ describe("sessions:promptTokenCount compiles through the pipeline", () => {
 			.from(schema.sessionMessages)
 			.where(eq(schema.sessionMessages.sessionId, sessionId))
 		expect(after.length).toBe(before.length)
+	})
+})
+
+describe("sessions:promptTokenCount — who is shown the prompt text and its count", () => {
+	const countAs = async (socket: any) => {
+		const { promptTokenCountHandler } = await import("./sessions")
+		return (await promptTokenCountHandler.handler(
+			socket,
+			{ sessionId, content: "Have you seen the ashguard?" } as any,
+			noopEmit
+		)) as any
+	}
+
+	test("the owner who is an administrator (accounts off: the one person) gets the text and the counts", async () => {
+		const res = await countAs(fakeSocket(userId))
+		expect(promptText(res)).toContain("Ash")
+		expect(res.meta.tokenCounts.total).toBeGreaterThan(0)
+		// Unchanged for the owner: the whole report.
+		expect(res.meta.promptFormat).toBe("split_chat")
+		expect(res.meta.retrieval.blocks.length).toBeGreaterThan(0)
+		expect(res.meta.sessionMessages).toBeDefined()
+	})
+
+	test("an owner who is not an administrator gets no count — DG2", async () => {
+		await db.update(schema.users).set({ isAdmin: false }).where(eq(schema.users.id, userId))
+		try {
+			const res = await countAs(fakeSocket(userId, false))
+			expect(res).toEqual({})
+			expect(JSON.stringify(res)).not.toContain("tokenCounts")
+		} finally {
+			await db.update(schema.users).set({ isAdmin: true }).where(eq(schema.users.id, userId))
+		}
+	})
+
+	test("a guest gets no count — DG2", async () => {
+		const res = await countAs(fakeSocket(guestId, false))
+		expect(res).toEqual({})
+		expect(JSON.stringify(res)).not.toContain("tokenCounts")
+	})
+
+	test("an administrator who is a guest gets the compiled prompt and report — DG1", async () => {
+		const res = await countAs(fakeSocket(adminGuestId, true))
+		expect(res.error).toBeUndefined()
+		expect(promptText(res)).toContain("Ash")
+		expect(res.meta.tokenCounts.total).toBeGreaterThan(0)
+		expect(res.meta.promptFormat).toBe("split_chat")
+		expect(res.meta.retrieval.blocks.length).toBeGreaterThan(0)
 	})
 })
 

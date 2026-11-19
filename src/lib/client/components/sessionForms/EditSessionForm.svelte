@@ -1,6 +1,28 @@
 <script lang="ts">
-	import Badge from "$lib/client/components/Badge.svelte"
-	import { withoutShared } from "$lib/shared/utils/sharedRows"
+	import SessionVisibilityPanel from "./SessionVisibilityPanel.svelte"
+	import SessionActions from "./SessionActions.svelte"
+	import SessionTags from "./SessionTags.svelte"
+	import SessionBenchedSeats from "./SessionBenchedSeats.svelte"
+	import SessionCharacters from "./SessionCharacters.svelte"
+	import SessionPersonas from "./SessionPersonas.svelte"
+	import {
+		CARD_CLASS,
+		STANDARD_GENRE_ID,
+		cardLabel,
+		characterPositionsOf,
+		seatedThenBenchedIds,
+		sessionSchema,
+		type BenchChange,
+		type GuestRow,
+		type PlayedByChoice,
+		type PlayerSeatDraft,
+		type SavedCharacterSeat,
+		type SavedPlayerSeat,
+		type SeatCard,
+		type SeatKind,
+		type ValidationErrors
+	} from "./editSessionForm"
+	import { splitSharedRows } from "$lib/shared/utils/sharedRows"
 	/**
 	 * A session's own settings: its name, then Participants, Settings and
 	 * Privacy.
@@ -47,6 +69,10 @@
 	import { guestChanges } from "./guestChanges"
 	import { genreVersion, genreVersionLabel } from "./createSession.svelte"
 	import { storedPlayerLabel } from "$lib/shared/sessions/playerLabel"
+	import {
+		GUEST_SEAT_SENTENCES,
+		storedGuestSeatSwitches
+	} from "$lib/shared/sessions/guestSeats"
 	import { storedSceneSettings } from "$lib/shared/sessions/sceneSettings"
 	import type { SceneSettingsDecl } from "@serene-pub/sdk"
 	import SessionSceneSettings from "./SessionSceneSettings.svelte"
@@ -67,16 +93,30 @@
 	import PersonaSelectModal from "../modals/PersonaSelectModal.svelte"
 	import ReassignSessionParticipantModal from "../modals/ReassignSessionParticipantModal.svelte"
 	import UserSelectModal from "../modals/UserSelectModal.svelte"
-	import Avatar from "../Avatar.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { dndzone, TRIGGERS, type DndEvent } from "svelte-dnd-action"
-	import BenchedSeatRow from "./BenchedSeatRow.svelte"
-	import { seatFellInStory, seatHasNoLines } from "./benchedSeats"
+	import { TRIGGERS, type DndEvent } from "svelte-dnd-action"
+	import { seatFellInStory } from "./benchedSeats"
+	import {
+		differingHandovers,
+		playerSeatsForOf,
+		type PendingPlayerSeat,
+		fillGroupSlots,
+		groupPeople,
+		handoverSeatOf,
+		isMoveValue,
+		MOVE_TO_AI,
+		moveTargetOf,
+		moveToPersonValue,
+		seatMovesOf,
+		swapWithinGroup
+	} from "./seatGroups"
+	import { SvelteMap } from "svelte/reactivity"
 	import { inPlay } from "$lib/shared/sessions/inPlay"
 	import RemoveFromSessionModal from "../modals/RemoveFromSessionModal.svelte"
 	import SessionsUnsavedChangesModal from "../modals/SessionsUnsavedChangesModal.svelte"
 	import { onMount, getContext, tick } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import FieldHelp from "../FieldHelp.svelte"
 	import { notify } from "$lib/client/utils/notify"
 	import ActionConfirm from "../sessionPage/ActionConfirm.svelte"
 	import { askingOf } from "../sessionPage/actionConfirmAsking"
@@ -88,7 +128,6 @@
 	} from "$lib/shared/lorebooks/sessionNotes"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 	import { sessionBookOf } from "$lib/client/sessions/store/derive"
-	import { z } from "zod"
 	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
 	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
 	import { docsHref } from "$lib/shared/utils/docsHref"
@@ -96,26 +135,13 @@
 	import LoadingState from "../LoadingState.svelte"
 	import PanelTabStrip from "../panels/PanelTabStrip.svelte"
 	import { actionIdentity } from "$lib/shared/actions/identity"
-	import { characterSummary } from "$lib/shared/characters/characterSummary"
 	import { isCardlessPlayerSeat } from "$lib/shared/sessions/playerSeat"
 	import {
 		castNameOf,
 		seatCardAsShown
 	} from "$lib/client/components/sessionPage/projections/characters"
 
-	// The F29 floor (19 §2) — stated here rather than imported from the
-	// server-only sessionModes module. When "sessions:genres" returns nothing (a
-	// registry that never synced), the form behaves exactly as before modes
-	// existed: no picker, every section shown, today's save rules.
-	const STANDARD_GENRE_ID = "core:genre/story" // Story since 2026-10-19 (was Chat, now the assistant)
 
-	// Zod validation schema
-	const sessionSchema = z.object({
-		name: z.string().min(1, "Session name is required").trim(),
-		scenario: z.string().optional()
-	})
-
-	type ValidationErrors = Record<string, string>
 
 	interface Props {
 		/**
@@ -158,9 +184,6 @@
 	 */
 	const FIELD_CLASS = "input rounded-base"
 
-	/** The card a section sits in: the shared `panel-card` utility. */
-	const CARD_CLASS = "panel-card"
-
 	// STATE VARIABLES
 
 	// Tag-related state
@@ -170,6 +193,31 @@
 	let selectedTags: string[] = $state([])
 
 	let session: Sockets.Sessions.Get.Response["session"] | undefined = $state()
+	/** The rows another person shared, kept apart from `characters` (G3). */
+	let sharedRows: Sockets.Characters.List.Response["characterList"] =
+		$state([])
+	/** Shared cards picked in a picker and not yet saved: a copy is made on Save. */
+	let sharedPicks = $state<{ kind: "character" | "player"; card: SeatCard }[]>(
+		[]
+	)
+	const sharedOfKind = (kind: "character" | "player") =>
+		sharedToOffer.filter(
+			(r) => !sharedPicks.some((p) => p.kind === kind && p.card.id === r.id)
+		) as SeatCard[]
+	function addSharedPick(kind: "character" | "player", card: SeatCard) {
+		if (!sharedPicks.some((p) => p.kind === kind && p.card.id === card.id))
+			sharedPicks = [...sharedPicks, { kind, card }]
+		if (kind === "character") showCharacterModal = false
+		else showPersonaModal = false
+	}
+	function removeSharedPick(kind: "character" | "player", id: number) {
+		sharedPicks = sharedPicks.filter(
+			(p) => !(p.kind === kind && p.card.id === id)
+		)
+	}
+	const sharedPicksOf = (kind: "character" | "player") =>
+		sharedPicks.filter((p) => p.kind === kind).map((p) => p.card)
+
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
 	)
@@ -201,10 +249,23 @@
 				characterPositions: Record<number, number>
 				/** The `playerLabel` override (R4); blank = the genre's. */
 				playerLabel: string
+				/** 🚧 Owner's switch: guests can bring their own characters (held until Save). */
+				guestsBringOwn: boolean
+				/** 🚧 Owner's switch: guests can take cast members (held until Save). */
+				guestsTakeCast: boolean
 				/** 🚧 The scene settings override (live scenes §4–§5), as JSON; "null" = the genre's. */
 				sceneSettings: string
 				/** 🚧 The live card-less player seats, by id, with their names. */
 				playerSeats: Array<{ id: number; name: string }>
+				/** 🚧 The "Played by" handovers held until Save: only those that differ from the saved person, by key. */
+				seatHandovers: Array<{ key: string; toUserId: number }>
+				/** 🚧 Shared cards picked and not yet saved, each seated as a copy (guests only). */
+				sharedCardSeats: Array<{
+					characterId: number
+					kind: "character" | "player"
+				}>
+				/** 🚧 Seats the owner named for other people, held until Save (`sessions:update`'s `playerSeatsFor`). */
+				playerSeatsFor: ReturnType<typeof playerSeatsForOf>
 		  }
 		| undefined = $state()
 
@@ -229,10 +290,23 @@
 				characterPositions: Record<number, number>
 				/** The `playerLabel` override (R4); blank = the genre's. */
 				playerLabel: string
+				/** 🚧 Owner's switch: guests can bring their own characters (held until Save). */
+				guestsBringOwn: boolean
+				/** 🚧 Owner's switch: guests can take cast members (held until Save). */
+				guestsTakeCast: boolean
 				/** 🚧 The scene settings override (live scenes §4–§5), as JSON; "null" = the genre's. */
 				sceneSettings: string
 				/** 🚧 The live card-less player seats, by id, with their names. */
 				playerSeats: Array<{ id: number; name: string }>
+				/** 🚧 The "Played by" handovers held until Save: only those that differ from the saved person, by key. */
+				seatHandovers: Array<{ key: string; toUserId: number }>
+				/** 🚧 Shared cards picked and not yet saved, each seated as a copy (guests only). */
+				sharedCardSeats: Array<{
+					characterId: number
+					kind: "character" | "player"
+				}>
+				/** 🚧 Seats the owner named for other people, held until Save (`sessions:update`'s `playerSeatsFor`). */
+				playerSeatsFor: ReturnType<typeof playerSeatsForOf>
 		  }
 		| undefined = $state()
 
@@ -301,6 +375,9 @@
 	 * genre declares one; stored on the row's `metadata`, never a column.
 	 */
 	let playerLabelOverride = $state("")
+	/** 🚧 The owner's two guest seat switches, as drafted here (held until Save). */
+	let guestsBringOwn = $state(true)
+	let guestsTakeCast = $state(true)
 	/**
 	 * 🚧 The session's scene settings override (live scenes §4–§5): its
 	 * Scenes mode, boundary triggers and Summaries; null follows the
@@ -330,6 +407,10 @@
 			(!!modeShape.personas && (modeShape.personas.max ?? 1) !== 0)
 	)
 	let showLorebookField = $derived(!modeShape || !!modeShape.lorebook)
+	/** Naming a seat (`take-seat`) is offered only in a genre of player seats: one with a player label and personas. */
+	let guestsMayNameSeat = $derived(
+		!!genrePlayerLabel?.trim() && showPersonasSection
+	)
 	// Save floors: a non-standard mode's shape speaks for itself. The
 	// standard mode keeps the form's historical ≥1 character / ≥1 persona
 	// floor even though its shape says min 0 — the shape states what the
@@ -362,6 +443,17 @@
 		msg: Sockets.Sessions.Pipelines.Response
 	) => {
 		if (msg.sessionId === editSessionId) sessionPipelines = msg.pipelines
+	}
+
+	/**
+	 * A pipeline setting saved in the settings rows (a prompt picked in
+	 * **Read the wording**) is also shown by the Pipelines cards; each card
+	 * re-reads its own view, which it already listens for.
+	 */
+	const rereadPipelineCards = (field: { address: { kind: string } }) => {
+		if (field.address.kind !== "pipeline" || !session?.id) return
+		for (const p of sessionPipelines)
+			socket.emit("pipelines:get", { slug: p.slug, sessionId: session.id })
 	}
 
 	// The account-visibility view (design §4): what of the current user's data
@@ -415,9 +507,16 @@
 		!!(
 			data?.session.name.trim() &&
 			(data?.characterIds.length ?? 0) +
-				(data?.castMemberIds.length ?? 0) >=
+				(data?.castMemberIds.length ?? 0) +
+				(data?.sharedCardSeats.filter((p) => p.kind === "character")
+					.length ?? 0) >=
 				charactersFloor &&
-			(data?.personaIds.length ?? 0) + (data?.playerSeats.length ?? 0) >=
+			(data?.personaIds.length ?? 0) +
+				(data?.playerSeats.length ?? 0) +
+				(data?.playerSeatsFor.filter((p) => p.characterId == null)
+					.length ?? 0) +
+				(data?.sharedCardSeats.filter((p) => p.kind === "player")
+					.length ?? 0) >=
 				personasFloor
 		)
 	)
@@ -433,7 +532,6 @@
 	// PersonaSelectModal (which only carry the display-column subset from
 	// "characters:list") — Partial<...> reflects the latter. A persona is a
 	// character the user voices, so both lists hold the same row shape.
-	type SeatCard = Partial<SelectCharacter> & { id: number }
 	/**
 	 * The four seated lists hold the seats IN PLAY in the draft; the four
 	 * `benched…` lists hold the benched ones, in the same row shapes (owner
@@ -459,20 +557,16 @@
 			(m) =>
 				m.cardId == null &&
 				!selectedMembers.some((s) => s.id === m.id) &&
-				!benchedMembers.some((s) => s.id === m.id)
+				!benchedMembers.some((s) => s.id === m.id) &&
+				!heldByPlayerSeat(m.id)
 		)
 	)
-	/**
-	 * 🚧 The session's card-less player seats (`isCardlessPlayerSeat`): a
-	 * player character with no card, shown by its seat name — renamed or
-	 * removed here, committed by Save (`playerSeatChanges`). `userId` is the
-	 * seat's player: a guest edits only their own.
-	 */
-	type PlayerSeatDraft = {
-		id: number
-		name: string
-		userId: number | null
-	}
+	/** Whether a player seat, saved or picked here, already holds the member: one member, one seat. */
+	const heldByPlayerSeat = (memberId: number): boolean =>
+		pendingSeats.some((p) => p.castMemberId === memberId) ||
+		!!session?.sessionPersonas?.some(
+			(cp) => cp.castMemberId === memberId && !cp.removedAt
+		)
 	let playerSeats: PlayerSeatDraft[] = $state([])
 	let benchedPlayerSeats: PlayerSeatDraft[] = $state([])
 	/**
@@ -481,10 +575,6 @@
 	 * session's saved guests (`guestChanges`), dropped with the form. A row
 	 * picked but not yet saved carries only the user the picker returned.
 	 */
-	type GuestRow = {
-		userId: number
-		user?: { username?: string | null; displayName?: string | null } | null
-	}
 	let selectedGuests: GuestRow[] = $state([])
 	/**
 	 * Participant writes Save sent and not yet answered (guests, a cast
@@ -524,15 +614,341 @@
 			(cp) => cp.id === seatId && !cp.removedAt
 		)
 
-	/** A seat the bench draft moves: which seat (by the id its write names) and where it should end up. */
-	type BenchChange = {
-		seat: {
-			characterId?: number
-			castMemberId?: number
-			playerSeatId?: number
-		}
-		enabled: boolean
+	// ---- The people of the session and who plays each seat ("Played by") ----
+	/** The viewer's id (0 before the user is known). */
+	const viewerId = $derived.by(() => userCtx.user?.id ?? 0)
+	const ownerId: number | null = $derived(session?.userId ?? null)
+	/** A guest who is a player, saved (never one pending in the form). */
+	const savedPlayerGuests = $derived(
+		selectedGuests.filter((g) =>
+			session?.sessionGuests?.some(
+				(s) => s.userId === g.userId && s.isPlayer !== false
+			)
+		)
+	)
+	/** The session's people: the owner, then the saved guests, in the form's guest order. */
+	const seatPeople = $derived<number[]>([
+		...(ownerId != null ? [ownerId] : []),
+		...selectedGuests
+			.filter((g) =>
+				session?.sessionGuests?.some((s) => s.userId === g.userId)
+			)
+			.map((g) => g.userId)
+	])
+	/** 🚧 The handovers picked here, held until Save: `character:<cardId>` · `member:<castMemberId>` · `player:<playerSeatId>` to the person's user id. */
+	const handoverDraft = new SvelteMap<string, number>()
+	/** The person a saved seat has now, by draft key (the draft compares against it). */
+	const savedHandoverPerson = (key: string): number | null | undefined => {
+		const [kind, raw] = key.split(":")
+		const id = Number(raw)
+		if (kind === "character") return savedCharacterSeat(id)?.seatedByUserId
+		if (kind === "member") return savedMemberSeat(id)?.seatedByUserId
+		return savedPlayerSeat(id)?.userId
 	}
+	/** Who plays a character seat: the draft, the saved seater, then the viewer for an unsaved row. A saved seat with no seater is the owner's. */
+	const seaterOf = (
+		key: string,
+		saved: { seatedByUserId?: number | null } | undefined
+	): number =>
+		handoverDraft.get(key) ??
+		(saved ? (saved.seatedByUserId ?? ownerId ?? viewerId) : viewerId)
+	const characterSeater = (c: SeatCard): number =>
+		seaterOf(`character:${c.id}`, savedCharacterSeat(c.id))
+	const memberSeater = (m: PickMember): number =>
+		seaterOf(`member:${m.id}`, savedMemberSeat(m.id))
+	/** 🚧 The person each unsaved carded persona was picked for (the owner's, in a guest's group). */
+	const cardFor = new SvelteMap<number, number>()
+	/** 🚧 Card-less cast members and named seats the owner picked for a person, held until Save. */
+	let pendingSeats: PendingPlayerSeat[] = $state([])
+	let pendingSeatCount = 0
+	/** Whose group asked for the persona picker now (null: the viewer's). */
+	let personaAskedBy: number | null = null
+	/** Who plays a carded persona: the draft, then the saved player, else the card's owner; an unsaved row, the person it was picked for. */
+	const personaPlayer = (p: SeatCard): number => {
+		const saved = savedPersonaSeat(p.id)
+		return saved
+			? (handoverDraft.get(`player:${saved.id}`) ??
+					saved.userId ??
+					p.userId ??
+					viewerId)
+			: (cardFor.get(p.id) ?? viewerId)
+	}
+	/** The book's card-less members no seat of the form holds, for **Add a cast member**. */
+	const membersForSeats = $derived(
+		bookMembers.filter(
+			(m) =>
+				m.cardId == null &&
+				!selectedMembers.some((s) => s.id === m.id) &&
+				!benchedMembers.some((s) => s.id === m.id) &&
+				!heldByPlayerSeat(m.id)
+		)
+	)
+	const addMemberSeat = (m: PickMember, toUserId: number) => {
+		pendingSeats = [
+			...pendingSeats,
+			{ key: `member:${m.id}`, toUserId, castMemberId: m.id, name: m.name }
+		]
+	}
+	const addNamedSeat = (seatName: string, toUserId: number) => {
+		const name = seatName.trim()
+		if (!name) return
+		pendingSeats = [
+			...pendingSeats,
+			{ key: `name:${++pendingSeatCount}`, toUserId, seatName: name, name }
+		]
+	}
+	const removePendingSeat = (key: string) => {
+		pendingSeats = pendingSeats.filter((p) => p.key !== key)
+	}
+	/** Who plays a card-less named seat: the draft, then the saved player, then the viewer. */
+	const seatPlayer = (seat: PlayerSeatDraft): number =>
+		handoverDraft.get(`player:${seat.id}`) ??
+		savedPlayerSeat(seat.id)?.userId ??
+		seat.userId ??
+		viewerId
+	/** 🚧 A person in words: "You", the owner (a guest reads their username), a guest by name. */
+	const personName = (userId: number | null | undefined): string => {
+		if (userId != null && userId === userCtx.user?.id) return "You"
+		if (userId != null && userId === ownerId)
+			return (
+				accountVisibility?.viewers
+					?.find((v) => v.role === "owner")
+					?.username?.trim() || "The session's owner"
+			)
+		const guest = selectedGuests.find((g) => g.userId === userId)
+		return (
+			guest?.user?.displayName?.trim() ||
+			guest?.user?.username?.trim() ||
+			"Someone else"
+		)
+	}
+	/** 🚧 The moves picked and confirmed here, held until Save: `player:<playerSeatId>` to the AI-played group, `character:<cardId>` / `member:<castMemberId>` to a person's Personas group. */
+	const moveDraft = new SvelteMap<string, string>()
+	/** A move choice picked and not yet confirmed or cancelled, by the same keys. */
+	const movePick = new SvelteMap<string, string>()
+	/** Who owns a seat's card: undefined for a card-less seat. */
+	const cardOwnerOf = (
+		kind: "character" | "member" | "player",
+		id: number
+	): number | null | undefined => {
+		if (kind === "member") return undefined
+		if (kind === "character")
+			return selectedCharacters.find((c) => c.id === id)?.userId ?? null
+		const saved = savedPlayerSeat(id)
+		return saved?.personaId != null ? (saved.persona?.userId ?? null) : undefined
+	}
+	/** The seat's name as its row shows it. */
+	const seatNameOf = (
+		kind: "character" | "member" | "player",
+		id: number
+	): string => {
+		if (kind === "character") {
+			const c = selectedCharacters.find((x) => x.id === id)
+			return (c && cardLabel(c)) || "this seat"
+		}
+		if (kind === "member")
+			return selectedMembers.find((m) => m.id === id)?.name || "this seat"
+		const saved = savedPlayerSeat(id)
+		const card =
+			saved?.personaId != null
+				? selectedPersonas.find((p) => p.id === saved.personaId)
+				: undefined
+		return (
+			card?.name ||
+			playerSeats.find((s) => s.id === id)?.name ||
+			"this seat"
+		)
+	}
+	/**
+	 * The move choices the server allows on a saved, in-play seat (the owner's
+	 * view): a player seat holding a card or a cast member goes to the
+	 * AI-played group; a character seat goes to the owner or a player guest
+	 * (an owner's card or a cast member), or back to the guest whose card it
+	 * holds. None while the card or member has a live seat of the other kind.
+	 */
+	const moveOptionsOf = (
+		kind: "character" | "member" | "player",
+		id: number,
+		cardOwner: number | null | undefined
+	): PlayedByChoice["options"] => {
+		if (!session?.id) return []
+		const sessionCharacters = session.sessionCharacters ?? []
+		const sessionPersonas = session.sessionPersonas ?? []
+		if (kind === "player") {
+			const saved = savedPlayerSeat(id)
+			if (!saved) return []
+			const held =
+				saved.personaId != null
+					? sessionCharacters.some(
+							(cc) => cc.characterId === saved.personaId && !cc.removedAt
+						)
+					: saved.castMemberId != null
+						? sessionCharacters.some(
+								(cc) =>
+									cc.castMemberId === saved.castMemberId &&
+									cc.characterId == null &&
+									!cc.removedAt
+							)
+						: true
+			return held ? [] : [{ value: MOVE_TO_AI, label: "No one" }]
+		}
+		const saved =
+			kind === "character" ? savedCharacterSeat(id) : savedMemberSeat(id)
+		if (!saved) return []
+		const held =
+			kind === "character"
+				? sessionPersonas.some(
+						(cp) => cp.personaId === id && !cp.removedAt
+					)
+				: sessionPersonas.some(
+						(cp) => cp.castMemberId === id && !cp.removedAt
+					)
+		if (held) return []
+		const to =
+			cardOwner != null && cardOwner !== ownerId
+				? savedPlayerGuests.filter((g) => g.userId === cardOwner)
+				: savedPlayerGuests
+		return [
+			...(cardOwner != null && cardOwner !== ownerId
+				? []
+				: [
+						{
+							value: moveToPersonValue(ownerId!),
+							label: "You as a persona"
+						}
+					]),
+			...to.map((g) => ({
+				value: moveToPersonValue(g.userId),
+				label: `${personName(g.userId)} as a persona`
+			}))
+		]
+	}
+	/**
+	 * The "Played by" control of a saved, in-play seat, only where the server
+	 * would allow the change (`resolveSeatHandovers`): the owner on their own
+	 * cards' character seats, card-less cast members and card-less named
+	 * player seats; a guest on a card-less member the owner seated (take) or
+	 * they seated (hand back) while guests can take cast members. Null: none.
+	 */
+	const playedByChoice = (
+		kind: "character" | "member" | "player",
+		id: number
+	): PlayedByChoice | null => {
+		if (!session?.id || ownerId == null) return null
+		const key = `${kind}:${id}`
+		const saved =
+			kind === "character"
+				? savedCharacterSeat(id)
+				: kind === "member"
+					? savedMemberSeat(id)
+					: savedPlayerSeat(id)
+		if (!saved || !inPlay(saved)) return null
+		if ((saved as { envoySlug?: string | null }).envoySlug) return null
+		const current =
+			kind === "player"
+				? handoverDraft.get(key) ??
+					(saved as SavedPlayerSeat).userId ??
+					ownerId
+				: seaterOf(key, saved as SavedCharacterSeat)
+		if (!isGuest) {
+			// A seat whose person is outside the session reads as nobody (never an id)
+			// and is recovered by picking the owner.
+			const stranded = !seatPeople.includes(current)
+			const cardOwner = cardOwnerOf(kind, id)
+			const guestCard = cardOwner != null && cardOwner !== ownerId
+			const moves = moveOptionsOf(kind, id, cardOwner)
+			let base: PlayedByChoice["options"]
+			if (guestCard) {
+				// A guest's own card is handed to no one else: only the move is offered.
+				if (!moves.length) return null
+				base = [{ value: String(current), label: personName(current) }]
+			} else {
+				if (!savedPlayerGuests.length && !stranded && !moves.length)
+					return null
+				if (kind === "character") {
+					const card = selectedCharacters.find((c) => c.id === id)
+					if (card?.userId !== ownerId) return null
+				}
+				base = [
+					{
+						value: String(ownerId),
+						label: kind === "player" ? "You" : "No one"
+					},
+					...savedPlayerGuests.map((g) => ({
+						value: String(g.userId),
+						label: personName(g.userId)
+					}))
+				]
+			}
+			if (!moves.length)
+				return { value: stranded ? "" : String(current), options: base }
+			const pick = movePick.get(key)
+			const name = seatNameOf(kind, id)
+			const target = pick != null ? moveTargetOf(pick) : null
+			return {
+				value:
+					pick ??
+					moveDraft.get(key) ??
+					(stranded ? "" : String(current)),
+				options: [...base, ...moves],
+				move: {
+					name,
+					sentence:
+						pick == null
+							? null
+							: pick === MOVE_TO_AI
+								? `${name} moves to the characters the story plays when you save. Its earlier lines stay as they are.`
+								: `${name} moves to ${target === ownerId ? "your" : `${personName(target)}'s`} personas when you save. Its earlier lines stay as they are.`,
+					drafted: moveDraft.has(key) && pick == null
+				}
+			}
+		}
+		if (kind !== "member" || !canTakeCast || !saved.isActive) return null
+		const seated = (saved as SavedCharacterSeat).seatedByUserId ?? ownerId
+		if (seated !== ownerId && seated !== viewerId) return null
+		return {
+			value: String(current),
+			options: [
+				{ value: String(ownerId), label: "No one" },
+				{ value: String(viewerId), label: "You" }
+			]
+		}
+	}
+	/** A pick in a "Played by" control: a move choice waits for its confirmation; any other choice is a handover and clears a drafted move. */
+	const pickPlayedBy = (
+		kind: "character" | "member" | "player",
+		id: number,
+		value: string
+	) => {
+		const key = `${kind}:${id}`
+		if (isMoveValue(value)) {
+			movePick.set(key, value)
+			return
+		}
+		movePick.delete(key)
+		moveDraft.delete(key)
+		handoverDraft.set(key, Number(value))
+	}
+	/** Record the picked move in the draft; it replaces a handover of the row. */
+	const confirmMove = (
+		kind: "character" | "member" | "player",
+		id: number
+	) => {
+		const key = `${kind}:${id}`
+		const value = movePick.get(key)
+		movePick.delete(key)
+		if (value == null) return
+		moveDraft.set(key, value)
+		handoverDraft.delete(key)
+	}
+	/** Drop the picked move; the control reads as it did before the pick. */
+	const cancelMove = (
+		kind: "character" | "member" | "player",
+		id: number
+	) => {
+		movePick.delete(`${kind}:${id}`)
+	}
+
 	/**
 	 * The seats whose draft side differs from their saved side: a seated row
 	 * saved benched is brought back, a benched row saved in play is benched.
@@ -597,6 +1013,24 @@
 		!!session && session.userId !== userCtx.user?.id
 	)
 	/**
+	 * Who gets the Pipelines card: the session's owner. A guest gets none,
+	 * administrators included (owner ruling G6, 2026-11-16), so the form
+	 * does not even ask `sessions:pipelines`.
+	 */
+	const seesSessionPipelines: boolean = $derived(!isGuest)
+	/**
+	 * 🚧 What a guest may do with seats, from the SAVED switches (G3, G4),
+	 * never the owner's draft. The owner is never frozen.
+	 */
+	const canBringOwn: boolean = $derived(
+		!isGuest || storedGuestSeatSwitches(session?.metadata).bringOwn
+	)
+	const canTakeCast: boolean = $derived(
+		!isGuest || storedGuestSeatSwitches(session?.metadata).takeCast
+	)
+	/** Only a guest allowed to bring their own may pick from what others shared. */
+	const sharedToOffer = $derived(isGuest && canBringOwn ? sharedRows : [])
+	/**
 	 * A session on its own notes reads them on its own line and moment, like
 	 * any book (★bk-fold-1): the own book's reading shows once its notes
 	 * have lines. A guest reads them too, read-only: the server lets any
@@ -608,7 +1042,7 @@
 	const ownTime = new BookTime()
 	$effect(() => {
 		const id = ownReadingBookId
-		if (id == null) return
+		if (id == null || isGuest) return
 		return ownTime.listen(socket, id)
 	})
 	let showOwnReading: boolean = $derived(
@@ -637,13 +1071,8 @@
 	)
 	/** 🚧 Advanced controls (2026-11-10): off hides the controls that tune how a session works; a hidden control keeps its stored value. */
 	const advanced = $derived(showsAdvancedControls(userSettingsCtx?.settings))
-	/** True iff a control hidden by the switch would render for this viewer with it on (owner: On revision always; guest: pipelines section or the admin's annex). PipelineCards' own cards are fetched inside it and not counted. */
-	const settingsHides = $derived(
-		isGuest
-			? !!(session?.id && sessionPipelines.length > 0) ||
-					(editSessionId != null && !!userCtx.user?.isAdmin)
-			: !!session?.id
-	)
+	/** True iff a control hidden by the switch would render for this viewer with it on: the owner's (On revision always). A guest, administrators included (G6), has nothing hidden by the switch. PipelineCards' own cards are fetched inside it and not counted. */
+	const settingsHides = $derived(!isGuest && !!session?.id)
 	const writesPanelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
 	let sessionWrites = $derived.by(() => {
 		if (lorebookId == null) return null
@@ -691,12 +1120,15 @@
 				selectedCharacters.length +
 					selectedMembers.length +
 					benchedCharacters.length +
-					benchedMembers.length <
+					benchedMembers.length +
+					sharedPicksOf("character").length <
 					charactersFloor ||
 				selectedPersonas.length +
 					playerSeats.length +
 					benchedPersonas.length +
-					benchedPlayerSeats.length <
+					benchedPlayerSeats.length +
+					pendingSeats.length +
+					sharedPicksOf("player").length <
 					personasFloor
 		},
 		// No lorebook error (RF fix 2, 2026-10-23): a session may always run
@@ -791,7 +1223,20 @@
 		const _onRevision = onRevision
 		const _rigour = rigour
 		const _playerLabel = playerLabelOverride.trim()
+		const _guestsBringOwn = guestsBringOwn
+		const _guestsTakeCast = guestsTakeCast
 		const _sceneSettings = JSON.stringify(sceneOverride ?? null)
+		const _seatHandovers = differingHandovers(
+			handoverDraft,
+			savedHandoverPerson
+		)
+		const _playerSeatsFor = isGuest
+			? []
+			: playerSeatsForOf(cardFor, pendingSeats, ownerId)
+		const _sharedCardSeats = sharedPicks.map((p) => ({
+			characterId: p.card.id,
+			kind: p.kind
+		}))
 		data = {
 			session: {
 				id: session?.id,
@@ -823,8 +1268,13 @@
 				_benchedCharacters
 			),
 			playerLabel: _playerLabel,
+			guestsBringOwn: _guestsBringOwn,
+			guestsTakeCast: _guestsTakeCast,
 			sceneSettings: _sceneSettings,
-			playerSeats: _playerSeats
+			playerSeats: _playerSeats,
+			seatHandovers: _seatHandovers,
+			sharedCardSeats: _sharedCardSeats,
+			playerSeatsFor: _playerSeatsFor
 		}
 
 		if (!originalData) {
@@ -877,6 +1327,27 @@
 	 * effect rather than `useInterest`: the key moves with the book.
 	 */
 	$effect(() => {
+		if (isGuest && session?.id != null) {
+			// 🚧 A guest cannot read the book's bindings: the session lists the
+			// free card-less members it offers (G3, G4), asked again when the
+			// seats change (another guest may take someone).
+			const sessionId = session.id
+			void session.sessionCharacters
+			const release = declareInterest<"sessions:castToTake">(
+				interestKey("sessions:castToTake", sessionId),
+				(msg) => {
+					if (msg.sessionId !== sessionId) return
+					bookMembers = msg.members.map((m) => ({
+						id: m.castMemberId,
+						name: m.name,
+						faceMediaId: m.faceMediaId,
+						cardId: null
+					}))
+				}
+			)
+			socket.emit("sessions:castToTake", { sessionId })
+			return release
+		}
 		const id = savedLorebookId ?? sessionBookOf(session)
 		if (id == null) {
 			bookMembers = []
@@ -892,22 +1363,6 @@
 		socket.emit("lorebooks:bindingList", { lorebookId: id })
 		return release
 	})
-
-	/** The seated ids, then the benched ones: the turn order is the seated order. */
-	function seatedThenBenchedIds(
-		seated: ReadonlyArray<{ id: number }>,
-		benched: ReadonlyArray<{ id: number }>
-	): number[] {
-		return [...seated, ...benched].map((s) => s.id)
-	}
-	function characterPositionsOf(
-		seated: ReadonlyArray<{ id: number }>,
-		benched: ReadonlyArray<{ id: number }>
-	): Record<number, number> {
-		return Object.fromEntries(
-			[...seated, ...benched].map((cc, i) => [cc.id, i])
-		)
-	}
 
 	function handleAddCharacter(
 		char: Partial<SelectCharacter> & { id: number }
@@ -985,8 +1440,12 @@
 		if (
 			!selectedPersonas.some((pp) => pp.id === p.id) &&
 			!benchedPersonas.some((pp) => pp.id === p.id)
-		)
+		) {
 			selectedPersonas = [...selectedPersonas, p]
+			if (personaAskedBy != null && personaAskedBy !== viewerId)
+				cardFor.set(p.id, personaAskedBy)
+		}
+		personaAskedBy = null
 		showPersonaModal = false
 		// Update data to reflect the new persona
 		if (data) {
@@ -1001,6 +1460,7 @@
 	}
 
 	function handleRemovePersona(id: number) {
+		cardFor.delete(id)
 		selectedPersonas = selectedPersonas.filter((p) => p.id !== id)
 		benchedPersonas = benchedPersonas.filter((p) => p.id !== id)
 		// Update data to reflect removed persona
@@ -1020,8 +1480,6 @@
 	// held until Save, which sends one `sessions:setCastSeatEnabled` per
 	// change (`benchChanges`) before `sessions:update`.
 
-	type SeatKind = "character" | "member" | "persona" | "player"
-
 	/** The tab's panel, where the focus after a move is looked for (the form can mount twice, so never a global id). */
 	let participantsPanel: HTMLDivElement | undefined = $state()
 	/** The visually hidden line a move says. */
@@ -1029,8 +1487,15 @@
 	/** A drag in progress: the benched zones show their drop hint only then. */
 	let dragging: "character" | "persona" | null = $state(null)
 	let dragFrom: "seated" | "benched" | null = null
-
-	const cardLabel = (c: SeatCard) => c.nickname || c.name || ""
+	/** The persona lists as a drag began: where a refused drop returns them to. */
+	let personaDragStart: { seated: SeatCard[]; benched: SeatCard[] } | null =
+		null
+	/**
+	 * The groups whose zone a dragged seat now hovers as another person's. The
+	 * library gives that zone's finalize only the zone's own rows, so a refused
+	 * drop is known from this, not from the rows.
+	 */
+	const foreignOver = new Set<number>()
 
 	function announceSeat(name: string, benched: boolean) {
 		seatLive = `${name} ${benched ? "benched" : "brought back"} — waits for Save.`
@@ -1097,13 +1562,54 @@
 		kind: "character" | "persona",
 		side: "seated" | "benched",
 		final: boolean,
-		e: CustomEvent<DndEvent<SeatCard>>
+		e: CustomEvent<DndEvent<SeatCard>>,
+		/** The person whose group zone this is, when several people hold player seats. */
+		group?: number
 	) {
 		const { items, info } = e.detail
+		if (info.trigger === TRIGGERS.DRAG_STARTED && kind === "persona")
+			personaDragStart = {
+				seated: selectedPersonas,
+				benched: benchedPersonas
+			}
+		// A seat dropped into another person's group goes back where it was.
+		// Both zones' finalize events are refused (the target's, then the
+		// origin's with the row already gone); the restore waits until both ran.
+		const foreign =
+			kind === "persona" &&
+			side === "seated" &&
+			group !== undefined &&
+			items.some((r) => personaPlayer(r) !== group)
+		if (kind === "persona" && side === "seated" && group !== undefined) {
+			if (foreign) foreignOver.add(group)
+			else if (!final) foreignOver.delete(group)
+		}
+		if (kind === "persona" && final && foreignOver.size > 0) {
+			dragging = null
+			dragFrom = null
+			const back = personaDragStart
+			void tick().then(() => {
+				foreignOver.clear()
+				if (back) {
+					selectedPersonas = back.seated
+					benchedPersonas = back.benched
+				}
+			})
+			return
+		}
+		if (foreign) return
 		if (kind === "character") {
 			if (side === "seated") selectedCharacters = items
 			else benchedCharacters = items
-		} else if (side === "seated") selectedPersonas = items
+		} else if (side === "seated")
+			selectedPersonas =
+				group === undefined
+					? items
+					: fillGroupSlots(
+							selectedPersonas,
+							(r) => personaPlayer(r) === group,
+							items
+						)
 		else benchedPersonas = items
 		if (!final) {
 			if (info.trigger === TRIGGERS.DRAG_STARTED) {
@@ -1175,6 +1681,12 @@
 			?.castMemberId
 		const bookId = sessionBookOf(session)
 		if (castId == null || bookId == null) return null
+		// A guest neither opens nor edits the session's notes (G2): no link to them.
+		if (
+			isGuest &&
+			bookId === (session as { ownBookId?: number | null } | undefined)?.ownBookId
+		)
+			return null
 		const route = reduce(
 			reduce(emptyRoute(), { type: "openBook", lorebookId: bookId }),
 			{ type: "openCastMember", castId }
@@ -1188,14 +1700,16 @@
 			((session.sessionCharacters ?? []).some((cc) => !cc.removedAt) ||
 				(session.sessionPersonas ?? []).some((cp) => !cp.removedAt))
 	)
-	/** 🚧 Whose a card-less seat is, said in its place of "No card" (R3-2). */
+	/** 🚧 Whose a seat is, said in its place of "No card" (R3-2): the person who plays it. */
 	const seatPlayerWords = (userId: number | null): string => {
 		if (userId != null && userId === userCtx.user?.id)
 			return "Your character"
-		const guest = selectedGuests.find((g) => g.userId === userId)
-		const who =
-			guest?.user?.displayName?.trim() || guest?.user?.username?.trim()
-		return who ? `${who}'s character` : "A player's character"
+		if (
+			userId != null &&
+			(userId === ownerId || selectedGuests.some((g) => g.userId === userId))
+		)
+			return `${personName(userId)}'s character`
+		return "A player's character"
 	}
 
 	function openReassignModal(
@@ -1300,12 +1814,15 @@
 			selectedCharacters.length +
 				selectedMembers.length +
 				benchedCharacters.length +
-				benchedMembers.length <
+				benchedMembers.length +
+				sharedPicksOf("character").length <
 				charactersFloor ||
 			selectedPersonas.length +
 				playerSeats.length +
 				benchedPersonas.length +
-				benchedPlayerSeats.length <
+				benchedPlayerSeats.length +
+				pendingSeats.length +
+				sharedPicksOf("player").length <
 				personasFloor
 		)
 			return
@@ -1343,36 +1860,49 @@
 		// genreId rides in `data` but the server ignores it on update —
 		// switching an existing session's mode is an open policy question
 		// (19 §10). genreFields does land, filtered to declared keys.
-		const sent: Record<string, unknown> = {
-			...data!.session,
-			id: session.id
-		}
+		// A guest's view edits seats only: the session fields are not sent.
+		const sent: Record<string, unknown> = isGuest
+			? { id: session.id }
+			: {
+					...data!.session,
+					id: session.id
+				}
 		// The story clock and the line go only when the person moved them
 		// here: a pipeline may have advanced the clock since the form loaded
 		// (DESIGN-story-time P3), and deleting a branch moves its sessions to
 		// main — posting that dead id back was refused, failing every later
 		// save of the tab (#136).
 		const was = (originalData?.session ?? {}) as Record<string, unknown>
-		stripUnmovedReading(sent, was)
-		// How strict goes only when moved here: a stored value a genre no
-		// longer offers is never posted back to be refused.
-		if ((sent.rigour ?? null) === (was.rigour ?? null)) delete sent.rigour
+		if (!isGuest) {
+			stripUnmovedReading(sent, was)
+			// How strict goes only when moved here: a stored value a genre no
+			// longer offers is never posted back to be refused.
+			if ((sent.rigour ?? null) === (was.rigour ?? null))
+				delete sent.rigour
+		}
 		// Genre fields go only as the person changed them here, field by
 		// field (2026-10-03): the server merges them over what is stored, so
 		// an author's note saved from its widget while this form was open is
 		// not put back to the value the form loaded.
-		const fieldsPatch = changedGenreFields(
-			data!.session.genreFields,
-			was.genreFields as Record<string, unknown> | undefined,
-			modeShape ? Object.keys(modeFieldDecls) : undefined
-		)
+		const fieldsPatch = isGuest
+			? undefined
+			: changedGenreFields(
+					data!.session.genreFields,
+					was.genreFields as Record<string, unknown> | undefined,
+					modeShape ? Object.keys(modeFieldDecls) : undefined
+				)
 		if (fieldsPatch) sent.genreFields = fieldsPatch
 		else delete sent.genreFields
 		const {
 			playerLabel,
+			guestsBringOwn: bringOwnNow,
+			guestsTakeCast: takeCastNow,
 			sceneSettings,
 			playerSeats: seatsNow,
 			castMemberIds,
+			seatHandovers: handoversNow,
+			sharedCardSeats: sharedNow,
+			playerSeatsFor: forNow,
 			...rest
 		} = data!
 		// 🚧 Card-less player seats: the ones gone are removed, a changed
@@ -1390,12 +1920,30 @@
 		})
 		// 🚧 The scene settings go only when the person changed them here.
 		const scenesMoved =
+			!isGuest &&
 			sceneSettings !== (originalData?.sceneSettings ?? "null")
+		const movesNow = seatMovesOf(moveDraft, (key) => {
+			const [kind, raw] = key.split(":")
+			return (
+				kind === "character"
+					? savedCharacterSeat(Number(raw))
+					: savedMemberSeat(Number(raw))
+			)?.id
+		})
 		const updateSession: Sockets.Sessions.Update.Params = {
 			...rest,
 			session: sent as Sockets.Sessions.Update.Params["session"],
 			// R4: only where the genre names the person's lines; blank clears.
-			...(genrePlayerLabel ? { playerLabel } : {}),
+			...(genrePlayerLabel && !isGuest ? { playerLabel } : {}),
+			// 🚧 Each guest seat switch goes only when the owner moved it here.
+			...(!isGuest &&
+			bringOwnNow !== (originalData?.guestsBringOwn ?? true)
+				? { guestsBringOwn: bringOwnNow }
+				: {}),
+			...(!isGuest &&
+			takeCastNow !== (originalData?.guestsTakeCast ?? true)
+				? { guestsTakeCast: takeCastNow }
+				: {}),
 			...(scenesMoved
 				? {
 						sceneSettings: JSON.parse(
@@ -1404,6 +1952,22 @@
 					}
 				: {}),
 			...(playerSeatChanges.length ? { playerSeatChanges } : {}),
+			// A guest's shared cards picked here: the server copies each.
+			...(isGuest && sharedNow.length
+				? { sharedCardSeats: sharedNow }
+				: {}),
+			...(!isGuest && forNow.length ? { playerSeatsFor: forNow } : {}),
+			// 🚧 "Played by": the moves confirmed here, between the groups.
+			...(!isGuest && movesNow.length ? { seatMoves: movesNow } : {}),
+			// 🚧 "Played by": only the handovers the person picked here.
+			...(handoversNow.length
+				? {
+						seatHandovers: handoversNow.map((h) => ({
+							...handoverSeatOf(h.key),
+							toUserId: h.toUserId
+						}))
+					}
+				: {}),
 			// 🚧 The card-less seats go as the whole set they should be, and only
 			// when the person changed them here (the server seats the new ones
 			// and lets the owner's or seater's missing ones go).
@@ -1417,6 +1981,7 @@
 		// session wrote, the server names the On revision mode and the person
 		// confirms before anything is saved.
 		if (
+			!isGuest &&
 			STORY_CLOCK_KEYS.every((k) => k in sent) &&
 			!("lorebookBranchId" in sent)
 		) {
@@ -1509,19 +2074,18 @@
 		selectedCharacters = next
 	}
 
-	function movePersonaUp(index: number) {
-		if (index <= 0) return
-		const next = selectedPersonas.slice()
-		;[next[index - 1], next[index]] = [next[index], next[index - 1]]
-		selectedPersonas = next
+	/** Past the nearest row of the same person's group; the other groups' rows keep their places. */
+	function movePersona(index: number, delta: -1 | 1) {
+		const who = personaPlayer(selectedPersonas[index])
+		selectedPersonas = swapWithinGroup(
+			selectedPersonas,
+			index,
+			delta,
+			(r) => personaPlayer(r) === who
+		)
 	}
-
-	function movePersonaDown(index: number) {
-		if (index >= selectedPersonas.length - 1) return
-		const next = selectedPersonas.slice()
-		;[next[index], next[index + 1]] = [next[index + 1], next[index]]
-		selectedPersonas = next
-	}
+	const movePersonaUp = (index: number) => movePersona(index, -1)
+	const movePersonaDown = (index: number) => movePersona(index, 1)
 
 	function confirmRemoveCharacter(id: number, name: string) {
 		removeType = "character"
@@ -1707,14 +2271,29 @@
 					? (session as any).rigour
 					: null
 			playerLabelOverride = storedPlayerLabel(session.metadata) ?? ""
+			{
+				const stored = storedGuestSeatSwitches(session.metadata)
+				guestsBringOwn = stored.bringOwn
+				guestsTakeCast = stored.takeCast
+			}
 			sceneOverride = storedSceneSettings(session.metadata)
 			// Reset originalData to null so it gets re-initialized with the loaded data
 			originalData = undefined
+			handoverDraft.clear()
+			moveDraft.clear()
+			movePick.clear()
+			cardFor.clear()
+			pendingSeats = []
+			sharedPicks = []
 		}
 	}
 
 	const handleCharactersList = (msg: Sockets.Characters.List.Response) => {
-		characters = withoutShared(msg.characterList) // shared rows are read and copy only (PLAN-private-messages §6.7, Q3)
+		// The owner's pickers drop shared rows (read and copy only, Q3); a
+		// guest may copy one into the session (G3), offered via `sharedToOffer`.
+		const split = splitSharedRows(msg.characterList)
+		characters = split.own
+		sharedRows = split.shared
 	}
 
 	const handleLorebooksList = (msg: Sockets.Lorebooks.List.Response) => {
@@ -1941,9 +2520,9 @@
 	$effect(() => {
 		const id = session?.id
 		if (!id) return
-		if (activeSessionTab === "visibility")
+		if (activeSessionTab === "visibility" || isGuest)
 			socket.emit("sessions:accountVisibility", { sessionId: id })
-		if (activeSessionTab === "settings")
+		if (activeSessionTab === "settings" && seesSessionPipelines)
 			socket.emit("sessions:pipelines", { sessionId: id })
 	})
 
@@ -2214,7 +2793,11 @@
 	/** The held bench changes and envoy seats that differ from saved —
 	 *  read by `isDirty`, which is declared before these. */
 	function participantChangesDirty(): boolean {
-		return benchChanges.length > 0 || envoyChanges.length > 0
+		return (
+			benchChanges.length > 0 ||
+			envoyChanges.length > 0 ||
+			moveDraft.size > 0
+		)
 	}
 	const handleSessionsSetEnvoySeat = (
 		msg: Sockets.Sessions.SetEnvoySeat.Response
@@ -2269,14 +2852,13 @@
 		{:else}
 			{#if isGuest}
 				<p class="preset-tonal-surface rounded-base text-chip p-3">
-					You're a guest in this session. You can manage characters
-					and personas below — guests and session settings (name,
-					scenario, lorebook, tags, etc.) can only be changed by the
-					session owner.
+					You're a guest in this session. You can change your own
+					seats here; everything else is the session owner's.
 				</p>
 			{/if}
 
-			<section class={CARD_CLASS}>
+			{#if !isGuest}
+				<section class={CARD_CLASS}>
 				<h3 class="mb-3 text-sm font-medium">Name</h3>
 				<div class="flex flex-col">
 					<label
@@ -2308,7 +2890,8 @@
 						</p>
 					{/if}
 				</div>
-			</section>
+				</section>
+			{/if}
 
 			<!-- Genre (19 §2, §6 as ruled). A session keeps its genre for life:
 			     there is no swap control, only the upgrade along the same type
@@ -2342,51 +2925,27 @@
 				</section>
 			{/if}
 
-			<PanelTabStrip
-				bind:value={activeSessionTab}
-				tabs={sessionTabs}
-				ariaLabel="Session settings"
-				panelIdPrefix="session-panel"
-			/>
+			{#if !isGuest}
+				<PanelTabStrip
+					bind:value={activeSessionTab}
+					tabs={sessionTabs}
+					ariaLabel="Session settings"
+					panelIdPrefix="session-panel"
+				/>
+			{/if}
 
+			<!-- A guest has this view and no tabs (G1): it is not a tabpanel,
+			     and shows whatever tab an opener named. -->
 			<div
 				id="session-panel-participants"
-				role="tabpanel"
-				aria-labelledby="session-panel-participants-tab"
-				hidden={activeSessionTab !== "participants"}
+				role={isGuest ? undefined : "tabpanel"}
+				aria-labelledby={isGuest
+					? undefined
+					: "session-panel-participants-tab"}
+				aria-label={isGuest ? "Participants" : undefined}
+				hidden={!isGuest && activeSessionTab !== "participants"}
 				bind:this={participantsPanel}
 			>
-				{#snippet benchButton(
-					kind: SeatKind,
-					id: number,
-					label: string
-				)}
-					<button
-						type="button"
-						class="btn-ghost text-surface-500 hover:text-foreground rounded p-1"
-						data-seat-action="{kind}:{id}"
-						onclick={() => moveSeat(kind, id, true)}
-						title="Bench"
-						aria-label="Bench {label}"
-					>
-						<Icons.Armchair size={16} aria-hidden="true" />
-					</button>
-				{/snippet}
-				{#snippet bringBackNote(
-					saved: object | undefined,
-					label: string
-				)}
-					{@const href = castMemberHref(saved)}
-					<p class="text-surface-600-400 basis-full text-xs">
-						They come back as they are; their story still says
-						deceased until you change it.
-						{#if href}
-							<a class="anchor" {href}>
-								Open {label} in the lorebook
-							</a>
-						{/if}
-					</p>
-				{/snippet}
 				<div class="flex flex-col gap-3 pt-3">
 					<!-- The tab's rule, said once (note 34; STYLE-GUIDE §6.14):
 					     everything here is held until Save. -->
@@ -2395,212 +2954,54 @@
 						back and reordering. Reassigning a benched seat's lines
 						happens at once.
 					</p>
+					{#if isGuest && !canBringOwn && (showCharactersSection || showPersonasSection)}
+						<p class="text-surface-600-400 text-xs">
+							{GUEST_SEAT_SENTENCES.bringOwnOff}
+						</p>
+					{/if}
+					{#if isGuest && !canTakeCast && showCharactersSection}
+						<p class="text-surface-600-400 text-xs">
+							{GUEST_SEAT_SENTENCES.takeCastOff}
+						</p>
+					{/if}
 					<p class="sr-only" aria-live="polite">{seatLive}</p>
 					<!-- Capability-gated (19 §2): a section the mode's shape
 						     omits does not exist for this session, so it neither
 						     renders nor blocks saving. -->
 					{#if showCharactersSection}
-						<section class={CARD_CLASS}>
-							<h3 class="mb-3 text-sm font-medium">
-								Characters{charactersFloor > 0 ? "*" : ""}
-							</h3>
-							{#key session?.sessionCharacters}
-								<div
-									class="relative mb-2 flex flex-col gap-1 {dragging === 'character' &&
-									selectedCharacters.length === 0
-										? 'border-surface-200-800 rounded-base min-h-11 border border-dashed'
-										: ''}"
-									use:dndzone={{
-										items: selectedCharacters,
-										flipDurationMs: 150,
-										dragDisabled: !session,
-										type: "character-seat"
-									}}
-									onconsider={(e) =>
-										handleSeatDrag(
-											"character",
-											"seated",
-											false,
-											e
-										)}
-									onfinalize={(e) =>
-										handleSeatDrag(
-											"character",
-											"seated",
-											true,
-											e
-										)}
-								>
-									{#each selectedCharacters as c, i (c.id)}
-										{@const saved = savedCharacterSeat(
-											c.id
-										)}
-										{@const label =
-											c.nickname || c.name || ""}
-										<div
-											class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
-											data-dnd-handle
-										>
-											<span
-												class="text-surface-500 hover:text-primary-ink shrink-0 cursor-grab"
-												data-dnd-handle
-												title="Drag to reorder"
-											>
-												<Icons.GripVertical size={16} />
-											</span>
-											<Avatar
-												char={c}
-												size="md"
-												decorative
-											/>
-											<div class="min-w-0 flex-1">
-												<div
-													class="text-lead truncate font-medium select-none"
-												>
-													{label}
-												</div>
-												<div
-													class="text-surface-600 dark:text-surface-400 truncate text-xs select-none"
-												>
-													{characterSummary(c)}
-												</div>
-											</div>
-											<div
-												class="flex shrink-0 items-center gap-1"
-											>
-												{#if selectedCharacters.length > 1}
-													<button
-														class="btn-ghost text-surface-500 hover:text-foreground rounded p-1 disabled:opacity-30"
-														onclick={() =>
-															moveCharacterUp(i)}
-														disabled={i === 0}
-														title="Move up"
-														aria-label="Move {label} up"
-													>
-														<Icons.ChevronUp
-															size={16}
-														/>
-													</button>
-													<button
-														class="btn-ghost text-surface-500 hover:text-foreground rounded p-1 disabled:opacity-30"
-														onclick={() =>
-															moveCharacterDown(
-																i
-															)}
-														disabled={i ===
-															selectedCharacters.length -
-																1}
-														title="Move down"
-														aria-label="Move {label} down"
-													>
-														<Icons.ChevronDown
-															size={16}
-														/>
-													</button>
-												{/if}
-												{#if saved}
-													{@render benchButton(
-														"character",
-														c.id,
-														label
-													)}
-												{:else}
-													<span
-														class="text-surface-600-400 text-xs"
-													>
-														Ready to add
-													</span>
-													<button
-														class="btn-ghost text-error-600-400 hover:bg-error-500/10 rounded p-1"
-														onclick={() =>
-															confirmRemoveCharacter(
-																c.id,
-																label
-															)}
-														title="Remove from session"
-														aria-label="Remove {label} from the session"
-													>
-														<Icons.X size={16} />
-													</button>
-												{/if}
-											</div>
-											{#if fallenNote("character", saved)}
-												{@render bringBackNote(
-													saved,
-													label
-												)}
-											{/if}
-										</div>
-									{/each}
-								</div>
-							{/key}
-							{#if selectedMembers.length > 0}
-								<div
-									class="mb-2 flex flex-col gap-1"
-									aria-label="Cast members"
-								>
-									{#each selectedMembers as m (`member:${m.id}`)}
-										{@const saved = savedMemberSeat(m.id)}
-										<div
-											class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
-										>
-											<Avatar
-												char={{
-													avatarMediaId: m.faceMediaId
-												}}
-												name={m.name}
-												fallback="initial"
-												size="md"
-												decorative
-											/>
-											<div
-												class="text-lead min-w-0 flex-1 truncate font-medium"
-											>
-												{m.name}
-											</div>
-											{#if saved}
-												{@render benchButton(
-													"member",
-													m.id,
-													m.name
-												)}
-											{:else}
-												<span
-													class="text-surface-600-400 text-xs"
-												>
-													Ready to add
-												</span>
-												<button
-													class="btn-ghost text-error-600-400 hover:bg-error-500/10 rounded p-1"
-													onclick={() =>
-														confirmRemoveMember(
-															m.id,
-															m.name
-														)}
-													title="Remove from session"
-													aria-label="Remove {m.name} from the session"
-												>
-													<Icons.X size={16} />
-												</button>
-											{/if}
-											{#if fallenNote("character", saved)}
-												{@render bringBackNote(
-													saved,
-													m.name
-												)}
-											{/if}
-										</div>
-									{/each}
-								</div>
-							{/if}
-							<button
-								class="btn btn-sm preset-tonal"
-								onclick={() => (showCharacterModal = true)}
-							>
-								<Icons.Plus size={16} aria-hidden="true" />
-								Add a character
-							</button>
-						</section>
+						<SessionCharacters
+							{charactersFloor}
+							{selectedCharacters}
+							{selectedMembers}
+							{dragging}
+							{session}
+							{isGuest}
+							{userCtx}
+							{seatPlayerWords}
+							{ownerId}
+							{characterSeater}
+							{memberSeater}
+							{playedByChoice}
+							{pickPlayedBy}
+							{confirmMove}
+							{cancelMove}
+							{savedCharacterSeat}
+							{savedMemberSeat}
+							{handleSeatDrag}
+							{moveCharacterUp}
+							{moveCharacterDown}
+							{moveSeat}
+							{confirmRemoveCharacter}
+							{confirmRemoveMember}
+							{fallenNote}
+							{castMemberHref}
+							canChangeCarded={canBringOwn}
+							canChangeCastSeats={canTakeCast}
+							onAddCharacter={() => (showCharacterModal = true)}
+							sharedPicks={sharedPicksOf("character")}
+							onRemoveSharedPick={(id) =>
+								removeSharedPick("character", id)}
+						/>
 					{/if}
 					{#if genreEnvoys.length}
 						<!-- The genre's envoys (R-18): cast members the genre
@@ -2610,7 +3011,7 @@
 							<h3 class="mb-1 text-sm font-medium">Envoys</h3>
 							<p class="text-surface-600-400 mb-3 text-xs">
 								Characters this genre brings along, such as a
-								narrator. Switch one on to include it.
+								narrator.{isGuest ? "" : " Switch one on to include it."}
 							</p>
 							<div class="mb-2 flex flex-col gap-1">
 								{#each genreEnvoys as envoy (envoy.slug)}
@@ -2656,10 +3057,18 @@
 												? "Replies in turn"
 												: "On action"}
 										</span>
+										{#if isGuest}
+											<span
+												class="text-surface-600-400 shrink-0 text-xs"
+											>
+												{shownSeated(envoy)
+													? "In this session"
+													: "Not in this session"}
+											</span>
+										{:else}
 										<Switch
 											name="toggle-envoy-seat-{envoy.slug}"
 											checked={shownSeated(envoy)}
-											disabled={isGuest}
 											onCheckedChange={(e) =>
 												setEnvoySeat(
 													envoy.slug,
@@ -2682,477 +3091,96 @@
 											</Switch.Control>
 											<Switch.HiddenInput />
 										</Switch>
+										{/if}
 									</div>
 								{/each}
 							</div>
 						</section>
 					{/if}
 					{#if showPersonasSection}
-						<section class={CARD_CLASS}>
-							<h3 class="mb-3 text-sm font-medium">
-								Personas{personasFloor > 0 ? "*" : ""}
-							</h3>
-							<div
-								class="relative mb-2 flex flex-col gap-1 {dragging === 'persona' &&
-								selectedPersonas.length === 0
-									? 'border-surface-200-800 rounded-base min-h-11 border border-dashed'
-									: ''}"
-								use:dndzone={{
-									items: selectedPersonas,
-									flipDurationMs: 150,
-									dragDisabled: !session,
-									type: "player-seat"
-								}}
-								onconsider={(e) =>
-									handleSeatDrag(
-										"persona",
-										"seated",
-										false,
-										e
-									)}
-								onfinalize={(e) =>
-									handleSeatDrag(
-										"persona",
-										"seated",
-										true,
-										e
-									)}
-							>
-								{#each selectedPersonas as p, i (p.id)}
-									{@const saved = savedPersonaSeat(p.id)}
-									<div
-										class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
-										data-dnd-handle
-									>
-										<span
-											class="text-surface-500 hover:text-primary-ink shrink-0 cursor-grab"
-											data-dnd-handle
-											title="Drag to reorder"
-										>
-											<Icons.GripVertical size={16} />
-										</span>
-										<Avatar char={p} size="md" decorative />
-										<div class="min-w-0 flex-1">
-											<div
-												class="text-lead truncate font-medium select-none"
-											>
-												{p.name}
-											</div>
-											<div
-												class="text-surface-600 dark:text-surface-400 truncate text-xs select-none"
-											>
-												{p.description || ""}
-											</div>
-										</div>
-										<div
-											class="flex shrink-0 items-center gap-1"
-										>
-											{#if selectedPersonas.length > 1}
-												<button
-													class="btn-ghost text-surface-500 hover:text-foreground rounded p-1 disabled:opacity-30"
-													onclick={() =>
-														movePersonaUp(i)}
-													disabled={i === 0}
-													title="Move up"
-													aria-label="Move {p.name} up"
-												>
-													<Icons.ChevronUp
-														size={16}
-													/>
-												</button>
-												<button
-													class="btn-ghost text-surface-500 hover:text-foreground rounded p-1 disabled:opacity-30"
-													onclick={() =>
-														movePersonaDown(i)}
-													disabled={i ===
-														selectedPersonas.length -
-															1}
-													title="Move down"
-													aria-label="Move {p.name} down"
-												>
-													<Icons.ChevronDown
-														size={16}
-													/>
-												</button>
-											{/if}
-											{#if saved}
-												{@render benchButton(
-													"persona",
-													p.id,
-													p.name || ""
-												)}
-											{:else}
-												<span
-													class="text-surface-600-400 text-xs"
-												>
-													Ready to add
-												</span>
-												<button
-													class="btn-ghost text-error-600-400 hover:bg-error-500/10 rounded p-1"
-													onclick={() =>
-														confirmRemovePersona(
-															p.id,
-															p.name || ""
-														)}
-													title="Remove from session"
-													aria-label="Remove {p.name} from the session"
-												>
-													<Icons.X size={16} />
-												</button>
-											{/if}
-										</div>
-										{#if fallenNote("player", saved)}
-											{@render bringBackNote(
-												saved,
-												p.name || ""
-											)}
-										{/if}
-									</div>
-								{/each}
-							</div>
-							{#if playerSeats.length}
-								<ul
-									class="mb-2 flex flex-col gap-1"
-									aria-label="Player seats without a card"
-								>
-									{#each playerSeats as seat (seat.id)}
-										{@const mine =
-											!isGuest ||
-											seat.userId === userCtx.user?.id}
-										{@const saved = savedPlayerSeat(
-											seat.id
-										)}
-										<li
-											class="bg-surface-50-950 rounded-base flex min-h-11 flex-wrap items-center gap-2 p-2"
-										>
-											<Icons.UserRound
-												size={20}
-												class="text-surface-500 shrink-0"
-												aria-hidden="true"
-											/>
-											<div class="min-w-0 flex-1">
-												<input
-													class="input text-lead"
-													type="text"
-													id="player-seat-{seat.id}"
-													aria-label="Seat name"
-													bind:value={seat.name}
-													disabled={!mine}
-												/>
-												<div
-													class="text-surface-600-400 truncate text-xs select-none"
-												>
-													{seatPlayerWords(
-														seat.userId
-													)}
-												</div>
-											</div>
-											{#if mine}
-												{@render benchButton(
-													"player",
-													seat.id,
-													seat.name || "this seat"
-												)}
-											{/if}
-											{#if fallenNote("player", saved)}
-												{@render bringBackNote(
-													saved,
-													seat.name || "this seat"
-												)}
-											{/if}
-										</li>
-									{/each}
-								</ul>
-							{/if}
-							<button
-								class="btn btn-sm preset-tonal"
-								onclick={() => (showPersonaModal = true)}
-							>
-								<Icons.Plus size={16} aria-hidden="true" />
-								Add a persona
-							</button>
-						</section>
+						<SessionPersonas
+							{personasFloor}
+							{selectedPersonas}
+							bind:playerSeats
+							{dragging}
+							{session}
+							{isGuest}
+							{userCtx}
+							{savedPersonaSeat}
+							{savedPlayerSeat}
+							{handleSeatDrag}
+							{movePersonaUp}
+							{movePersonaDown}
+							{moveSeat}
+							{confirmRemovePersona}
+							{fallenNote}
+							{castMemberHref}
+							{seatPlayerWords}
+							people={seatPeople}
+							{personName}
+							{personaPlayer}
+							{seatPlayer}
+							{playedByChoice}
+							{pickPlayedBy}
+							{confirmMove}
+							{cancelMove}
+							canChangeCarded={canBringOwn}
+							onAddPersona={(who) => {
+								personaAskedBy = who
+								showPersonaModal = true
+							}}
+							addFor={isGuest
+								? []
+								: [
+										...(ownerId != null ? [ownerId] : []),
+										...savedPlayerGuests.map((g) => g.userId)
+									]}
+							{membersForSeats}
+							{pendingSeats}
+							{addMemberSeat}
+							{addNamedSeat}
+							{removePendingSeat}
+							sharedPicks={sharedPicksOf("player")}
+							onRemoveSharedPick={(id) =>
+								removeSharedPick("player", id)}
+						/>
 					{/if}
 
 					{#if hasSavedSeat}
-						<section class={CARD_CLASS}>
-							<h3 class="mb-1 text-sm font-medium">Benched</h3>
-							<p class="text-surface-600-400 mb-3 text-xs">
-								In the session, out of the turns. Their lines stay
-								theirs.
-							</p>
-							{#if showCharactersSection}
-								{#if benchedCharacters.length + benchedMembers.length > 0 || dragging === 'character'}
-									<h4 class="text-surface-600-400 mb-1 text-xs">
-										Characters
-									</h4>
-								{/if}
-								{#key session?.sessionCharacters}
-									<ul
-										class="relative mb-2 flex flex-col gap-1 {dragging === 'character'
-											? 'border-surface-200-800 rounded-base min-h-11 border border-dashed'
-											: ''}"
-										aria-label="Benched characters"
-										use:dndzone={{
-											items: benchedCharacters,
-											flipDurationMs: 150,
-											type: "character-seat"
-										}}
-										onconsider={(e) =>
-											handleSeatDrag(
-												"character",
-												"benched",
-												false,
-												e
-											)}
-										onfinalize={(e) =>
-											handleSeatDrag(
-												"character",
-												"benched",
-												true,
-												e
-											)}
-									>
-										{#each benchedCharacters as c (c.id)}
-											{@const saved = savedCharacterSeat(c.id)}
-											{@const label = c.nickname || c.name || ""}
-											{@const fallen =
-												!!saved &&
-												seatFellInStory(
-													session,
-													saved,
-													"character"
-												)}
-											{@const onServer =
-												!!saved && !inPlay(saved)}
-											<BenchedSeatRow
-												name={label}
-												meta={characterSummary(c)}
-												{fallen}
-												seatAction="character:{c.id}"
-												grip
-												onBringBack={() =>
-													moveSeat("character", c.id, false)}
-												menuItems={[
-													onServer &&
-														!fallen && {
-															label: "Reassign…",
-															icon: Icons.ArrowRightLeft,
-															onSelect: () =>
-																openReassignModal(
-																	"character",
-																	c.id,
-																	label
-																)
-														},
-													onServer &&
-														seatHasNoLines(saved) && {
-															separator: true
-														},
-													onServer &&
-														seatHasNoLines(saved) && {
-															label: "Remove",
-															icon: Icons.X,
-															destructive: true,
-															onSelect: () =>
-																confirmRemoveCharacter(
-																	c.id,
-																	label
-																)
-														}
-												]}
-											>
-												{#snippet face()}
-													<Avatar
-														char={c}
-														size="md"
-														decorative
-													/>
-												{/snippet}
-											</BenchedSeatRow>
-										{/each}
-									</ul>
-								{/key}
-								{#if benchedMembers.length > 0}
-									<ul
-										class="mb-2 flex flex-col gap-1"
-										aria-label="Benched cast members"
-									>
-										{#each benchedMembers as m (`member:${m.id}`)}
-											{@const saved = savedMemberSeat(m.id)}
-											{@const fallen =
-												!!saved &&
-												seatFellInStory(
-													session,
-													saved,
-													"character"
-												)}
-											{@const onServer =
-												!!saved && !inPlay(saved)}
-											<BenchedSeatRow
-												name={m.name}
-												{fallen}
-												seatAction="member:{m.id}"
-												onBringBack={() =>
-													moveSeat("member", m.id, false)}
-												menuItems={[
-													onServer &&
-														seatHasNoLines(saved) && {
-															label: "Remove",
-															icon: Icons.X,
-															destructive: true,
-															onSelect: () =>
-																confirmRemoveMember(
-																	m.id,
-																	m.name
-																)
-														}
-												]}
-											>
-												{#snippet face()}
-													<Avatar
-														char={{
-															avatarMediaId:
-																m.faceMediaId
-														}}
-														name={m.name}
-														fallback="initial"
-														size="md"
-														decorative
-													/>
-												{/snippet}
-											</BenchedSeatRow>
-										{/each}
-									</ul>
-								{/if}
-							{/if}
-							{#if showPersonasSection}
-								{#if benchedPersonas.length + benchedPlayerSeats.length > 0 || dragging === 'persona'}
-									<h4 class="text-surface-600-400 mb-1 text-xs">
-										Players
-									</h4>
-								{/if}
-								<ul
-									class="relative mb-2 flex flex-col gap-1 {dragging === 'persona'
-										? 'border-surface-200-800 rounded-base min-h-11 border border-dashed'
-										: ''}"
-									aria-label="Benched players"
-									use:dndzone={{
-										items: benchedPersonas,
-										flipDurationMs: 150,
-										type: "player-seat"
-									}}
-									onconsider={(e) =>
-										handleSeatDrag("persona", "benched", false, e)}
-									onfinalize={(e) =>
-										handleSeatDrag("persona", "benched", true, e)}
-								>
-									{#each benchedPersonas as p (p.id)}
-										{@const saved = savedPersonaSeat(p.id)}
-										{@const fallen =
-											!!saved &&
-											seatFellInStory(session, saved, "player")}
-										{@const onServer = !!saved && !inPlay(saved)}
-										<BenchedSeatRow
-											name={p.name || ""}
-											meta={p.description || ""}
-											{fallen}
-											seatAction="persona:{p.id}"
-											grip
-											onBringBack={() =>
-												moveSeat("persona", p.id, false)}
-											menuItems={[
-												onServer &&
-													!fallen && {
-														label: "Reassign…",
-														icon: Icons.ArrowRightLeft,
-														onSelect: () =>
-															openReassignModal(
-																"persona",
-																p.id,
-																p.name || ""
-															)
-													},
-												onServer &&
-													seatHasNoLines(saved) && {
-														separator: true
-													},
-												onServer &&
-													seatHasNoLines(saved) && {
-														label: "Remove",
-														icon: Icons.X,
-														destructive: true,
-														onSelect: () =>
-															confirmRemovePersona(
-																p.id,
-																p.name || ""
-															)
-													}
-											]}
-										>
-											{#snippet face()}
-												<Avatar char={p} size="md" decorative />
-											{/snippet}
-										</BenchedSeatRow>
-									{/each}
-								</ul>
-								{#if benchedPlayerSeats.length > 0}
-									<ul
-										class="mb-2 flex flex-col gap-1"
-										aria-label="Benched player seats without a card"
-									>
-										{#each benchedPlayerSeats as seat (seat.id)}
-											{@const mine =
-												!isGuest ||
-												seat.userId === userCtx.user?.id}
-											{@const saved = savedPlayerSeat(seat.id)}
-											{@const fallen =
-												!!saved &&
-												seatFellInStory(
-													session,
-													saved,
-													"player"
-												)}
-											{@const onServer =
-												!!saved && !inPlay(saved)}
-											<BenchedSeatRow
-												name={seat.name || "This seat"}
-												meta={seatPlayerWords(seat.userId)}
-												{fallen}
-												seatAction="player:{seat.id}"
-												canBringBack={mine}
-												onBringBack={() =>
-													moveSeat("player", seat.id, false)}
-												menuItems={[
-													mine &&
-														onServer &&
-														seatHasNoLines(saved) && {
-															label: "Remove",
-															icon: Icons.X,
-															destructive: true,
-															onSelect: () =>
-																(benchedPlayerSeats =
-																	benchedPlayerSeats.filter(
-																		(p) =>
-																			p.id !==
-																			seat.id
-																	))
-														}
-												]}
-											>
-												{#snippet face()}
-													<Icons.UserRound
-														size={20}
-														class="text-surface-500 shrink-0"
-														aria-hidden="true"
-													/>
-												{/snippet}
-											</BenchedSeatRow>
-										{/each}
-									</ul>
-								{/if}
-							{/if}
-						</section>
+							<SessionBenchedSeats
+								{showCharactersSection}
+								{showPersonasSection}
+								{benchedCharacters}
+								{benchedMembers}
+								{benchedPersonas}
+								{benchedPlayerSeats}
+								{dragging}
+								{session}
+								{isGuest}
+								{userCtx}
+								{savedCharacterSeat}
+								{savedMemberSeat}
+								{savedPersonaSeat}
+								{savedPlayerSeat}
+								{handleSeatDrag}
+								{moveSeat}
+								{openReassignModal}
+								{confirmRemoveCharacter}
+								{confirmRemoveMember}
+								{confirmRemovePersona}
+								{seatPlayerWords}
+								{ownerId}
+								{characterSeater}
+								{memberSeater}
+								{personaPlayer}
+								{seatPlayer}
+								canChangeCarded={canBringOwn}
+								canChangeCastSeats={canTakeCast}
+								onRemoveBenchedPlayerSeat={(id) =>
+									(benchedPlayerSeats = benchedPlayerSeats.filter(
+										(p) => p.id !== id
+									))}
+							/>
 					{/if}
 
 					<!-- A solo genre (`GenreDecl.members`, ruled 2026-10-19) seats nobody else: no Guests card. -->
@@ -3162,20 +3190,18 @@
 								class="mb-3 flex items-center justify-between gap-2"
 							>
 								<h3 class="text-sm font-medium">Guests</h3>
-								<button
-									class="btn btn-sm preset-tonal shrink-0"
-									onclick={() => (showGuestModal = true)}
-									disabled={isGuest}
-									title={isGuest
-										? "Only the session's owner can add guests"
-										: undefined}
-								>
-									<Icons.UserPlus
-										size={16}
-										aria-hidden="true"
-									/>
-									Add guests
-								</button>
+								{#if !isGuest}
+									<button
+										class="btn btn-sm preset-tonal shrink-0"
+										onclick={() => (showGuestModal = true)}
+									>
+										<Icons.UserPlus
+											size={16}
+											aria-hidden="true"
+										/>
+										Add guests
+									</button>
+								{/if}
 							</div>
 							<div class="flex flex-col gap-1">
 								{#each selectedGuests as guest (guest.userId)}
@@ -3207,6 +3233,7 @@
 												Ready to add
 											</span>
 										{/if}
+										{#if !isGuest}
 										<button
 											class="btn-ghost text-error-600-400 hover:bg-error-500/10 shrink-0 rounded p-1"
 											onclick={() =>
@@ -3223,14 +3250,88 @@
 										>
 											<Icons.X size={16} />
 										</button>
+										{/if}
 									</div>
 								{/each}
 							</div>
+							{#if !isGuest && selectedGuests.length > 0 && (showCharactersSection || showPersonasSection)}
+								<!-- 🚧 The owner's two guest seat switches (G3, G4):
+								     held until Save; only the seat kinds the genre has, and only
+								     once the session has a guest (saved or pending here). -->
+								<div class="mt-3 flex flex-col gap-3">
+									<div class="flex flex-col gap-1">
+										<Switch
+											name="guests-bring-own"
+											checked={guestsBringOwn}
+											onCheckedChange={(e) =>
+												(guestsBringOwn = e.checked)}
+										>
+											<Switch.Control
+												class="preset-filled-surface-500 data-[state=checked]:preset-filled-primary-500 w-9"
+											>
+												<Switch.Thumb />
+											</Switch.Control>
+											<Switch.HiddenInput
+												aria-describedby="guests-bring-own-help"
+											/>
+											<Switch.Label class="text-sm"
+												>Guests can bring their own
+												characters</Switch.Label
+											>
+										</Switch>
+										<FieldHelp id="guests-bring-own-help">
+											Guests add, remove and bench
+											characters and personas they own{guestsMayNameSeat
+												? ", and can name a seat"
+												: ""}. Off keeps their seats as
+											they are.
+										</FieldHelp>
+									</div>
+									{#if showCharactersSection}
+										<div class="flex flex-col gap-1">
+											<Switch
+												name="guests-take-cast"
+												checked={guestsTakeCast}
+												onCheckedChange={(e) =>
+													(guestsTakeCast = e.checked)}
+											>
+												<Switch.Control
+													class="preset-filled-surface-500 data-[state=checked]:preset-filled-primary-500 w-9"
+												>
+													<Switch.Thumb />
+												</Switch.Control>
+												<Switch.HiddenInput
+													aria-describedby="guests-take-cast-help"
+												/>
+												<Switch.Label class="text-sm"
+													>Guests can take cast
+													members</Switch.Label
+												>
+											</Switch>
+											<FieldHelp id="guests-take-cast-help">
+												Guests take or leave the seat of
+												a cast member without a card whom
+												nobody plays. Off keeps their
+												seats as they are.
+											</FieldHelp>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</section>
+					{/if}
+					<!-- A guest's own Privacy view, at the foot (G1): they have
+					     no Privacy tab. -->
+					{#if isGuest}
+						<section class={CARD_CLASS}>
+							<h3 class="mb-3 text-sm font-medium">Privacy</h3>
+							<SessionVisibilityPanel {accountVisibility} omitGuestLine />
 						</section>
 					{/if}
 				</div>
 			</div>
 
+			{#if !isGuest}
 			<div
 				id="session-panel-settings"
 				role="tabpanel"
@@ -3462,122 +3563,13 @@
 						     gives the session something the instance owner did not
 						     offer it. -->
 					{#if advanced && session && !isGuest && sessionFunctions.length > 0}
-						<section class={CARD_CLASS}>
-							<h3 class="mb-1 text-sm font-medium">Actions</h3>
-							<p class="text-surface-600-400 mb-2 text-xs">
-								What this session can do besides reply. Replying
-								is intrinsic and always available. Applies at
-								once.
-							</p>
-
-							{#each presetActions as f (actionIdentity(f))}
-								{@const id = `fn-${actionIdentity(f)}`}
-								<label
-									class="flex items-start gap-2 text-sm"
-									for={id}
-								>
-									<input
-										{id}
-										type="checkbox"
-										class="checkbox mt-0.5"
-										checked={f.enabled}
-										disabled={functionsBusy ===
-											actionIdentity(f) ||
-											!!f.unavailable}
-										onchange={(e) =>
-											toggleSessionFunction(
-												f,
-												e.currentTarget.checked
-											)}
-									/>
-									<span class="flex flex-col">
-										<span>
-											{f.name}
-											{#if f.source === "session"}
-												<span
-													class="text-surface-600-400 text-meta"
-												>
-													· set for this session
-												</span>
-											{/if}
-										</span>
-										{#if f.description}
-											<span
-												class="text-surface-600-400 text-xs"
-											>
-												{f.description}
-											</span>
-										{/if}
-										{#if f.unavailable}
-											<!-- 🚧 R56: off until an administrator sets a model for it. -->
-											<span
-												class="text-warning-700-300 text-xs"
-											>
-												{f.unavailable}
-											</span>
-										{/if}
-									</span>
-								</label>
-							{/each}
-
-							{#if presetActions.length === 0}
-								<p class="text-surface-600-400 text-xs italic">
-									This session's preset includes no actions.
-								</p>
-							{/if}
-
-							{#if outsideActions.length > 0}
-								<div class="mt-3 flex flex-col gap-2">
-									<p class="text-xs font-medium">
-										Not in this preset
-									</p>
-									<p class="text-surface-600-400 text-xs">
-										{#if canAddOutsidePreset}
-											Offered by this genre but left out
-											of the preset. Adding one affects
-											this session only.
-										{:else}
-											Offered by this genre but not part
-											of your preset. An administrator can
-											add these.
-										{/if}
-									</p>
-									{#each outsideActions as f (actionIdentity(f))}
-										{@const id = `fn-${actionIdentity(f)}`}
-										<label
-											class="flex items-start gap-2 text-sm"
-											for={id}
-										>
-											<input
-												{id}
-												type="checkbox"
-												class="checkbox mt-0.5"
-												checked={f.enabled}
-												disabled={functionsBusy ===
-													actionIdentity(f) ||
-													(!canAddOutsidePreset &&
-														!f.enabled)}
-												onchange={(e) =>
-													toggleSessionFunction(
-														f,
-														e.currentTarget.checked
-													)}
-											/>
-											<span class="flex flex-col">
-												<span>{f.name}</span>
-												{#if f.description}
-													<span
-														class="text-surface-600-400 text-xs"
-													>
-														{f.description}
-													</span>
-												{/if}
-											</span>
-										</label>
-									{/each}
-								</div>
-							{/if}
-						</section>
+						<SessionActions
+							{presetActions}
+							{outsideActions}
+							{functionsBusy}
+							{canAddOutsidePreset}
+							{toggleSessionFunction}
+						/>
 					{/if}
 
 					<!-- Pipeline cards (PLAN-turn-order §4.11): every node the
@@ -3656,6 +3648,7 @@
 							sessionId={session.id}
 							cardClass={CARD_CLASS}
 							genreFieldDecls={modeFieldDecls}
+							onchanged={rereadPipelineCards}
 							valueLabelOf={(f) =>
 								f.address.kind === "genre" &&
 								f.address.key === "ruleset"
@@ -3687,7 +3680,8 @@
 							</label>
 							<p class="text-surface-600-400 mb-2 text-xs">
 								What deleting or regenerating the latest turn
-								does.
+								does, and moving the story clock back past
+								what this session wrote.
 							</p>
 							<select
 								id="session-on-revision"
@@ -3727,8 +3721,10 @@
 					     comes the pipeline that created the session: editable while
 					     creating, then collapsed and read-only, its card saying why
 					     (owner ruling 2026-09-30). The section is a heading, not a
-					     card: the cards are siblings. -->
-					{#if advanced && session?.id && sessionPipelines.length}
+					     card: the cards are siblings. Who gets it: the
+					     session's owner, and an administrator; a guest gets
+					     none (owner ruling D58, 2026-11-16). -->
+					{#if advanced && seesSessionPipelines && session?.id && sessionPipelines.length}
 						<section
 							class="flex flex-col gap-3"
 							aria-labelledby="session-pipelines"
@@ -3766,90 +3762,19 @@
 					{/if}
 
 					<!-- Tags -->
-					<section class="{CARD_CLASS} mb-10">
-						<label
-							class="text-surface-600-400 mb-1.5 block text-xs"
-							for="tagInput"
-						>
-							Tags
-						</label>
-						<div class="relative">
-							<input
-								id="tagInput"
-								type="text"
-								bind:value={tagSearchInput}
-								class={FIELD_CLASS}
-								placeholder="Add a tag…"
-								disabled={isGuest}
-								onfocus={() => (showTagSuggestions = true)}
-								onblur={() =>
-									setTimeout(
-										() => (showTagSuggestions = false),
-										200
-									)}
-							/>
-
-							<!-- Tag suggestions dropdown -->
-							{#if showTagSuggestions && filteredTags.length > 0}
-								<div
-									class="bg-surface-100-900 border-surface-200-800 rounded-base absolute z-10 mt-1 max-h-40 w-full overflow-y-auto border shadow-lg"
-								>
-									{#each filteredTags as tag}
-										<button
-											type="button"
-											class="hover:bg-surface-200-800 w-full px-3 py-2 text-left transition-colors"
-											onclick={() => addTag(tag.name)}
-										>
-											<span
-												class="chip mr-2 {tag.colorPreset ||
-													'preset-filled-primary-500'}"
-											>
-												{tag.name}
-											</span>
-											{#if tag.description}
-												<span
-													class="text-surface-600-400 text-xs"
-												>
-													- {tag.description}
-												</span>
-											{/if}
-										</button>
-									{/each}
-								</div>
-							{/if}
-						</div>
-
-						<!-- Selected tags display -->
-						{#if selectedTags.length > 0}
-							<div class="mt-2 flex flex-wrap gap-2">
-								{#each selectedTags as tagName}
-									{@const tag = tagsList.find(
-										(t) => t.name === tagName
-									)}
-									<button
-										type="button"
-										class="chip {tag?.colorPreset ||
-											'preset-filled-primary-500'} group relative"
-										onclick={() => removeTag(tagName)}
-										disabled={isGuest}
-										title={isGuest
-											? tagName
-											: "Click to remove tag"}
-									>
-										{tagName}
-										{#if !isGuest}
-											<Icons.X
-												size={14}
-												class="ml-1 opacity-60 group-hover:opacity-100"
-											/>
-										{/if}
-									</button>
-								{/each}
-							</div>
-						{/if}
-					</section>
+					<SessionTags
+						bind:tagSearchInput
+						bind:showTagSuggestions
+						{filteredTags}
+						{selectedTags}
+						{tagsList}
+						{isGuest}
+						{addTag}
+						{removeTag}
+					/>
 					<!-- Session data (2026-09-26): the annex, read-only, for the
-					     owner and administrators (the server refuses anyone else).
+					     owner's only (the server refuses anyone else, administrators
+					     included).
 					     Mounted with the tab, so it reads when the tab opens. -->
 					<!-- The undo for Regenerate's "Don't ask again" (R2): the
 					     owner's, and only where the genre offers retake. -->
@@ -3860,7 +3785,7 @@
 							cardClass={CARD_CLASS}
 						/>
 					{/if}
-					{#if advanced && editSessionId != null && activeSessionTab === "settings" && (!isGuest || userCtx.user?.isAdmin)}
+					{#if advanced && editSessionId != null && activeSessionTab === "settings" && !isGuest}
 						<SessionAnnexPanel
 							sessionId={editSessionId}
 							cardClass={CARD_CLASS}
@@ -3878,153 +3803,9 @@
 				aria-labelledby="session-panel-visibility-tab"
 				hidden={activeSessionTab !== "visibility"}
 			>
-				<div class="flex flex-col gap-3 pt-3">
-					<div
-						class="preset-tonal-surface rounded-base text-chip p-4"
-					>
-						<div class="flex items-start gap-2">
-							<Icons.Eye size={18} class="mt-0.5 shrink-0" />
-							<div class="flex flex-col gap-1">
-								<p class="font-semibold">
-									What this session sees of your data
-								</p>
-								<p class="text-surface-600-400">
-									Anything you own and add here becomes
-									visible to this session's other
-									participants, and is read by the pipelines
-									that generate its replies. This shows only
-									your own data — never what anyone else has
-									shared.
-								</p>
-							</div>
-						</div>
-					</div>
-
-					{#if !accountVisibility}
-						<p class="text-surface-600-400 text-sm">Loading…</p>
-					{:else}
-						<p class="text-sm">
-							{#if accountVisibility.isOwner}
-								You are the <span class="font-semibold">
-									owner
-								</span>
-								of this session.
-							{:else if accountVisibility.isGuest}
-								You are a <span class="font-semibold">
-									guest
-								</span>
-								in this session.
-							{:else}
-								You are a participant in this session.
-							{/if}
-						</p>
-
-						{@const ex = accountVisibility.exposed}
-						{#if ex.characters.length + ex.personas.length + ex.lorebooks.length === 0}
-							<div
-								class="bg-surface-100-900 rounded-container text-chip p-4"
-							>
-								You have not added any of your own characters,
-								personas, or lorebooks to this session — so it
-								exposes nothing of yours.
-							</div>
-						{:else}
-							<div class="flex flex-col gap-3">
-								{#if ex.characters.length}
-									<div
-										class="bg-surface-100-900 rounded-container flex flex-col gap-2 p-3"
-									>
-										<div
-											class="flex items-center gap-2 text-sm font-medium"
-										>
-											<Icons.User size={16} /> Characters
-										</div>
-										<div class="flex flex-wrap gap-2">
-											{#each ex.characters as c}
-												<span
-													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
-												>
-													{c.name}
-												</span>
-											{/each}
-										</div>
-									</div>
-								{/if}
-								{#if ex.personas.length}
-									<div
-										class="bg-surface-100-900 rounded-container flex flex-col gap-2 p-3"
-									>
-										<div
-											class="flex items-center gap-2 text-sm font-medium"
-										>
-											<Icons.UserCircle size={16} /> Personas
-										</div>
-										<div class="flex flex-wrap gap-2">
-											{#each ex.personas as p}
-												<span
-													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
-												>
-													{p.name}
-												</span>
-											{/each}
-										</div>
-									</div>
-								{/if}
-								{#if ex.lorebooks.length}
-									<div
-										class="bg-surface-100-900 rounded-container flex flex-col gap-2 p-3"
-									>
-										<div
-											class="flex items-center gap-2 text-sm font-medium"
-										>
-											<Icons.BookOpen size={16} /> Lorebooks
-										</div>
-										<div class="flex flex-wrap gap-2">
-											{#each ex.lorebooks as l}
-												<span
-													class="preset-tonal-primary rounded-full px-3 py-1 text-xs"
-												>
-													{l.name}
-												</span>
-											{/each}
-										</div>
-									</div>
-								{/if}
-							</div>
-						{/if}
-
-						<div class="flex flex-col gap-2">
-							<p class="text-sm font-medium">
-								Who can see the above
-							</p>
-							{#if accountVisibility.viewers.length === 0}
-								<p class="text-surface-600-400 text-sm">
-									No one else yet — you are the only
-									participant.
-								</p>
-							{:else}
-								<div class="flex flex-col gap-2">
-									{#each accountVisibility.viewers as v}
-										<div
-											class="bg-surface-100-900 rounded-container text-chip flex items-center justify-between gap-3 p-3"
-										>
-											<span
-												class="flex items-center gap-2"
-											>
-												<Icons.User size={16} />
-												{v.username}
-											</span>
-											<Badge size="md" class="capitalize">
-												{v.role}
-											</Badge>
-										</div>
-									{/each}
-								</div>
-							{/if}
-						</div>
-					{/if}
-				</div>
+					<SessionVisibilityPanel {accountVisibility} />
 			</div>
+			{/if}
 		{/if}
 	</div>
 {/if}
@@ -4033,29 +3814,36 @@
 	the cast. The same rule as the start form's castOptions / playAsOptions. -->
 <CharacterSelectModal
 	open={showCharacterModal}
-	{characters}
+	characters={canBringOwn ? characters : []}
 	excludeIds={[
 		...selectedCharacters.map((c) => c.id),
 		...benchedCharacters.map((c) => c.id),
 		...selectedPersonas.map((p) => p.id),
 		...benchedPersonas.map((p) => p.id)
 	]}
-	multiSelect={membersToOffer.length > 0}
-	castMembers={bookMembers}
-	castGroupLabel={savedLorebookId == null
-		? SESSION_NOTES_LABEL
-		: lorebookNames[savedLorebookId] || "Untitled lorebook"}
+	multiSelect={canTakeCast && membersToOffer.length > 0}
+	castMembers={canTakeCast ? bookMembers : []}
+	castGroupLabel={isGuest
+		? "Cast members"
+		: savedLorebookId == null
+			? SESSION_NOTES_LABEL
+			: lorebookNames[savedLorebookId] || "Untitled lorebook"}
 	excludeCastMemberIds={[
 		...selectedMembers.map((m) => m.id),
-		...benchedMembers.map((m) => m.id)
+		...benchedMembers.map((m) => m.id),
+		...bookMembers.filter((m) => heldByPlayerSeat(m.id)).map((m) => m.id)
 	]}
 	onOpenChange={(e) => (showCharacterModal = e.open)}
 	onSelect={handleAddCharacter}
+	sharedCards={sharedOfKind("character")}
+	onSelectShared={(row) => addSharedPick("character", row)}
 	onMultiSelect={handleAddMany}
-	onCreateNew={() => {
-		showCharacterModal = false
-		showCharacterCreator = true
-	}}
+	onCreateNew={canBringOwn
+		? () => {
+				showCharacterModal = false
+				showCharacterCreator = true
+			}
+		: undefined}
 />
 <PersonaSelectModal
 	open={showPersonaModal}
@@ -4067,6 +3855,8 @@
 	]}
 	onOpenChange={(e) => (showPersonaModal = e.open)}
 	onSelect={handleAddPersona}
+	sharedCards={sharedOfKind("player")}
+	onSelectShared={(row) => addSharedPick("player", row)}
 	returnFullPersona={true}
 	onCreateNew={() => {
 		showPersonaModal = false
@@ -4143,8 +3933,10 @@
 <!-- Gated on the same condition the Guests section is: the modal asks for
      `users:list` on mount, and with accounts disabled that request is refused
      and toasted. Mounting it beside a section that cannot be reached means the
-     refusal arrives every time the edit form opens. -->
-{#if editSessionId && systemSettingsCtx?.settings?.isAccountsEnabled}
+     refusal arrives every time the edit form opens. A viewer who is not the
+     session's owner adds nobody, and the server refuses `users:list` to a
+     non-admin, so the modal is absent for them. -->
+{#if editSessionId && session && !isGuest && systemSettingsCtx?.settings?.isAccountsEnabled}
 	<UserSelectModal
 		open={showGuestModal}
 		excludeUserIds={[

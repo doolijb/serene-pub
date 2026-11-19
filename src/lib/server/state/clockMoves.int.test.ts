@@ -239,52 +239,54 @@ describe("🚧 before anything was said (§15 G13)", () => {
 })
 
 describe("a story with no clock yet", () => {
-	test("a move BY an amount starts the clock on the story's first day, stored, and records an applied move", async () => {
+	/** The session's own notes state their timeline: a clock moves only on a lorebook that keeps one. */
+	const notesKeepTimeline = async (sessionId: number) => {
+		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
+		const own = await ownBookFor(db(), sessionId)
+		await testDb.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, own.id))
+	}
+	const NO_DATE =
+		"This story has no date yet, so its clock can't move. Set the story clock in the lorebook's Book settings first."
+	// `skip` keeps the outlet's existing `onRefusal` sentence (`clockSkipReason`).
+	const NO_CLOCK_YET = "This story has no clock yet: set one in the lorebook to track time."
+
+	test("a move BY an amount on a story with no clock and no present is refused with the clock-yet sentence, nothing written (skip)", async () => {
 		const w = await world({ clock: false })
 		noted.length = 0
 		const out: any = await (await host(w)).commit!(
 			{ by: 3, unit: "hours", cause: "action", onRefusal: "skip" },
 			advance
 		)
-		expect(out.skipped ?? "").toBe("")
-		expect(await clockOf(w.session.id)).toEqual({ year: 1, month: 1, day: 1, hour: 3, minute: 0 })
-		expect(noted).not.toEqual([])
-		const [row] = await clockRows(w.session.id)
-		expect(row).toMatchObject({
-			status: "applied",
-			messageId: w.message.id,
-			payload: {
-				by: 3,
-				unit: "hours",
-				from: { year: 1, month: 1, day: 1, hour: 0, minute: 0 },
-				to: { year: 1, month: 1, day: 1, hour: 3, minute: 0 }
-			}
-		})
-		const [line] = await linesOf(w.session.id, w.session.lorebookId)
-		expect(line.text).toMatch(/^Time passes: 3 hours \(.*00:00 → .*03:00\)$/)
+		expect(out.skipped).toBe(NO_CLOCK_YET)
+		expect(await clockOf(w.session.id)).toEqual({ year: null, month: null, day: null, hour: null, minute: null })
 	})
 
-	test("a session with no shared lorebook keeps its clock in its own book: unset, it starts on the first day; set, it moves from there", async () => {
+	test("… and halts the run on the same sentence when the step says halt", async () => {
+		const w = await world({ clock: false })
+		await expect(
+			(await host(w)).commit!({ by: 3, unit: "hours", cause: "action", onRefusal: "halt" }, advance)
+		).rejects.toThrow(NO_DATE)
+		expect(await clockOf(w.session.id)).toEqual({ year: null, month: null, day: null, hour: null, minute: null })
+	})
+
+	test("a session with no shared lorebook keeps its clock in its own book: unset, a move is refused; set, it moves from there", async () => {
 		const unset = await world({ book: false, clock: false })
-		const started: any = await (await host(unset)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
-		expect(started.skipped ?? "").toBe("")
-		expect((await clockOf(unset.session.id)).day).toBe(2)
+		await notesKeepTimeline(unset.session.id)
+		const refused: any = await (await host(unset)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
+		expect(refused.skipped).toBe(NO_CLOCK_YET)
 		// Set, it moves: the session's clock is its own, whatever book it reads.
 		const set = await world({ book: false })
+		await notesKeepTimeline(set.session.id)
 		const moved: any = await (await host(set)).commit!({ by: 1, unit: "days", onRefusal: "skip" }, advance)
 		expect(moved.skipped ?? "").toBe("")
 		expect((await clockOf(set.session.id)).day).toBe(6)
 	})
 
-	test("a move TO a moment starts the clock on the story's first day, stored, and later moves go on from it (M1 E-fix T-4)", async () => {
+	test("a move TO a moment on a story with no clock and no present is refused with the clock-yet sentence (skip)", async () => {
 		const w = await world({ clock: false })
 		const out: any = await (await host(w)).commit!({ to: { hour: 10, minute: 0, day: "today" }, cause: "tick", onRefusal: "skip" }, advance)
-		expect(out.skipped ?? "").toBe("")
-		expect(await clockOf(w.session.id)).toEqual({ year: 1, month: 1, day: 1, hour: 10, minute: 0 })
-		const [row] = await clockRows(w.session.id)
-		expect(row).toMatchObject({ status: "applied", payload: { by: 600, unit: "minutes", from: { year: 1, month: 1, day: 1, hour: 0 } } })
-		await (await host(w)).commit!({ by: 21, unit: "hours", cause: "action", onRefusal: "skip" }, advance)
-		expect(await clockOf(w.session.id)).toEqual({ year: 1, month: 1, day: 2, hour: 7, minute: 0 })
+		expect(out.skipped).toBe(NO_CLOCK_YET)
+		expect(await clockOf(w.session.id)).toEqual({ year: null, month: null, day: null, hour: null, minute: null })
 	})
 
 	test("unwired, a refusal still halts with the sentence and writes nothing", async () => {

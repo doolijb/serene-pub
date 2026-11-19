@@ -80,6 +80,11 @@
 		castGroupLabel?: string
 		/** Members not to offer because they are already seated. */
 		excludeCastMemberIds?: number[]
+		/** Cards another person shared: listed last, one press each. */
+		sharedCards?: (Partial<SelectCharacter> & { id: number })[]
+		onSelectShared?: (
+			character: Partial<SelectCharacter> & { id: number }
+		) => void
 	}
 
 	let {
@@ -94,7 +99,9 @@
 		selectedLimit,
 		castMembers = [],
 		castGroupLabel = "",
-		excludeCastMemberIds = []
+		excludeCastMemberIds = [],
+		sharedCards = [],
+		onSelectShared
 	}: Props = $props()
 	let search = $state("")
 	let searchInput = $state<HTMLInputElement | null>(null)
@@ -156,6 +163,8 @@
 							{search}
 							{onSelect}
 							{onCreateNew}
+							{sharedCards}
+							{onSelectShared}
 							{onMultiSelect}
 							{onOpenChange}
 						/>

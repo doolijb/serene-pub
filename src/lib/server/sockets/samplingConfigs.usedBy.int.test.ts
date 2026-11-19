@@ -109,7 +109,7 @@ describe("samplingConfigs:usedBy", () => {
 		})
 
 		const res = await samplingConfigsUsedBy.handler(
-			socketFor(false),
+			socketFor(),
 			{},
 			() => {}
 		)
@@ -155,6 +155,19 @@ describe("samplingConfigs:usedBy", () => {
 			{ label: "From a plugin that is off", slug: null }
 		])
 		expect(events.map((e) => e.event)).toEqual(["samplingConfigs:usedBy"])
+	})
+
+	test("a member is refused and sees nothing", async () => {
+		const { samplingConfigsUsedBy } = await import("./samplingConfigs")
+		const { events, emit } = recorder()
+
+		await expect(
+			samplingConfigsUsedBy.handler(socketFor(false), {}, emit)
+		).rejects.toThrow(/admin/)
+
+		expect(events.map((e) => e.event)).toEqual([
+			"samplingConfigs:usedBy:error"
+		])
 	})
 })
 

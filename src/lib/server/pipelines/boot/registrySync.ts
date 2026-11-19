@@ -1312,8 +1312,10 @@ function projectionOf(
 			name,
 			fields: t.body as Record<string, string>,
 			// A shipped row belongs to no pipeline of this instance's —
-			// `created_for_spec_id` is grouping in the picker and would
-			// need a local spec id, which a manifest cannot carry.
+			// `created_for_spec_id` decides whether a call offers the row
+			// (`promptsOffered`: none recorded means administrators only, or a
+			// default or in force) and would need a local spec id, which a
+			// manifest cannot carry.
 			createdForSpecId: null,
 			ownerPluginId: ownerId
 		}

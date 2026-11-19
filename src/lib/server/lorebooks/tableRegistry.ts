@@ -509,7 +509,8 @@ export const LOREBOOK_TABLES: readonly LorebookTableSpec[] = [
 					lorebookId: to,
 					parentNodeId: null,
 					sceneId: null,
-					historyEntryId: null
+					historyEntryId: null,
+					createdBy: null
 				})
 				maps.bindings.set(id, ins.id)
 			}
@@ -663,20 +664,26 @@ export const LOREBOOK_TABLES: readonly LorebookTableSpec[] = [
 			)
 	},
 
-	// Entry edit history — through its entry; it never travels.
+	// Edit history — through its entry or its scene; it never travels.
 	{
 		table: schema.loreRedlines,
 		scope: "entry",
 		lineScoped: false,
-		notCopied: "an entry's edit history never travels",
+		notCopied: "edit history never travels (entries' and scenes')",
 		copy: async () => {},
 		purge: async (tx, lorebookId) => {
 			await tx
 				.delete(schema.loreRedlines)
-				.where(sql`${schema.loreRedlines.entryId} IN ${entryIdsOf(lorebookId)}`)
+				.where(
+					sql`${schema.loreRedlines.entryId} IN ${entryIdsOf(lorebookId)} OR ${schema.loreRedlines.sceneId} IN ${sceneIdsOf(lorebookId)}`
+				)
 		},
 		count: (tx, lorebookId) =>
-			countWhere(tx, schema.loreRedlines, sql`${schema.loreRedlines.entryId} IN ${entryIdsOf(lorebookId)}`)
+			countWhere(
+				tx,
+				schema.loreRedlines,
+				sql`${schema.loreRedlines.entryId} IN ${entryIdsOf(lorebookId)} OR ${schema.loreRedlines.sceneId} IN ${sceneIdsOf(lorebookId)}`
+			)
 	},
 
 	// Scenes. The session capture (`sessionId`, `selectedMessageIds`) stays

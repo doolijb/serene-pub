@@ -1,10 +1,11 @@
 /**
  * 🚧 Who a person may speak as in a session — one rule, both halves.
  *
- * A **player seat** (a `session_personas` row) is a person's voice when it
- * carries their card (`persona_id`, the card's owner theirs) or when it is a
- * live card-less seat with a name (`isCardlessPlayerSeat`) that is theirs
- * (`user_id`), and in play (live and not benched, `inPlay`; owner 2026-11-10).
+ * A **player seat** (a `session_personas` row) is a person's voice when it is
+ * theirs — its person is `user_id`, and a row from before that column
+ * (`user_id` null) reads its card's owner — and it carries a card or is a
+ * live card-less seat with a name (`isCardlessPlayerSeat`), and in play (live
+ * and not benched, `inPlay`; owner 2026-11-10).
  * The page's send gate, composer and turn controls read it
  * (`sessionPageData`); the server stamps a card-less line with the same
  * test (`cardlessPlayerSeatOf`).
@@ -42,7 +43,7 @@ export const isCardlessPlayerSeat = (seat: {
 export function isOwnPlayerSeat(seat: PlayerSeatLike, userId: number | null | undefined): boolean {
 	if (userId == null || !inPlay(seat)) return false
 	if (seat.personaId != null || seat.persona != null)
-		return (seat.persona?.userId ?? seat.userId) === userId
+		return (seat.userId ?? seat.persona?.userId) === userId
 	return isCardlessPlayerSeat(seat) && seat.userId === userId
 }
 

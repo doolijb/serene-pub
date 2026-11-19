@@ -385,7 +385,7 @@ describe("what a cast version write records", () => {
 				changes,
 				runId: "run-xyz-77",
 				messageId: message!.id
-			})
+			}) as Promise<Extract<Awaited<ReturnType<typeof writeCastMember>>, { castVersionId: number }>>
 		const first = await write({ description: "A new description." })
 		expect(await rowsOf(first.castVersionId)).toHaveLength(0)
 		const second = await write({ personality: "Wry." })

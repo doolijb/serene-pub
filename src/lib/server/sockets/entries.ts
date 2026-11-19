@@ -103,8 +103,12 @@ import {
 import {
 	assertDateLands,
 	bookCalendarOf,
+	clockProblem,
 	lockBookCalendar,
-	sessionStoryNowOf
+	ownerTimeZoneOf,
+	sessionStoryNowOf,
+	storyNowOf,
+	storyToday
 } from "$lib/server/state/storyTime"
 import {
 	assertHistoryDateFree,
@@ -205,6 +209,29 @@ const listOrder = (typeId: string) =>
 	entryDeclaration(typeId)?.roles.order
 		? asc(schema.lorebookEntries.position)
 		: asc(schema.lorebookEntries.id)
+
+// 🚧 Provisional copy: the owner has not seen this sentence.
+const NO_STORY_DATE_SENTENCE =
+	"This story has no date yet. Give this history entry a year, or set the story clock in the lorebook's Book settings first."
+
+/**
+ * A person's history entry with no year, on a line with no present: today's
+ * date (year, month, day), when today lands on the book's calendar. Null when
+ * the line has a present or today does not land — the caller refuses then.
+ */
+async function todayHistoryDate(
+	d: Db,
+	userId: number,
+	lorebookId: number,
+	branchId: number | null
+): Promise<{ year: number; month: number; day: number } | null> {
+	if (!(await timelineOfBook(d, lorebookId))) return null
+	if (await storyNowOf(d, lorebookId, branchId)) return null
+	const { year, month, day } = storyToday(await ownerTimeZoneOf(d, userId))
+	const date = { year, month: month as number, day: day as number }
+	if (clockProblem(date, await bookCalendarOf(d, lorebookId))) return null
+	return date
+}
 
 /**
  * The default-space vector's model and timestamp per entry — the
@@ -974,14 +1001,27 @@ async function createEntry(
 		)
 			throw new Error(TIMELINE_OFF_SENTENCES.history)
 		datedAtStoryNow = !!entryDeclaration(typeId)?.roles.order && data.year == null
-		if (datedAtStoryNow)
-			Object.assign(
-				data,
-				historyDateOfSessionWrite(
-					write,
-					await bookCalendarOf(db, data.lorebookId)
-				)
+		if (datedAtStoryNow) {
+			const date = historyDateOfSessionWrite(
+				write,
+				await bookCalendarOf(db, data.lorebookId)
 			)
+			const dated =
+				date ??
+				(await todayHistoryDate(db, userId, data.lorebookId, write.branchId))
+			if (!dated) throw new Error(NO_STORY_DATE_SENTENCE)
+			Object.assign(data, dated)
+		}
+	} else if (entryDeclaration(typeId)?.roles.order && data.year == null) {
+		const dated = await todayHistoryDate(
+			db,
+			userId,
+			data.lorebookId,
+			data.branchId ?? null
+		)
+		// 🚧 Provisional copy: the owner has not seen this sentence.
+		if (!dated) throw new Error("A history entry needs a year.")
+		Object.assign(data, dated)
 	}
 
 	// Character lore that names its character (a summarize's save): the
@@ -1073,14 +1113,17 @@ async function createEntry(
 					typeId,
 					tx
 				)
-				if (datedAtStoryNow)
-					Object.assign(
-						data,
-						historyDateOfSessionWrite(
-							{ storyNow: await sessionStoryNowOf(tx, params.sessionId) },
-							await bookCalendarOf(tx, data.lorebookId)
-						)
+				if (datedAtStoryNow) {
+					const date = historyDateOfSessionWrite(
+						{ storyNow: await sessionStoryNowOf(tx, params.sessionId) },
+						await bookCalendarOf(tx, data.lorebookId)
 					)
+					const dated =
+						date ??
+						(await todayHistoryDate(tx, userId, data.lorebookId, data.branchId))
+					if (!dated) throw new Error(NO_STORY_DATE_SENTENCE)
+					Object.assign(data, dated)
+				}
 			}
 		}
 		// A dated entry's date must land in the book's calendar, once it
@@ -1535,7 +1578,8 @@ export const entrySetMarksHandler: Handler<
 		const [found] = await db
 			.select({
 				entry: schema.lorebookEntries,
-				lorebookUserId: schema.lorebooks.userId
+				lorebookUserId: schema.lorebooks.userId,
+				lorebookSessionId: schema.lorebooks.sessionId
 			})
 			.from(schema.lorebookEntries)
 			.innerJoin(
@@ -1544,22 +1588,29 @@ export const entrySetMarksHandler: Handler<
 			)
 			.where(eq(schema.lorebookEntries.id, params.entryId))
 			.limit(1)
-		if (!found || (found.lorebookUserId !== userId && !socket.user?.isAdmin))
+		if (!found) return refuse("Entry not found or access denied.")
+		// A session's notes are its owner's alone (G2, G6): no administrator exception.
+		if (found.lorebookSessionId != null) {
+			const { ownBookAccessFor } = await import("$lib/server/lorebooks/ownBook")
+			if (!(await ownBookAccessFor(db, found.entry.lorebookId, userId)))
+				return refuse("Entry not found or access denied.")
+		} else if (found.lorebookUserId !== userId && !socket.user?.isAdmin)
 			return refuse("Entry not found or access denied.")
 		{
 			const primerProblem = await primerRowEditProblem(db, found.entry.lorebookId)
 			if (primerProblem) return refuse(primerProblem)
 		}
-		const patch: { enabled?: boolean; constant?: boolean } = {}
+		const patch: { enabled?: boolean; constant?: boolean; entryLock?: boolean } = {}
 		if (typeof params.off === "boolean") patch.enabled = !params.off
 		if (typeof params.pinned === "boolean") patch.constant = params.pinned
-		if (!Object.keys(patch).length) return refuse("Say which mark: off, pinned or both.")
+		if (typeof params.locked === "boolean") patch.entryLock = params.locked
+		if (!Object.keys(patch).length) return refuse("Say which mark: off, pinned, locked, or more than one.")
 		// Where the reply reads the entry: the asking session's line at its
 		// clock, else main at its head (every main amendment has happened).
 		let reading: EntryReading = MAIN_HEAD
 		if (params.sessionId != null) {
 			const access = await checkSessionAccess(params.sessionId, userId)
-			if (!access.hasAccess && !socket.user?.isAdmin) return refuse("Session not found.")
+			if (!access.hasAccess) return refuse("Session not found.")
 			const read = await sessionReadingOf(db, params.sessionId)
 			if (read?.lorebookId === found.entry.lorebookId) reading = read
 		}
@@ -1598,6 +1649,7 @@ export const entrySetMarksHandler: Handler<
 			lorebookId: updated.lorebookId,
 			off: seen.enabled === false,
 			pinned: seen.constant === true,
+			locked: updated.entryLock,
 			...(heldBy ? { heldBy } : {}),
 			...token
 		}
@@ -1636,7 +1688,7 @@ export const entrySessionEntriesHandler: Handler<
 		}
 		const base = { sessionId: params.sessionId, rows: [], total: 0 }
 		const access = await checkSessionAccess(params.sessionId, userId)
-		if (!access.hasAccess && !socket.user?.isAdmin)
+		if (!access.hasAccess)
 			return answer({ ...base, error: "Session not found." })
 		const [session] = await db
 			.select({ lorebookId: schema.sessions.lorebookId })
@@ -1655,12 +1707,17 @@ export const entrySessionEntriesHandler: Handler<
 			.where(eq(schema.lorebooks.id, sessionBookId))
 			.limit(1)
 		if (!book) return answer({ ...base, lorebookId: null })
-		// The own book is the session's: the owner-only line is for an attached book.
+		// The own book is the session owner's alone (G2): a guest is told so.
+		if (session?.lorebookId == null) {
+			const { ownBookAccessFor } = await import("$lib/server/lorebooks/ownBook")
+			if (!(await ownBookAccessFor(db, sessionBookId, userId)))
+				return answer({ ...base, lorebookId: sessionBookId, ownerOnly: true })
+		}
 		if (
 			session?.lorebookId != null &&
 			book.userId !== userId &&
 			!socket.user?.isAdmin &&
-			!(await providedBooksReadableBy(db as unknown as Db, userId, [sessionBookId])).has(sessionBookId)
+			!(await providedBooksReadableBy(db, userId, [sessionBookId])).has(sessionBookId)
 		)
 			return answer({ ...base, lorebookId: sessionBookId, ownerOnly: true })
 

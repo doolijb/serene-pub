@@ -111,7 +111,7 @@ async function world(): Promise<World> {
 			name: "Verity"
 		} as any
 	)
-	// A session's own notes: its host and guests edit them; the host's row owns the book.
+	// A session's own notes: its host edits them (a guest has no access, G2); the host's row owns the book.
 	const [session] = await db
 		.insert(schema.sessions)
 		.values({
@@ -328,7 +328,7 @@ describe("a sprite fill on a cast member", () => {
 		})
 	})
 
-	test("a session's notes editor who is not the book owner leaves the book owner's copy", async () => {
+	test("a guest of the session is refused the notes' sprite fill (G2); the host's leaves the host's copy", async () => {
 		const w = await world()
 		const set = await setOf(w.notesMember.id)
 		const { addEmptySprites } = await import("$lib/server/sprites")
@@ -338,11 +338,22 @@ describe("a sprite fill on a cast member", () => {
 		const { runCardAction } = await import(
 			"$lib/server/pipelines/runtime/cardAction"
 		)
-		const receipt = await runCardAction({
+		const refusedGuest = await runCardAction({
 			db,
 			specId: "core:spec/sprite-set-fill",
 			castMemberId: w.notesMember.id,
 			userId: w.guest.id,
+			fields: { setName: "default", labels: ["joy"] }
+		})
+		expect(refusedGuest.outcome).not.toBe("ok")
+		expect(
+			(await spritesOf(set.id)).find((r) => r.label === "joy")!.fileId
+		).toBeNull()
+		const receipt = await runCardAction({
+			db,
+			specId: "core:spec/sprite-set-fill",
+			castMemberId: w.notesMember.id,
+			userId: w.host.id,
 			fields: { setName: "default", labels: ["joy"] }
 		})
 		expect(receipt.outcome, JSON.stringify(receipt.haltReason)).toBe("ok")
@@ -350,7 +361,7 @@ describe("a sprite fill on a cast member", () => {
 		expect(joy.fileId).not.toBeNull()
 		const file = await fileRow(joy.fileId!)
 		expect(file.userId).toBe(w.notesBook.userId)
-		expect(file.userId).not.toBe(w.guest.id)
+		expect(file.userId).toBe(w.host.id)
 		expect(file.lorebookId).toBe(w.notesBook.id)
 	})
 
@@ -507,11 +518,22 @@ describe("a portrait on a cast member", () => {
 		)
 	})
 
-	test("a notes editor leaves the book owner's copies; a reader is refused", async () => {
+	test("a guest of the session is refused a portrait on the notes' member (G2); the host's leaves the host's copies; a reader is refused", async () => {
 		const w = await world()
-		const receipt = await runPortraitApproved(
+		const refusedGuest = await runPortraitApproved(
 			{ castMemberId: w.notesMember.id },
 			w.guest.id
+		)
+		expect(refusedGuest.outcome).not.toBe("ok")
+		expect(
+			await db
+				.select()
+				.from(schema.castMemberFiles)
+				.where(eq(schema.castMemberFiles.castMemberId, w.notesMember.id))
+		).toHaveLength(0)
+		const receipt = await runPortraitApproved(
+			{ castMemberId: w.notesMember.id },
+			w.host.id
 		)
 		expect(receipt.outcome, JSON.stringify(receipt.haltReason)).toBe("ok")
 		const links = await db

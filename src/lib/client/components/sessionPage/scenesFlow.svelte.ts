@@ -337,21 +337,28 @@ export function createScenesFlow(d: ScenesFlowDeps) {
 	 * question names; null when the scene is deleted.
 	 */
 	function confirmRemoveScene(
-		scene: { id: number; name?: string | null; summary?: string | null },
+		scene: {
+			id: number
+			name?: string | null
+			summary?: string | null
+			hasSummary?: boolean
+		},
 		into: {
 			id: number
 			name?: string | null
 			summary?: string | null
+			hasSummary?: boolean
 		} | null = null
 	): Promise<boolean> {
 		const said = (s: {
 			id: number
 			name?: string | null
 			summary?: string | null
+			hasSummary?: boolean
 		}) => ({
 			id: s.id,
 			name: s.name?.trim() ? s.name : null,
-			summarized: !!s.summary?.trim()
+			summarized: s.hasSummary ?? !!s.summary?.trim()
 		})
 		// One question at a time: a second ask keeps the first's scene.
 		removeAsk?.answer(false)

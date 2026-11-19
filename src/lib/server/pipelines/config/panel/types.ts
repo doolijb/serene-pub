@@ -349,7 +349,8 @@ export interface ConfigOption {
 	 * For a `connection-ref` or `sampling-ref`: where the value in force came
 	 * from, as the one muted line under the control (*Set for this session*,
 	 * *From the “Adventure” configuration*, *Pipeline default*, *Instance
-	 * default*).
+	 * default*). Also carried by a ganged control (`ganged.ts`) whose reads
+	 * hold different values: *Set differently on ‹n› of this pipeline's reads*.
 	 */
 	provenance?: OptionProvenance
 	/**

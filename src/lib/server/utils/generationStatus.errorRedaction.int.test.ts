@@ -76,11 +76,14 @@ async function makeUser(username: string, isAdmin = false) {
  * Redaction is unaffected by any of this: `emitRedacted` decides it from the
  * ADMIN ROSTER it reads out of the database, never from the socket.
  */
-function makeIoSpy() {
+function makeIoSpy(adminIds: readonly number[] = []) {
 	const received: Record<string, any[]> = {}
 	const watcher = (id: string) => ({
 		id,
-		user: { id: Number(id.slice("user_".length)) },
+		user: {
+			id: Number(id.slice("user_".length)),
+			isAdmin: adminIds.includes(Number(id.slice("user_".length)))
+		},
 		interest: new Set(["sessionMessage"])
 	})
 	const io = {
@@ -227,36 +230,113 @@ describe("a stored generation error", () => {
 		).toContain("sk-real-secret-fragment")
 	})
 
-	test("shows this codebase's own sentence verbatim, and the connection it was about to nobody else", async () => {
+	test("an unmarked composed sentence is the plain sentence on the row, and its words and the connection go to an administrator only", async () => {
 		const { persistGenerationErrorRow } = await import("./generationStatus")
 		const { ComposedError } = await import(
 			"$lib/server/connections/visibility"
 		)
+		const { plainReplyFailure, plainReplySentence, ADMINISTRATOR_SUGGESTION } =
+			await import("$lib/server/pipelines/runtime/haltExplanation")
 		const { owner, admin, session, message } = await scenario("composed")
 
-		const { io, received } = makeIoSpy()
+		const { io, received } = makeIoSpy([admin.id])
+		const sentence =
+			"This connection cannot do Image generation. Enable it on the " +
+			"connection, or choose one that can."
 		await persistGenerationErrorRow(
 			io,
 			session.id,
 			message.id,
-			new ComposedError(
-				"This connection cannot do Image generation. Enable it on the " +
-					"connection, or choose one that can.",
-				{ id: 7, name: "Studio", model: "sd-1.5", type: "a1111" }
-			)
+			new ComposedError(sentence, {
+				id: 7,
+				name: "Studio",
+				model: "sd-1.5",
+				type: "a1111"
+			})
 		)
 
-		// Ours, so it survives: replacing it would throw away the one sentence
-		// that says what to fix, and it names nobody by construction.
 		const ownerError =
 			received[`user_${owner.id}`]?.[0].sessionMessage.error
-		expect(ownerError.message).toMatch(/cannot do Image generation/)
+		expect(ownerError.message).toBe(plainReplyFailure())
+		expect(JSON.stringify(ownerError)).not.toContain("Image generation")
 		expect(JSON.stringify(ownerError)).not.toContain("Studio")
 		expect(JSON.stringify(ownerError)).not.toContain("sd-1.5")
 
+		const adminError =
+			received[`user_${admin.id}`]?.[0].sessionMessage.error
+		// An administrator is not told to ask one: the sentence without the suggestion, the detail beside it.
+		expect(adminError.message).toBe(plainReplySentence())
+		expect(adminError.message).not.toContain(ADMINISTRATOR_SUGGESTION)
+		expect(adminError.connection).toMatchObject({
+			id: 7,
+			name: "Studio",
+			model: "sd-1.5"
+		})
+		expect(adminError.connection.detail).toContain(sentence)
+	})
+
+	test("the suggestion to ask an administrator is for readers who are not one: broadcast, reload and an old row", async () => {
+		const { persistGenerationErrorRow } = await import("./generationStatus")
+		const { ComposedError } = await import("$lib/server/connections/visibility")
+		const { plainReplyFailure, plainReplySentence } = await import(
+			"$lib/server/pipelines/runtime/haltExplanation"
+		)
+		const { withEmbeddingStateFor } = await import("$lib/server/messages/debugMeta")
+		const { owner, guest, admin, session, message } = await scenario("suggestion")
+		const { io, received } = makeIoSpy([admin.id])
+		await persistGenerationErrorRow(
+			io,
+			session.id,
+			message.id,
+			new ComposedError("No model is set for Reply.", { detail: "Use in Reply." })
+		)
+		const sent = (id: number) => received[`user_${id}`]?.[0].sessionMessage.error
+		expect(sent(admin.id).message).toBe(plainReplySentence())
+		expect(sent(admin.id).connection.detail).toContain("No model is set for Reply.")
+		for (const id of [owner.id, guest.id]) {
+			expect(sent(id).message).toBe(plainReplyFailure())
+			expect(sent(id).connection).toBeUndefined()
+		}
+
+		// The stored row, served again on a load: one text stored, shaped per reader.
+		const [stored] = await testDb
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, message.id))
+		const served = { sessionMessage: stored }
 		expect(
-			received[`user_${admin.id}`]?.[0].sessionMessage.error.connection
-		).toMatchObject({ id: 7, name: "Studio", model: "sd-1.5" })
+			(await withEmbeddingStateFor(served, { isAdmin: true })).sessionMessage.error?.message
+		).toBe(plainReplySentence())
+		expect(
+			(await withEmbeddingStateFor(served, { isAdmin: false })).sessionMessage.error?.message
+		).toBe(plainReplyFailure())
+
+		// An old row has no `plainMessage` and is shown as stored.
+		const old = { sessionMessage: { id: 1, error: { message: plainReplyFailure() } } }
+		expect(await withEmbeddingStateFor(old, { isAdmin: true })).toBe(old)
+	})
+
+	test("a composed sentence marked for people is the row's text, for everyone", async () => {
+		const { persistGenerationErrorRow } = await import("./generationStatus")
+		const { ComposedError } = await import(
+			"$lib/server/connections/visibility"
+		)
+		const { forPeople } = await import(
+			"$lib/server/pipelines/runtime/host.types"
+		)
+		const { owner, session, message } = await scenario("composed-people")
+
+		const { io, received } = makeIoSpy()
+		const sentence = "This session is archived, so it is read-only."
+		await persistGenerationErrorRow(
+			io,
+			session.id,
+			message.id,
+			forPeople(new ComposedError(sentence), sentence)
+		)
+		expect(
+			received[`user_${owner.id}`]?.[0].sessionMessage.error.message
+		).toBe(sentence)
 	})
 })
 

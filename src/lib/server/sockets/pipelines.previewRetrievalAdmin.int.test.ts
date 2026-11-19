@@ -1,12 +1,10 @@
 /**
- * `pipelines:previewRetrieval` for an administrator who is not the session's
- * owner (lorebooks plan Phase D, permissions minors).
- *
- * The gate lets an administrator through, but the entry read behind the
- * explanation (`retrievalEntriesFor`) is owner-scoped unless told it is an
- * administrator reading (R55). Without `asAdmin` it read nothing, so every
- * row's live facts came back empty and `entriesRead` was false. The turn is
- * stubbed: what is asserted is the read, not the run.
+ * `pipelines:previewRetrieval` for an administrator who is a guest in someone
+ * else's session (G6: inside it, an administrator is a guest). The preview
+ * quotes the owner's lore, owner-only facts included, so it is the owner's.
+ * Old: an administrator who was a guest previewed it (entry read `asAdmin`).
+ * New: refused, nothing of the book in the answer. The turn is stubbed: what
+ * is asserted is the read, not the run.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
@@ -109,21 +107,31 @@ beforeAll(async () => {
 		.values({ sessionId, userId: adminGuestId })
 }, 120_000)
 
-describe("pipelines:previewRetrieval — an administrator who is not the owner", () => {
-	it("reads the owner's book, so a vanished entry is said to be gone", async () => {
-		const { pipelinesPreviewRetrieval } = await import("./pipelines")
-		const res: any = await pipelinesPreviewRetrieval.handler(
-			{
-				user: { id: adminGuestId, isAdmin: true },
-				io: { to: () => ({ emit: () => {} }) }
-			} as any,
-			{ sessionId } as any,
-			() => {}
-		)
+const askAs = async (userId: number, isAdmin: boolean) => {
+	const { pipelinesPreviewRetrieval } = await import("./pipelines")
+	return (await pipelinesPreviewRetrieval.handler(
+		{
+			user: { id: userId, isAdmin },
+			io: { to: () => ({ emit: () => {} }) }
+		} as any,
+		{ sessionId } as any,
+		() => {}
+	)) as any
+}
+
+describe("pipelines:previewRetrieval — an administrator who is a guest (G6)", () => {
+	it("is refused, and the answer carries nothing of the owner's lore", async () => {
+		const res = await askAs(adminGuestId, true)
+		expect(res.error).toBe("Only the conversation's owner can preview its lore.")
+		expect(res.explanation).toBeUndefined()
+		expect(JSON.stringify(res)).not.toContain("Still here")
+		expect(JSON.stringify(res)).not.toContain("recorded-hash")
+	})
+
+	it("the owner still reads their book, so a vanished entry is said to be gone", async () => {
+		const res = await askAs(ownerId, false)
 		expect(res.error).toBeUndefined()
-		const row = res.explanation.rows.find(
-			(r: any) => r.provenance !== undefined
-		)
+		const row = res.explanation.rows.find((r: any) => r.provenance !== undefined)
 		// "deleted" is only claimed when the book WAS read.
 		expect(row?.provenance).toBe("deleted")
 	})

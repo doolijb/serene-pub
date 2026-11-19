@@ -142,7 +142,10 @@ const write = (
 		changes,
 		runId: w.session.id,
 		messageId: extra.messageId
-	})
+	}) as Promise<Written>
+
+/** A write that landed (no member here is locked). */
+type Written = Extract<Awaited<ReturnType<typeof writeCastMember>>, { castVersionId: number }>
 
 const refusal = async (p: Promise<unknown>, text: string | RegExp) => {
 	const err = await p.then(

@@ -31,7 +31,12 @@ function facts(over: Partial<{ [K in keyof OverviewFacts]: Partial<OverviewFacts
 			lastBackupFailure: null,
 			castLiftCount: 0
 		},
-		pipelines: { published: 4, enabled: 4, runs24h: { ok: 3, failed: 0, total: 3 } },
+		pipelines: {
+			published: 4,
+			enabled: 4,
+			runs24h: { ok: 3, failed: 0, total: 3 },
+			stepTimeLimitsOff: false
+		},
 		extensions: {
 			sandboxEnabled: false,
 			pluginCount: 0,
@@ -337,5 +342,16 @@ describe("attentionFor", () => {
 			NOW
 		)
 		expect(out.map((a) => a.level)).toEqual(["error", "attention"])
+	})
+
+	it("the step time limits switch being on is an attention item pointing at its switch", () => {
+		const items = attentionFor(facts({ pipelines: { stepTimeLimitsOff: true } }), NOW)
+		expect(items.map((i) => [i.id, i.level, i.action.href])).toEqual([
+			["pipelines:stepTimeLimitsOff", "attention", "/admin/diagnostics#step-time-limits"]
+		])
+	})
+
+	it("says nothing about step time limits while the switch is off", () => {
+		expect(ids(facts({ pipelines: { stepTimeLimitsOff: false } }))).toEqual([])
 	})
 })

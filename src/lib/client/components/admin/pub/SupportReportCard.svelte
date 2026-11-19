@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	import InlineError from "$lib/client/components/InlineError.svelte"
 	import { realTime } from "$lib/client/utils/realTime.svelte"
@@ -89,37 +90,10 @@
 		}
 	})
 
-	/** `navigator.clipboard` needs a secure context; a LAN address over http is not one. */
-	async function writeClipboard(text: string): Promise<boolean> {
-		try {
-			if (navigator.clipboard && window.isSecureContext) {
-				await navigator.clipboard.writeText(text)
-				return true
-			}
-		} catch {
-			// Fall through to the selection copy.
-		}
-		const area = document.createElement("textarea")
-		area.value = text
-		area.setAttribute("readonly", "")
-		area.style.position = "fixed"
-		area.style.opacity = "0"
-		document.body.appendChild(area)
-		area.select()
-		let ok = false
-		try {
-			ok = document.execCommand("copy")
-		} catch {
-			ok = false
-		}
-		document.body.removeChild(area)
-		return ok
-	}
-
 	async function copy() {
 		const r = report ?? (await refresh())
 		if (!r) return
-		if (await writeClipboard(r.markdown))
+		if (await copyText(r.markdown))
 			notify.success({ title: "Support report copied" })
 		else
 			notify.error({

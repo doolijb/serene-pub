@@ -104,6 +104,11 @@
 		 * layout's seed count, so a layout copy landing remounts the widget.
 		 */
 		remountKey?: number
+		/**
+		 * False while the session's book keeps no timeline: the lines reach the
+		 * widget without their story-clock stamp, so it draws real time.
+		 */
+		storyDates?: boolean
 	}
 
 	let {
@@ -127,7 +132,8 @@
 		eager = false,
 		pageIds = false,
 		onRuntimeError,
-		remountKey
+		remountKey,
+		storyDates = true
 	}: Props = $props()
 
 	/** Bumped by the stopped overlay's _Reload widget_: mounts the component again. */
@@ -200,7 +206,7 @@
 	const readsMessages = $derived(!reads || reads.includes("messages"))
 	// A row is projected and cloned once per change to it, not once per frame
 	// (`remoteMessages.svelte.ts`); the result holds the same values, in the same order.
-	const remoteMessages = createRemoteMessages()
+	const remoteMessages = $derived(createRemoteMessages({ storyDates }))
 	const messages = $derived(readsMessages ? remoteMessages(session?.sessionMessages ?? []) : undefined)
 </script>
 

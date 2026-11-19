@@ -26,9 +26,10 @@
  *    the session's state is announced at its end (`state:changed`), as a
  *    reply's and an action's are.
  *
- * A routine run shows as running (`sessions:runStatus`, with its name) once it
- * has lasted past `QUEUE_STATUS_DELAY_MS`, and stops showing at its end or
- * when it parks; the session list's row status is never touched.
+ * A routine run shows as running (`sessions:runStatus`, with its name) from
+ * its start, and stops showing at its end. A run
+ * that parks at review keeps showing — as waiting for review (`parked`) — until
+ * its end frame; the session list's row status is never touched.
  *
  * A system-clock routine checks the cron caps (R11) as it starts, and counts
  * as one run in a row. A run that parks at a review gate frees the queue: the
@@ -61,8 +62,14 @@ import {
 	routineRunOf,
 	type RoutineRunFact
 } from "$lib/server/pipelines/routines/runs"
-import { QUEUE_STATUS_DELAY_MS, type RunStatusFrame } from "$lib/server/pipelines/runtime/runStatus"
+import type { RunStatusFrame } from "$lib/server/pipelines/runtime/runStatus"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
+import { RUN_WORKING_WORDS } from "$lib/shared/sessions/runsInProgress"
+import {
+	forgetRunIo,
+	noteRunIo,
+	runFrameFacts
+} from "$lib/server/pipelines/runtime/runsInProgress"
 import {
 	capsOf,
 	capsPause,
@@ -136,85 +143,75 @@ export const routineQueue: RoutineQueue = ((globalThis as Record<symbol, unknown
 	busy: sessionBusyForRoutines,
 	waitQuiet: (sessionId) => waitQuietForRoutines(sessionId),
 	run: (f) => runRoutineFiring(f),
-	refused: (f, reason) => routineLine(f.db as Db, { firing: f, reason, kind: "skipped" })
+	refused: (f, reason) => routineLine(f.db as Db, { firing: f, reason, kind: "skipped", forPeople: true })
 })) as RoutineQueue
 
 // A settle (`settleSessionEvents`) waits for the routines a session's events
 // set off, as it waits for the events — a test reads what the turn did.
 addSettleProbe((sessionId) => routineQueue.settling(sessionId))
 
-/** A routine run's frame status; nothing displays it, the name rides in `routine`. */
-export function routineRunStatus(name: string): StatusText {
-	return { i18n: { en: `${name} is running` } }
+/** A routine run's own frame status: *working* (`RUN_WORKING_WORDS`); the name rides in `routine`. */
+export function routineRunStatus(): StatusText {
+	return { i18n: { en: RUN_WORKING_WORDS } }
 }
 
-async function sendRoutineFrame(io: SessionIo, frame: RunStatusFrame): Promise<void> {
+async function sendRoutineFrame(io: SessionIo, sessionId: number, frame: () => Promise<RunStatusFrame>): Promise<void> {
 	try {
 		const { broadcastToSessionUsers } = await import("$lib/server/sockets/utils/broadcastHelpers")
-		await broadcastToSessionUsers(io, frame.sessionId, "sessions:runStatus", frame)
+		await broadcastToSessionUsers(io, sessionId, "sessions:runStatus", await frame())
 	} catch {
 		// A frame that did not go out is not the run's failure.
 	}
 }
 
 /**
- * 🚧 Show a routine run as running once it has lasted past
- * `QUEUE_STATUS_DELAY_MS`; `clear()` stops showing it (idempotent). Never sets
- * the registry status: the session list's row status stays as it is.
+ * 🚧 Show a routine run as running at once; `clear()` stops showing it
+ * (idempotent) and sends the end frame. Every frame carries the run's facts (`runFrameFacts`) as they
+ * stand when it leaves. Never sets the registry status: the session list's row
+ * status stays as it is.
  */
 export function showRoutineRun(opts: {
 	io?: SessionIo
+	db: Db
 	sessionId: number
 	runId: string
 	name: string
 	fact: RoutineRunFact
 }): { clear(): void } {
-	const { io, sessionId, runId, name, fact } = opts
+	const { io, db, sessionId, runId, name, fact } = opts
 	// With nothing to send on, nothing is shown: a run marked as shown would
 	// reach a page's first load and no end frame could ever clear it there.
 	if (!io) return { clear() {} }
 	/** The end frame leaves after the start frame, never before it. */
 	let chain: Promise<void> = Promise.resolve()
-	const send = (frame: RunStatusFrame) => {
-		if (io) chain = chain.then(() => sendRoutineFrame(io, frame))
+	const send = (frame: () => Promise<RunStatusFrame>) => {
+		chain = chain.then(() => sendRoutineFrame(io, sessionId, frame))
 	}
-	const timer = setTimeout(() => {
-		fact.shownAs = { name }
-		send({
-			sessionId,
-			runId,
-			status: routineRunStatus(name),
-			kind: "routine",
-			routine: { name }
-		})
-	}, QUEUE_STATUS_DELAY_MS)
-	;(timer as { unref?: () => void }).unref?.()
+	fact.shownAs = { name }
+	send(async () => ({
+		sessionId,
+		runId,
+		status: routineRunStatus(),
+		kind: "routine",
+		routine: { name },
+		...(await runFrameFacts(db, runId))
+	}))
 	return {
 		clear() {
-			clearTimeout(timer)
 			if (!fact.shownAs) return
 			delete fact.shownAs
-			send({ sessionId, runId, status: null, kind: "routine", routine: { name } })
+			// Read now, while the run is still registered: the frame leaves later.
+			const facts = runFrameFacts(db, runId)
+			send(async () => ({
+				sessionId,
+				runId,
+				status: null,
+				kind: "routine",
+				routine: { name },
+				...(await facts)
+			}))
 		}
 	}
-}
-
-/** The session's routine runs showing as running now, each as its start frame (the first load). */
-export function routineRunFramesOf(sessionId: number): RunStatusFrame[] {
-	const frames: RunStatusFrame[] = []
-	for (const handle of runRegistry.active()) {
-		if (handle.kind !== "routine" || handle.sessionId !== sessionId) continue
-		const shownAs = routineRunOf(handle.runId)?.shownAs
-		if (!shownAs) continue
-		frames.push({
-			sessionId,
-			runId: handle.runId,
-			status: routineRunStatus(shownAs.name),
-			kind: "routine",
-			routine: { name: shownAs.name }
-		})
-	}
-	return frames
 }
 
 /** A registration's label: its own, else the pipeline's name, else its id. */
@@ -263,6 +260,8 @@ export async function routineLine(
 		reason: string
 		kind: "skipped" | "paused"
 		userId?: number | null
+		/** The line's words are a sentence for the people in the session: stamped as `meta.peopleSentence`, read as written by everyone. */
+		forPeople?: boolean
 	}
 ): Promise<void> {
 	try {
@@ -294,7 +293,10 @@ export async function routineLine(
 				endedAt: now,
 				outcome: "halt",
 				haltReason: opts.reason,
-				meta: { routine: { [opts.kind]: true, registrationKey: opts.firing.registrationKey } },
+				meta: {
+					routine: { [opts.kind]: true, registrationKey: opts.firing.registrationKey },
+					...(opts.forPeople ? { peopleSentence: opts.reason } : {})
+				},
 				nodes: [],
 				emitted: [],
 				consumption: { tokens: 0, nodeExecutions: 0 }
@@ -317,7 +319,7 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 		const { sessionArchivedRefusal } = await import("$lib/server/sessions/archive")
 		const archived = await sessionArchivedRefusal(db, f.sessionId)
 		if (archived) {
-			await routineLine(db, { firing: f, reason: archived, kind: "skipped" })
+			await routineLine(db, { firing: f, reason: archived, kind: "skipped", forPeople: true })
 			return
 		}
 	}
@@ -329,7 +331,8 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 			await routineLine(db, {
 				firing: f,
 				reason: "Skipped: the routine is no longer registered in this session",
-				kind: "skipped"
+				kind: "skipped",
+				forPeople: true
 			})
 		return
 	}
@@ -346,7 +349,7 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 		const why = capsPause(Date.now(), facts, capsOf(facts.system, facts.user, reg.caps))
 		if (why) {
 			if (pause(f.sessionId, reg.key, why))
-				await routineLine(db, { firing: f, reason: why, kind: "paused", userId: owner })
+				await routineLine(db, { firing: f, reason: why, kind: "paused", userId: owner, forPeople: true })
 			return
 		}
 		await countSystemClockRun(db, f.sessionId)
@@ -401,10 +404,20 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 					.map((n) => ({ nodeKey: n.key, slot: "settings", path: "review", value: "on" }))
 			: []
 	const runId = uuidv4()
-	const handle = runRegistry.start({ runId, userId: owner, sessionId: f.sessionId, specId: reg.pipeline, kind: "routine" })
+	const handle = runRegistry.start({
+		runId,
+		userId: owner,
+		sessionId: f.sessionId,
+		specId: reg.pipeline,
+		kind: "routine",
+		name,
+		...(cause.messageId != null ? { readsMessageId: cause.messageId } : {})
+	})
 	const fact: RoutineRunFact = { sessionId: f.sessionId, registrationKey: reg.key, depth: f.depth }
 	noteRoutineRun(runId, fact)
-	const shown = showRoutineRun({ io: f.io, sessionId: f.sessionId, runId, name, fact })
+	// So a park at review can announce this run (`announceRun`).
+	if (f.io) noteRunIo(runId, { io: f.io, sessionId: f.sessionId, db })
+	const shown = showRoutineRun({ io: f.io, db, sessionId: f.sessionId, runId, name, fact })
 	let parked!: () => void
 	const parkedAt = new Promise<void>((resolve) => (parked = resolve))
 	const run = runSpec({
@@ -430,10 +443,9 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 			}
 		},
 		...(overrides.length ? { overrides } : {}),
-		onParked: () => {
-			shown.clear()
-			parked()
-		}
+		// The run keeps showing, as waiting for review, until its end; only
+		// the queue moves on.
+		onParked: () => parked()
 	})
 		.then(
 			async (receipt) => {
@@ -454,6 +466,7 @@ export async function runRoutineFiring(f: RoutineFiringEntry): Promise<void> {
 			shown.clear()
 			runRegistry.finish(runId)
 			forgetRoutineRun(runId)
+			forgetRunIo(runId)
 		})
 	await Promise.race([run, parkedAt])
 }

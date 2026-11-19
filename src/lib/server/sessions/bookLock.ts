@@ -21,8 +21,9 @@
  */
 import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { rawRows } from "$lib/server/db/rawRows"
 import { ownBookOf } from "$lib/server/lorebooks/ownBook"
-import { BOOK_LOCK_REFUSAL } from "$lib/shared/lorebooks/sessionNotes"
+import { BOOK_LOCK_REFUSAL, bookDeleteSentence } from "$lib/shared/lorebooks/sessionNotes"
 
 /** Play has written: the session has a line of play, or its notes hold something (closeOut and the catch-up read it; not the lock). */
 export async function playHasWritten(db: Db, sessionId: number): Promise<boolean> {
@@ -77,4 +78,36 @@ export function bookChangeRefusal(
 	return (session.lorebookId ?? null) === (nextLorebookId ?? null)
 		? null
 		: BOOK_LOCK_REFUSAL
+}
+
+/** 🚧 Why `lorebookId` may not be deleted (D50), or null when no session plays on it. `askerId`'s own sessions are named; anyone else's are counted; sessions of deleted accounts are left out. */
+export async function bookDeleteRefusal(
+	db: Db,
+	lorebookId: number,
+	askerId: number | null
+): Promise<string | null> {
+	const readers = rawRows<{ id: number; name: string | null; userId: number | null }>(await db.execute(sql`
+		select distinct s.id, s.name, s.user_id as "userId", s.updated_at
+		from sessions s
+		join users u on u.id = s.user_id and not u.is_deleted
+		where (s.lorebook_id = ${lorebookId}
+		   or exists (
+			select 1 from lorebooks n
+			where n.overlay_of = ${lorebookId}
+			  and (n.session_id = s.id
+			    or s.branch_ancestry @> jsonb_build_array(jsonb_build_object('sessionId', n.session_id)))
+		   ))
+		order by s.updated_at desc, s.id desc
+	`))
+	if (!readers.length) return null
+	const [book] = await db
+		.select({ name: schema.lorebooks.name })
+		.from(schema.lorebooks)
+		.where(eq(schema.lorebooks.id, lorebookId))
+		.limit(1)
+	const mine = readers.filter((r) => askerId != null && r.userId === askerId)
+	return bookDeleteSentence(book?.name ?? "", {
+		named: mine.map((r) => ({ id: r.id, name: r.name })),
+		others: readers.length - mine.length
+	})
 }

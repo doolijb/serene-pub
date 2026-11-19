@@ -22,7 +22,7 @@
 	import type { TimeSceneRow } from "./time/storyTime"
 	import { LORE_SPLIT_KEY } from "./layoutMode"
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
-	import { SvelteSet } from "svelte/reactivity"
+	import { SvelteMap, SvelteSet } from "svelte/reactivity"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
@@ -30,6 +30,8 @@
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { notify } from "$lib/client/utils/notify"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
 	import BindingSuggestionsPanel from "$lib/client/components/lorebookForms/BindingSuggestionsPanel.svelte"
 	import {
@@ -131,6 +133,13 @@
 	} from "$lib/shared/lorebooks/loreRoute"
 	import { getBookRelationships } from "./relationships.svelte"
 	import { getBookData } from "./bookData.svelte"
+	import {
+		BookKnowledge,
+		setBookKnowledge,
+		socketKnowledgeApi
+	} from "./knowledge/bookKnowledge.svelte"
+	import KnowsPool from "./knowledge/KnowsPool.svelte"
+	import { knowsCount } from "./knowledge/knowsPool"
 	import type { EntryDecisions } from "./markers"
 	import { CHARACTER_LORE_DOOR } from "./sections"
 	import type { PoolSource } from "./sections/types"
@@ -331,10 +340,11 @@
 	let loreMenuOpen = $state(false)
 
 	/** The member page's tab; see `lastMemberTab`. */
-	let memberTab = $state<string>(lastMemberTab)
+	let rememberedTab = $state<string>(lastMemberTab)
 	$effect(() => {
-		lastMemberTab = memberTab
+		lastMemberTab = rememberedTab
 	})
+	// The tab shown is `memberTab`, beside the knowledge store below.
 
 	let inspectorTab = $state<"suggestions" | "duplicates">("suggestions")
 	/**
@@ -608,7 +618,7 @@
 		if (key === loreDraftKey) return
 		loreDraftKey = key
 		// Lore opens where it is listed: the member page's Lore tab.
-		if (key) memberTab = "lore"
+		if (key) rememberedTab = "lore"
 		if (creatingLore) return
 		loreDraft = selectedLore
 			? CHARACTER_LORE_DOOR.toDraft(selectedLore)
@@ -675,7 +685,7 @@
 		discardLoreDraft()
 		creatingLore = true
 		loreDraftKey = "new"
-		memberTab = "lore"
+		rememberedTab = "lore"
 		loreDraft = {
 			...CHARACTER_LORE_DOOR.newDraft(lorebookId),
 			lorebookBindingId: selectedMember.id
@@ -838,6 +848,51 @@
 	let momentDate = $derived(parseMoment(moment))
 
 	/**
+	 * 🚧 Who knows which entry, for the Knows tab: the book's one store, the
+	 * reading the member page is at, and the member shown. A reader of a shared
+	 * book never asks; one the server refuses (a session member) never gets
+	 * the marks, so is offered no tab and sees no refusal.
+	 */
+	const knowledge = new BookKnowledge(socketKnowledgeApi(socket))
+	setBookKnowledge(knowledge)
+	$effect(() => {
+		if (readOnly) return
+		return knowledge.open(lorebookId)
+	})
+	$effect(() => {
+		knowledge.showMember(
+			knowledge.loaded && selectedMember ? selectedMember.id : null,
+			{
+				branchId: line.branchId ?? null,
+				moment: momentDate
+					? {
+							year: momentDate.year,
+							month: momentDate.month ?? null,
+							day: momentDate.day ?? null
+						}
+					: null
+			}
+		)
+	})
+	let knowsOffered = $derived(knowledge.loaded)
+	/** The tab shown: a remembered Knows tab this reader is not offered is Member. */
+	let memberTab = $derived(
+		rememberedTab === "knows" && !knowsOffered ? "member" : rememberedTab
+	)
+	/** The book's entries on the line, as the Knows pool lists them. */
+	let knowsEntries = $derived(
+		Object.entries(book.rows).flatMap(([typeId, rows]) =>
+			rows
+				.filter((r) => !r.archived)
+				.map((r) => ({
+					id: r.id as number,
+					name: typeof r.name === "string" ? r.name : "",
+					typeId
+				}))
+		)
+	)
+
+	/**
 	 * The Timeline tab: the scenes the member is in, on the line being read
 	 * (the workspace's scenes, already scoped to it), dated by the history
 	 * entries they were compiled into.
@@ -874,6 +929,18 @@
 			icon: Icons.ScrollText,
 			count: anchoredLore.length
 		},
+		...(knowsOffered
+			? [
+					{
+						value: "knows",
+						label: "Knows",
+						icon: Icons.BookKey,
+						count: knowledge.memberRowsLoaded
+							? knowsCount(knowledge.memberRows)
+							: undefined
+					}
+				]
+			: []),
 		{
 			value: "relationships",
 			label: "Relationships",
@@ -1170,6 +1237,62 @@
 				)
 			}))
 		)
+	}
+
+	/**
+	 * 🚧 The lock on a cast member: sessions and their routines leave it as it
+	 * is. One value, never dated, never part of the draft, written at once.
+	 * The reply is shown until the book's own list moves on.
+	 */
+	let lockSeen = new SvelteMap<number, boolean>()
+	$effect(() => {
+		void castRows
+		untrack(() => lockSeen.clear())
+	})
+	function lockOf(id: number): boolean {
+		return (
+			lockSeen.get(id) ??
+			(castRows.find((r) => r.id === id) as { castMemberLock?: boolean })
+				?.castMemberLock === true
+		)
+	}
+	let lockBusy = $state(false)
+	let lockError = $state<string | null>(null)
+	// A refusal belongs to the member it was said under.
+	$effect(() => {
+		void selectedMember?.id
+		lockError = null
+	})
+	async function toggleLock() {
+		const member = selectedMember
+		if (!member || lockBusy || readOnly) return
+		const castId = member.id
+		const locked = !lockOf(castId)
+		lockError = null
+		lockBusy = true
+		try {
+			const res = await awaitReply({
+				socket,
+				event: "lorebooks:updateBinding",
+				params: {
+					lorebookBinding: { id: castId, castMemberLock: locked }
+				} as Sockets.Lorebooks.UpdateBinding.Params,
+				errorEvent: "lorebooks:updateBinding:error",
+				fallbackError: "The lock could not be saved.",
+				match: (data) => data.lorebookBinding?.id === castId
+			})
+			const said = (
+				res.lorebookBinding as { castMemberLock?: unknown } | undefined
+			)?.castMemberLock
+			lockSeen.set(castId, typeof said === "boolean" ? said : locked)
+		} catch (err) {
+			lockError =
+				err instanceof Error && err.message
+					? err.message
+					: "The lock could not be saved."
+		} finally {
+			lockBusy = false
+		}
 	}
 
 	/**
@@ -1977,10 +2100,23 @@
 										{member.visibility}
 									</span>
 								{/if}
+								{#if lockOf(member.id)}
+									<!-- 🚧 The lock: sessions and their routines leave the member as it is. -->
+									<span
+										class="text-surface-600-400 inline-flex shrink-0 items-center self-center"
+										data-lock-mark
+										role="img"
+										aria-label="Locked"
+										title="Locked"
+									>
+										<Icons.Lock size={14} aria-hidden="true" />
+									</span>
+								{/if}
 							</span>
 							<!-- The macro trails the sentence because it is
 							     what an author pastes into content, not what they
-							     read the row by. -->
+							     read the row by; a read-only book is not pasted into,
+							     so its rows do not show it. -->
 							<span class="flex items-baseline gap-2">
 								<span
 									class="text-surface-700-300 text-meta min-w-0 flex-1 truncate"
@@ -1988,7 +2124,7 @@
 								>
 									{sentence}
 								</span>
-								{#if member.tag}
+								{#if member.tag && !readOnly}
 									<span
 										class="text-surface-600-400 text-meta shrink-0 font-mono"
 										data-cast-tag
@@ -2194,7 +2330,7 @@
 			</div>
 
 			<PanelTabStrip
-				bind:value={memberTab}
+				bind:value={() => memberTab, (v) => (rememberedTab = v)}
 				tabs={memberTabs}
 				ariaLabel="{selectedMember.name}'s page"
 				panelIdPrefix="cast-member"
@@ -2248,6 +2384,49 @@
 							characters
 						</button>
 					</div>
+					<!-- 🚧 The lock: one value per member, never dated, written at
+					     once — not a field of the draft. Outside the fieldset. -->
+					{#if !readOnly}
+						<div class="mb-4 flex flex-col gap-1">
+							<button
+								class="btn btn-sm w-full justify-start sm:w-auto {lockOf(
+									selectedMember.id
+								)
+									? 'preset-pressed'
+									: 'preset-tonal-surface'}"
+								type="button"
+								aria-pressed={lockOf(selectedMember.id)}
+								aria-describedby="cast-lock-help"
+								data-cast-lock
+								disabled={lockBusy}
+								onclick={toggleLock}
+							>
+								<Icons.Lock size={14} aria-hidden="true" />
+								<!-- 🚧 Provisional copy: the owner has not seen this label. -->
+								<span>Locked</span>
+								<Icons.Check
+									size={14}
+									class="ml-auto shrink-0 {lockOf(selectedMember.id)
+										? ''
+										: 'invisible'}"
+									aria-hidden="true"
+								/>
+							</button>
+							<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
+							<FieldHelp id="cast-lock-help">
+								Sessions and their routines leave this cast member as it
+								is; you can still edit it.
+							</FieldHelp>
+							{#if lockError}
+								<InlineError>{lockError}</InlineError>
+							{/if}
+						</div>
+					{:else if lockOf(selectedMember.id)}
+						<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
+						<p class="text-surface-600-400 text-chip mb-4" data-cast-lock-note>
+							Locked: sessions and their routines leave it as it is.
+						</p>
+					{/if}
 					{#snippet castForm()}
 						<CastMemberForm
 							bind:this={memberForm}
@@ -2298,7 +2477,7 @@
 
 						<!-- The shown cast version's own Edit history without a
 						     timeline; a railed page draws it inside the rail. -->
-						{#if shownCastVersionId != null && !railed}
+						{#if shownCastVersionId != null && !railed && !readOnly}
 							<EditHistory
 								characterVersionId={shownCastVersionId}
 								updatedAt={String(memberSaveTick)}
@@ -2310,7 +2489,7 @@
 					{/snippet}
 					{#snippet railEdits(ids: readonly (number | null)[])}
 						{#each ids as id (id)}
-							{#if id != null && id === castSelected?.versionId}
+							{#if id != null && id === castSelected?.versionId && !readOnly}
 								<EditHistory
 									characterVersionId={id}
 									variant="rows"
@@ -2409,7 +2588,7 @@
 								<!-- The wide rail shows the selected version's edits
 								     itself; this fold is the narrow layout's, hidden
 								     wide but mounted so it asks once for both. -->
-								{#if castSelected.versionId != null}
+								{#if castSelected.versionId != null && !readOnly}
 									<div class="@min-[36rem]/versions:hidden">
 										<EditHistory
 											characterVersionId={castSelected.versionId}
@@ -2557,6 +2736,32 @@
 								</ul>
 							{/if}
 						</div>
+					{/if}
+				</div>
+
+				<div
+					id="cast-member-knows"
+					role="tabpanel"
+					aria-labelledby="cast-member-knows-tab"
+					hidden={memberTab !== "knows"}
+				>
+					<!-- Mounted only while open, as Sprites is. -->
+					{#if memberTab === "knows"}
+						<KnowsPool
+							memberName={selectedMember.name}
+							rows={knowledge.memberRows}
+							loaded={knowledge.memberRowsLoaded}
+							error={knowledge.memberRowsError}
+							entries={knowsEntries}
+							isMarked={(id) => knowledge.isMarked(id)}
+							formatDate={(m) => formatDate(m)}
+							onSet={(entryId, hand) =>
+								knowledge.setTie(
+									selectedMember!.id,
+									entryId,
+									hand
+								)}
+						/>
 					{/if}
 				</div>
 

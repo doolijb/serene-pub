@@ -365,6 +365,20 @@ describe("the routine under Full saves by itself", () => {
 		expect(await cardOf(w)).toBeUndefined()
 	})
 
+	it("still runs for a session with a guest in it: a guest has no access to the notes (G2), the routine writes as the session's owner", async () => {
+		const w = await world()
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const guest = await createTestUser(testDb, `routine-guest-${w.session.id}`)
+		await testDb
+			.insert(schema.sessionGuests)
+			.values({ sessionId: w.session.id, userId: guest.id, isPlayer: true })
+		await routineRun(w, "full")
+		const row = await sceneRow(w.sceneId)
+		expect(row.summary).toBe("They talked by the gate until dark.")
+		expect(row.summaryStatus).toBe("done")
+		expect(row.summaryOrigin).toBe("routine")
+	})
+
 	it("keeps a name a person gave", async () => {
 		const w = await world()
 		await testDb

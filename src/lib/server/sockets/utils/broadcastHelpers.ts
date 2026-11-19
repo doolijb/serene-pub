@@ -2,6 +2,14 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import type { AuthenticatedSocket } from "../auth"
+import {
+	activeEmbeddingModelOnce,
+	promptReaders,
+	withEmbeddingState,
+	withoutAdministratorSuggestion,
+	withoutDebugMeta
+} from "$lib/server/messages/debugMeta"
+import { withoutSceneText } from "$lib/server/scenes/sceneListShape"
 import { redactConnections, withoutConnectionIdentity } from "$lib/server/connections/visibility"
 import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
 import {
@@ -299,6 +307,78 @@ export async function broadcastToSessionUsers(
 		}))
 	} else recipients = await resolve()
 	if (!recipients) return
+
+	// G5/G6/D64/DG1: a reply's compiled prompt (`debugMeta`) goes to an
+	// administrator in the session (`promptReaders`); everyone else, the owner
+	// included, is sent the row with it nulled. A scene list's summary and notes text are the owner's
+	// alone (`withoutSceneText`). When nothing in any recipient's payload needs
+	// shaping — every streamed chunk of a new reply — the same reference comes
+	// back: no lookup, no copy.
+	const stripped = new Map<any, { noPrompt: any; noText: any }>()
+	for (const { data } of recipients)
+		if (!stripped.has(data)) {
+			const noPrompt = withoutDebugMeta(data)
+			stripped.set(data, { noPrompt, noText: withoutSceneText(noPrompt) })
+		}
+	if ([...stripped].some(([raw, v]) => raw !== v.noText)) {
+		// The three-query read only when a payload carries a prompt; a push
+		// of scene text alone needs the owner id, one query.
+		const hasPrompt = [...stripped].some(([raw, v]) => raw !== v.noPrompt)
+		let readers = new Set<number>()
+		let ownerId: number | null
+		if (hasPrompt)
+			({ readers, ownerId } = await promptReaders(
+				sessionId,
+				recipients.map((r) => r.userId)
+			))
+		else {
+			const [owner] = await db
+				.select({ userId: schema.sessions.userId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, sessionId))
+				.limit(1)
+			ownerId = owner?.userId ?? null
+		}
+		recipients = recipients.map((r) => {
+			const v = stripped.get(r.data)!
+			const isOwner = r.userId === ownerId
+			const withPrompt = readers.has(r.userId) ? r.data : v.noPrompt
+			return {
+				...r,
+				data: isOwner ? withPrompt : withoutSceneText(withPrompt)
+			}
+		})
+	}
+
+	// DG6: a recipient who is not an administrator is sent each embedded row's
+	// state, not its model id. Who is an administrator is read off their
+	// connected sockets, as `userPush` does (a demotion force-disconnects
+	// them), so an administrator alone costs no statement; the active model is
+	// read once per push and only when a non-administrator's payload carries an
+	// embedded row.
+	const active = activeEmbeddingModelOnce()
+	const shaped = new Map<any, Promise<any>>()
+	recipients = await Promise.all(
+		recipients.map(async (r) => {
+			const sockets = socketsInUserRoom(io, r.userId)
+			// Nobody connected, or nobody wanting this event: nothing is sent, so nothing is shaped.
+			if (
+				sockets.length === 0 ||
+				(isGatedEvent(event) &&
+					!hasInterest(
+						io,
+						r.userId,
+						event,
+						scope === undefined ? scopeOfPayload(event, r.data) : scope
+					))
+			)
+				return r
+			if (sockets.some((s) => s.user?.isAdmin))
+				return { ...r, data: withoutAdministratorSuggestion(r.data) }
+			if (!shaped.has(r.data)) shaped.set(r.data, withEmbeddingState(r.data, active))
+			return { ...r, data: await shaped.get(r.data) }
+		})
+	)
 
 	await emitRedacted(io, event, recipients, scope)
 }

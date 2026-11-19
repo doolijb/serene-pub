@@ -173,3 +173,25 @@ describe("Envoy voices", () => {
 		expect(onwrite).toHaveBeenCalledWith(e.voice, "bruno")
 	})
 })
+
+describe("a locked setting says its cause and ties it to the value", () => {
+	const wired = (scope: string, valueText: string, reasonText: string) => {
+		const root = document.querySelector(scope)!
+		expect(root.querySelectorAll("input, button")).toHaveLength(0)
+		const reason = [...root.querySelectorAll("p")].find((p) => p.textContent?.trim() === reasonText)
+		expect(reason?.id).toBeTruthy()
+		const value = [...root.querySelectorAll("p")].find((p) => p.textContent?.trim() === valueText)
+		expect(value?.getAttribute("aria-describedby")).toBe(reason!.id)
+	}
+	test("Language", () => {
+		const language = field(SPEECH_FIELD_KEYS.language, "ja", { label: "Language", editable: false, readOnlyReason: "Set by the session's preset." })
+		render({ fields: { language } })
+		wired(`[data-setting="${language.id}"]`, "ja", "Set by the session's preset.")
+	})
+	test("Read aloud", () => {
+		const f = readAloud("play", false)
+		f.readOnlyReason = "Set by the session's genre."
+		render({ fields: { readAloud: f } })
+		wired(`[data-setting="${f.id}"]`, "Make and play", "Set by the session's genre.")
+	})
+})

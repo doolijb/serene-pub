@@ -16,7 +16,7 @@ vi.mock("$app/environment", () => ({ dev: true, building: false, browser: true }
 import { setSocket } from "$lib/client/sockets/socketInstance"
 import { _resetInterestForTests, setInterestUser } from "$lib/client/sockets/interest.svelte"
 import SessionSettingsForm from "./SessionSettingsForm.svelte"
-import { routineStatusLine, sourceWords, valueText } from "./sessionSettingsForm"
+import { humanizeFieldName, isPromptRow, routineStatusLine, sourceWords, valueText } from "./sessionSettingsForm"
 
 type Listener = (payload: any) => void
 function makeClientSocket() {
@@ -383,5 +383,201 @@ describe("a json field (the json field type)", () => {
 		typeInto('{ "n": 2 }')
 		expect(jsonWrites()).toEqual([expect.objectContaining({ sessionId: 7, value: { n: 2 } })])
 		expect(target.querySelector('[data-testid="session-setting-json-issue"]')).toBeNull()
+	})
+})
+
+describe("an owner's locked settings read as words with their cause", () => {
+	function showLocked() {
+		const form = formFor("owner") as any
+		const [genre, reply, routines] = form.groups
+		Object.assign(genre.fields[0], { editable: false, lockedAt: "genre", readOnlyReason: "Set by the session's genre." })
+		Object.assign(reply.fields[0], { editable: false, lockedAt: "preset", readOnlyReason: "Set by the session's preset." })
+		Object.assign(routines.routines[0].fields[0], { editable: false, lockedAt: "preset", readOnlyReason: "Set by the session's preset." })
+		app = mount(SessionSettingsForm, { target, props: { sessionId: 7, cardClass: "card" } })
+		flushSync()
+		client.dispatch("sessions:settingsForm", form)
+		client.dispatch("sessions:routines", { sessionId: 7, routines: [] })
+		flushSync()
+	}
+	const wired = (scope: Element, valueText: string, reasonText: string) => {
+		expect(scope.querySelectorAll("input, select, button, [role=switch]")).toHaveLength(0)
+		const reason = [...scope.querySelectorAll("p")].find((p) => p.textContent?.trim() === reasonText)
+		expect(reason?.id).toBeTruthy()
+		const value = [...scope.querySelectorAll("p, pre")].find((p) => p.textContent?.trim() === valueText)
+		expect(value?.getAttribute("aria-describedby")).toBe(reason!.id)
+	}
+
+	test("a genre field and a pipeline field", () => {
+		showLocked()
+		const genre = target.querySelector(`[data-setting='${JSON.stringify(["genre", "autoAdvance"])}']`)!
+		wired(genre, "Round", "Set by the session's genre.")
+		const pipeline = target.querySelector(
+			`[data-setting='${JSON.stringify(["pipeline", "message-respond→story-respond", "spritePick", "params", "enabled"])}']`
+		)!
+		wired(pipeline, "Off", "Set by the session's preset.")
+	})
+
+	test("a routine's mode", () => {
+		showLocked()
+		const row = routineRow(RECKON)!
+		wired(row, "Full", "Set by the session's preset.")
+	})
+})
+
+describe("the owner's Read the wording on a prompt row", () => {
+	const PROMPT_ID = JSON.stringify(["pipeline", "message-respond→story-respond", "respond", "prompts", "promptId"])
+	const promptField = (editable: boolean) => ({
+		id: PROMPT_ID,
+		address: {
+			kind: "pipeline",
+			registrationKey: "message-respond→story-respond",
+			nodeKey: "respond",
+			slot: "prompts",
+			path: "promptId"
+		},
+		label: "Prompt",
+		control: "enum",
+		members: [
+			{ key: "11", label: "Plain story" },
+			{ key: "12", label: "Close third person" }
+		],
+		value: 11,
+		inherited: 11,
+		source: "preset",
+		reach: "owner",
+		editable,
+		...(editable ? {} : { lockedAt: "preset", readOnlyReason: "Set by the session's preset." })
+	})
+	function showPrompt(editable: boolean) {
+		const form = formFor("owner") as any
+		form.groups[1].fields.push(promptField(editable))
+		app = mount(SessionSettingsForm, { target, props: { sessionId: 7, cardClass: "card" } })
+		flushSync()
+		client.dispatch("sessions:settingsForm", form)
+		client.dispatch("sessions:routines", { sessionId: 7, routines: [] })
+		flushSync()
+	}
+	const readButtons = () =>
+		[...target.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Read the wording")
+	const wordingAsks = () => client.emits.filter((e) => e.event === "pipelines:promptWording").map((e) => e.payload)
+	const dialogUseButtons = () =>
+		[...document.body.querySelectorAll("button")].filter((b) => (b.getAttribute("aria-label") ?? "").startsWith("Use "))
+
+	test("only the prompt row has it, once", () => {
+		showPrompt(true)
+		expect(readButtons().length).toBe(1)
+		expect(target.querySelector(`[data-setting='${PROMPT_ID}']`)?.parentElement?.textContent).toContain("Read the wording")
+	})
+
+	test("a form without a prompt row has no such button", () => {
+		show("owner")
+		expect(readButtons().length).toBe(0)
+	})
+
+	test("pressing it asks by the field's id, never an option id, for the session", () => {
+		showPrompt(true)
+		readButtons()[0].click()
+		flushSync()
+		expect(wordingAsks()).toEqual([
+			{ slug: "core:spec/story-respond", fieldId: PROMPT_ID, promptId: 11, sessionId: 7 }
+		])
+		expect("optionId" in wordingAsks()[0]).toBe(false)
+	})
+
+	test("an editable row's dialog offers Use, and Use writes the prompt", () => {
+		showPrompt(true)
+		readButtons()[0].click()
+		flushSync()
+		const use = dialogUseButtons().find((b) => b.getAttribute("aria-label") === "Use Close third person")
+		expect(use === undefined).toBe(false)
+		use!.click()
+		flushSync()
+		expect(writes().at(-1)).toEqual(expect.objectContaining({ sessionId: 7, value: "12" }))
+	})
+
+	test("a locked prompt row still has it, and the dialog offers no Use", () => {
+		showPrompt(false)
+		expect(readButtons().length).toBe(1)
+		readButtons()[0].click()
+		flushSync()
+		expect(wordingAsks().length).toBe(1)
+		expect(dialogUseButtons().length).toBe(0)
+	})
+})
+
+describe("several prompt rows in one card", () => {
+	const rowOf = (nodeKey: string, label: string, first: string) => ({
+		id: JSON.stringify(["pipeline", "message-respond→story-respond", nodeKey, "prompts", "promptId"]),
+		address: {
+			kind: "pipeline",
+			registrationKey: "message-respond→story-respond",
+			nodeKey,
+			slot: "prompts",
+			path: "promptId"
+		},
+		label,
+		control: "enum",
+		members: [
+			{ key: "11", label: first },
+			{ key: "12", label: "Second" }
+		],
+		value: "11",
+		inherited: "11",
+		source: "preset",
+		reach: "owner",
+		editable: true
+	})
+	function showTwo() {
+		const form = formFor("owner") as any
+		form.groups[1].fields.push(
+			rowOf("prose", "Reply · prose prompt", "Plain"),
+			rowOf("changes", "Reply · changes prompt", "Terse")
+		)
+		app = mount(SessionSettingsForm, { target, props: { sessionId: 7, cardClass: "card" } })
+		flushSync()
+		client.dispatch("sessions:settingsForm", form)
+		client.dispatch("sessions:routines", { sessionId: 7, routines: [] })
+		flushSync()
+		return form.groups[1].heading as string
+	}
+	const buttons = () =>
+		[...target.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Read the wording")
+
+	test("each row shows its label, with advanced controls off, and its own Read the wording button by a distinct name", () => {
+		showTwo()
+		expect(text()).toContain("Reply · prose prompt")
+		expect(text()).toContain("Reply · changes prompt")
+		const names = buttons().map((b) => b.getAttribute("aria-label"))
+		expect(names).toEqual(["Read the wording: Reply · prose prompt", "Read the wording: Reply · changes prompt"])
+	})
+
+	test("the dialog names the card and the row when the card holds several", () => {
+		const heading = showTwo()
+		buttons()[1].click()
+		flushSync()
+		expect(document.body.textContent).toContain(`${heading} · Reply · changes prompt`)
+	})
+})
+
+describe("the prompt row's words", () => {
+	const pipelineField = (slot: string, control = "enum") =>
+		({
+			address: { kind: "pipeline", registrationKey: "k", nodeKey: "n", slot, path: "p" },
+			control
+		}) as never
+	test("isPromptRow: an enum on a pipeline slot other than params and settings", () => {
+		expect(isPromptRow(pipelineField("prompts"))).toBe(true)
+		expect(isPromptRow(pipelineField("params"))).toBe(false)
+		expect(isPromptRow(pipelineField("settings"))).toBe(false)
+		expect(isPromptRow(pipelineField("prompts", "string"))).toBe(false)
+		expect(isPromptRow({ address: { kind: "genre", key: "x" }, control: "enum" } as never)).toBe(false)
+		expect(
+			isPromptRow({ address: { kind: "routine", registrationKey: "k", field: "mode" }, control: "enum" } as never)
+		).toBe(false)
+	})
+	test("humanizeFieldName reads a declared name as words", () => {
+		expect(humanizeFieldName("postHistoryInstructions")).toBe("Post History Instructions")
+		expect(humanizeFieldName("system_prompt")).toBe("System Prompt")
+		expect(humanizeFieldName("a-b  c")).toBe("A B C")
 	})
 })

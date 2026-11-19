@@ -44,6 +44,7 @@ const STATIC: AdminSetting[] = [
 	{ label: "Databases set aside", href: "/admin/data#set-aside", page: "Data and backups", keywords: "recovery corrupt" },
 	// Diagnostics
 	{ label: "Context debugging", href: "/admin/diagnostics#enable-context-debugging", page: "Diagnostics", keywords: "prompt debug logs" },
+	{ label: "Turn off step time limits", href: "/admin/diagnostics#step-time-limits", page: "Diagnostics", keywords: "timeout time limit stuck step debug" },
 	// Extensions
 	{ label: "Plugin sandbox", href: "/admin/plugins#plugin-sandbox", page: "Plugins", keywords: "SP_PLUGINS_ENABLED hooks enable" },
 	{ label: "Installed plugins", href: "/admin/plugins", page: "Plugins", keywords: "extensions permissions backend" },

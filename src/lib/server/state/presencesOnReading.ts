@@ -7,7 +7,8 @@
  * filter the member page, the roster popover and the Lives lens read through), so
  * no node ever sees another line's spans. What it hands back is the rows and
  * the moment the session reads at; judging a moment is the reader's
- * (`core:task/eligibility@1`, through `holdsAt`).
+ * (`core:task/eligibility@1`, through `holdsAt`). With the timeline off the
+ * dates are null: dated presences are ignored, everyone listed is present.
  */
 
 import { eq } from "drizzle-orm"
@@ -17,7 +18,7 @@ import { formatDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { sessionReadingOf } from "$lib/server/state/reading"
 import { castOwnerOf } from "$lib/server/state/owners"
 import { castLinkKey } from "$lib/server/state/keys"
-import { bookCalendarOf, clockOfNow, sessionStoryNowOf } from "$lib/server/state/storyTime"
+import { bookCalendarOf, clockOfNow, sessionStoryNowOf, timelessNull } from "$lib/server/state/storyTime"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { getRuleset, storyDayIndex, type FieldDecl } from "@serene-pub/sdk"
 import type { ClockTargetV1 } from "@serene-pub/contracts"
@@ -25,7 +26,8 @@ import type { ClockTargetV1 } from "@serene-pub/contracts"
 /** One presence, in the node's shape: dates as story dates, `until` exclusive. */
 export interface PresenceRow {
 	bindingId: number
-	from: StoryDate
+	/** Null with the timeline off: dated presences are ignored, everyone listed is present. */
+	from: StoryDate | null
 	until: StoryDate | null
 	position: number | null
 }
@@ -87,8 +89,9 @@ export async function presencesOnReading(
 		placements,
 		rows: presencesOnLine(presences, reading.line).map((p) => ({
 			bindingId: p.castId,
-			from: date(p.fromYear, p.fromMonth, p.fromDay)!,
-			until: date(p.untilYear, p.untilMonth, p.untilDay),
+			// Timeline off: the span is ignored, never cleared (`eligibility` reads a row with no `from` as present).
+			from: timelessNull(reading.timelineOff, date(p.fromYear, p.fromMonth, p.fromDay)),
+			until: timelessNull(reading.timelineOff, date(p.untilYear, p.untilMonth, p.untilDay)),
 			position: p.personalPosition ?? null
 		})),
 		at: reading.moment

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Admin › Prompts › one prompt: the change form (Django admin). A prompt
@@ -178,10 +179,9 @@
 	 * the field, so putting the text back would put it where nothing reads it.
 	 */
 	async function copyArchived(text: string) {
-		try {
-			await navigator.clipboard.writeText(text)
+		if (await copyText(text)) {
 			notify.success({ title: "Copied to the clipboard" })
-		} catch {
+		} else {
 			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})

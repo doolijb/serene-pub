@@ -88,9 +88,9 @@ Tick **Administrator** on their form. In the Users view a **Grant administrator 
 
 There are two kinds of account and nothing in between.
 
-**Administrators** can see and change everything on the pub: every account, the [admin area](./getting-around.md#the-admin-area), connections and sampling, and every other person's characters and sessions. Grant it only to people you'd trust with the whole pub.
+**Administrators** can see and change everything on the pub: every account, the [admin area](./getting-around.md#the-admin-area), connections and sampling, and every other person's characters, and their sessions from the admin area; inside a session they own nothing extra and enter only as a guest: no settings or session data there, and **Prompt details** on a reply, which only an administrator who is in the session can read; a session's owner who is not an administrator does not get it. The run inspector in the admin area still reads every run. Grant it only to people you'd trust with the whole pub.
 
-**Members** have their own characters, personas, sessions, lorebooks and tags, and their own settings. They don't see the Users, Models, Connections, Sampling, Pipelines or Admin icons. While no model is set up for chat, their sessions say so in one line above the composer, ending _Ask your administrator._ Their setup wizard skips **Choose an AI**, because connecting a model is the administrator's job. The **Data** tab in their Settings only says that an administrator manages backups.
+**Members** have their own characters, personas, sessions, lorebooks and tags, and their own settings. They don't see the Users, Models, Connections, Sampling, Pipelines or Admin icons. While no model is set up to reply, their sessions say so in one line above the composer, ending _Ask your administrator._ Their setup wizard skips **Choose an AI**, because connecting a model is the administrator's job. The **Data** tab in their Settings only says that an administrator manages backups.
 
 To play in the same story as someone else, add them to a session as a guest: see [Guests](./sessions.md#guests).
 

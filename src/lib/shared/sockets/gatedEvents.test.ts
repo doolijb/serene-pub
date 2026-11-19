@@ -135,6 +135,9 @@ const MIGRATED_FAMILIES = [
 	// and scoped by book; its consumer (places/placeStatsApi.ts, the place
 	// editor's Stats section) asks through `awaitReply`.
 	"lorebookState:",
+	// 🚧 Who knows which entry (kn-4a1): born gated and scoped by book; the
+	// lorebook owner's Knowledge screen asks through `awaitReply`.
+	"entryKnowledge:",
 	// A card's own stats (card dowry §B.4, 2026-10-11): born gated, scoped by
 	// character; its consumer (the character form's Stats tab) is written on
 	// the registry — the facade has no other listener path.

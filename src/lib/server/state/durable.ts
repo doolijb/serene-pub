@@ -55,6 +55,8 @@ import { and, eq, inArray } from "drizzle-orm"
 import { castOwnerOf, type StateOwner } from "$lib/server/state/owners"
 import { memberFormOn } from "$lib/server/state/memberForm"
 import * as schema from "$lib/server/db/schema"
+import { canWriteLorebook } from "$lib/server/utils/ownedBook"
+import { liveProvidedBookSql } from "$lib/server/plugins/providedMarks"
 import { slotValueForStorage } from "@serene-pub/sdk"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
@@ -177,18 +179,24 @@ export async function recordToTimeline(
 	let route: "book" | "own-book"
 	if (opts.reason === "delete") {
 		if (!links.lorebookId || mode === "off") return report
-		// A book someone else owns records nothing: the same ownership
-		// test `loreWriteRoute` applies (`own-book`), and the notes go
-		// with the session, so there is nowhere else for it to land.
+		// A lorebook the session's owner may not write (someone else's, or a
+		// live provided lorebook) records nothing: the same test
+		// `loreWriteRoute` applies (`own-book`), and the notes go with the
+		// session, so there is nowhere else for it to land.
 		const [owners] = await db
 			.select({
 				sessionOwnerId: schema.sessions.userId,
-				bookOwnerId: schema.lorebooks.userId
+				bookOwnerId: schema.lorebooks.userId,
+				bookProvided: liveProvidedBookSql()
 			})
 			.from(schema.sessions)
 			.innerJoin(schema.lorebooks, eq(schema.lorebooks.id, links.lorebookId))
 			.where(eq(schema.sessions.id, sessionId))
-		if (!owners || owners.bookOwnerId !== owners.sessionOwnerId) return report
+		if (
+			!owners ||
+			!canWriteLorebook(owners.sessionOwnerId, { userId: owners.bookOwnerId, provided: !!owners.bookProvided })
+		)
+			return report
 		lorebookId = links.lorebookId
 		route = "book"
 	} else {

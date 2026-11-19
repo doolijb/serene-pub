@@ -38,7 +38,7 @@ Only administrators see the Admin icon.
 | *(top)* | **Overview**, headed **Your pub** |
 | **Pub** | General, Users (once accounts are on), Network, Data and backups, Diagnostics, History, Updates ([Pub settings](./system-settings.md)) |
 | **Models** | Loadouts, Connections, Sampling |
-| **Play** | Sessions, Genres, Presets, Starter lorebooks ([Starter lorebooks](./lorebooks.md#starter-starter lorebooks)) |
+| **Play** | Sessions, Genres, Presets, Starter lorebooks, Rulesets ([Starter lorebooks](./lorebooks.md#starter-lorebooks)) |
 | **Writing** | Prompts, Context templates, Completion templates, Variable layouts |
 | **Pipelines** | Pipelines, Events, Scripts |
 | **Extensions** | Plugins, Components |
@@ -61,7 +61,7 @@ A line of links at the top of every admin page, such as **Admin › Writing › 
 
 **Your pub** says which version is running, whether accounts are on and how long the server has been up. Its **Needs you** card lists what wants attention anywhere in the admin area, each with a button to the exact place to fix it: a loadout the pub needs with no model (the Reply loadout, or one a run failed without in the last 7 days), pipeline runs that failed today, a daily backup that failed or hasn't run in two days, a tunnel that stopped with an error, a connection a loadout uses that can no longer list its models, a loadout whose model can no longer do its work, a plugin update or permission waiting for review. Below it, one card per area shows how that area is doing.
 
-The Admin icon, and each section in the list, carries a dot when something needs you: **red** when something is broken, such as a default connection that stopped answering or a backup that failed, and **gold** when something waits on you, such as **Chat needs a model** on a new pub where nobody has chosen one yet. The dot updates the moment it happens, wherever you are in the app.
+The Admin icon, and each section in the list, carries a dot when something needs you: **red** when something is broken, such as a default connection that stopped answering or a backup that failed, and **gold** when something waits on you, such as **The Reply loadout needs a model** on a new pub where nobody has chosen one yet. The dot updates the moment it happens, wherever you are in the app.
 
 ## Activity
 

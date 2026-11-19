@@ -439,6 +439,7 @@ describe("core:query/lorebook-entries@1's binding", () => {
 	const askedFor: Record<string, unknown>[] = []
 	const listFor = async (params: Record<string, unknown> = {}) => {
 		const ctx = {
+			log: () => {},
 			read: async (table: string, query: Record<string, unknown>) => {
 				askedFor.push(query)
 				return await readEntries(sessionId, query)

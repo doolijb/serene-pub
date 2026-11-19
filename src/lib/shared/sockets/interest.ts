@@ -155,8 +155,12 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["sessions:backdropChanged", (payload) => payload?.sessionId],
 
 		// `{ sessionId, groups, legacy }` — the session data panel's read
-		// (owner and administrators only). Only the panel declares it, scoped.
+		// (the session's owner only, G6). Only the panel declares it, scoped.
 		["sessions:annexInspect", (payload) => payload?.sessionId],
+
+		// 🚧 `{ sessionId, members }` — the session's cast to take (G3, G4):
+		// any member of the session. Only Edit session declares it, scoped.
+		["sessions:castToTake", (payload) => payload?.sessionId],
 
 		// `{ sessionId, event, payload, at }` — a package's event recorded in
 		// the session (R56). Only the session page declares it, scoped.
@@ -302,6 +306,9 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["characterVersions:redlines", (payload) => payload?.characterVersionId],
 		["characterVersions:restoreRedline", (payload) => payload?.characterVersionId],
 		["characterVersions:clearRedlines", (payload) => payload?.characterVersionId],
+		// 🚧 A scene's Edit history: `lorebookId` top-level.
+		["scenes:redlines", (p) => p?.lorebookId],
+		["scenes:restoreRedline", (p) => p?.lorebookId],
 		["entries:iterateNext", (payload) => payload?.entry?.lorebookId],
 		// `{ success, lorebookId, typeId }` — the reorder reply (E-6). The
 		// entry channel declares its book's scope and filters on the type.
@@ -312,6 +319,11 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// top-level; the refusals carry it too, and stay ungated.
 		["lorebookState:get", (payload) => payload?.lorebookId],
 		["lorebookState:set", (payload) => payload?.lorebookId],
+		// 🚧 Who knows which entry (`entryKnowledge:*`): `lorebookId`
+		// top-level on every reply; the refusals carry it too, and stay ungated.
+		["entryKnowledge:list", (payload) => payload?.lorebookId],
+		["entryKnowledge:setCommonKnowledge", (payload) => payload?.lorebookId],
+		["entryKnowledge:setTie", (payload) => payload?.lorebookId],
 		// 🚧 A card's own stats (card dowry §B.4): the character form's Stats
 		// tab. The three replies are the card's whole read and the push is
 		// `{ characterId }` — `characterId` top-level on every one; the
@@ -668,6 +680,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// sessionForms/SessionAnnexPanel.svelte, SCOPED. Its `:error` twin is
 	// never gated.
 	"sessions:annexInspect",
+	// 🚧 The session's cast to take (G3, G4) — consumer: client/components/
+	// sessionForms/EditSessionForm.svelte, SCOPED.
+	"sessions:castToTake",
 	// Who of the session's people has it open (W10) — consumer: the session
 	// page, SCOPED, which hands it to its widgets as `attendance.v1`. Its
 	// key is also the push's own signal of who is here.
@@ -982,6 +997,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"characterVersions:redlines",
 	"characterVersions:restoreRedline",
 	"characterVersions:clearRedlines",
+	// 🚧 Consumer: client/lorebooks/ (the scene's Edit history, through `awaitReply`).
+	"scenes:redlines",
+	"scenes:restoreRedline",
 	"entries:iterateNext",
 	"entries:list",
 	"entries:recentDecisions",
@@ -1220,6 +1238,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"systemSettings:updateOllamaManagerEnabled",
 	"systemSettings:updateRequireTwoFactor",
 	"systemSettings:updateScriptsEnabled",
+	"systemSettings:updateStepTimeLimitsOff",
 	"totp:adminClear",
 	"totp:disable",
 	"totp:enroll:begin",
@@ -1529,6 +1548,15 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// The book's sessions hear a write as `state:changed`.
 	"lorebookState:get",
 	"lorebookState:set",
+
+	// `entryKnowledge:` — who knows which entry: the not-common-knowledge mark
+	// and the hand knowledge ties (programme 1.4, 2026-11-16), born gated and
+	// SCOPED by `lorebookId`. The lorebook row's owner only. Consumer:
+	// client/lorebooks/knowledge/bookKnowledge.svelte.ts (one store per open
+	// entry workspace), on the registry.
+	"entryKnowledge:list",
+	"entryKnowledge:setCommonKnowledge",
+	"entryKnowledge:setTie",
 
 	// `cardState:` — a character card's own stats (card dowry §B.4,
 	// 2026-10-11), born gated. `get`/`set`/`setSheets`/`changed` are SCOPED by

@@ -290,6 +290,8 @@ describe("dropReplyTickSettings", () => {
 			overrides: 0,
 			configValues: 0
 		})
+		// The boot's fold leaves the session's `params.x` override row: the
+		// pipeline declares no such address (`sessionOverrideFold.ts`).
 		expect(await seeded()).toEqual(afterFirst)
 		expect(await overrideKeys(storyRespondId)).toEqual([otherNode])
 	})

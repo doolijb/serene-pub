@@ -41,6 +41,8 @@
 		manager: SurfaceManager
 		sessionId: number | null
 		session?: unknown
+		/** False while the session's book keeps no timeline: a remote widget is handed no story date. */
+		storyDates?: boolean
 		/**
 		 * This panel's measured cell geometry, threaded in by the zone that drew
 		 * it (PLAN 25). Handed to whichever body this panel has; a remote and a
@@ -101,6 +103,7 @@
 		manager,
 		sessionId,
 		session,
+		storyDates = true,
 		placement,
 		inDrawer = false,
 		chrome = "grid",
@@ -307,6 +310,7 @@
 					props={{ panelId: instance.id, title: resolved.title }}
 					settings={resolved.settings}
 					reads={instance.reads}
+					{storyDates}
 					grants={instance.grants}
 					scoped={grantedScoped}
 					placement={told}

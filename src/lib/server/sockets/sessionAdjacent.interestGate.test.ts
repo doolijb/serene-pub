@@ -62,6 +62,8 @@ const seam = vi.hoisted(() => {
 				// The cast versions in force (`pickVersions`) read rows shaped
 				// `{ version, overlayOf }`; no member here has any.
 				if (name === "character_versions") result = []
+				// The ownership read of the book (`findOwnedBook`): the book, not a history entry.
+				if (name === "lorebooks") result = [{ ...rows.lorebook, sessionId: null }]
 				return self
 			},
 			innerJoin: () => self,

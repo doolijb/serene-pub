@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
+	import { getBookKnowledge } from "../knowledge/bookKnowledge.svelte"
 	import { KEPT_IMPRINT_HEADING } from "./keptImprints"
 
 	/**
@@ -32,6 +33,8 @@
 		showPriority = true
 	}: Props = $props()
 
+	const knowledge = getBookKnowledge()
+
 	let icon = $derived(size === "sm" ? 11 : 14)
 	let pad = $derived(size === "sm" ? "px-1.5 py-0.5" : "px-2 py-1")
 </script>
@@ -53,6 +56,17 @@
 	<span class="preset-tonal-surface rounded {pad} text-xs" title="Archived">
 		<Icons.Archive size={icon} class="inline" />
 		archived
+	</span>
+{/if}
+<!-- A not-common-knowledge entry says so on its row. Only the lorebook's owner
+     has the knowledge store open, so a reader never sees this mark. -->
+{#if typeof entry.id === "number" && knowledge?.isMarked(entry.id)}
+	<span
+		class="preset-tonal-surface rounded {pad} text-xs"
+		title="Not common knowledge"
+	>
+		<Icons.EyeOff size={icon} class="inline" />
+		not common
 	</span>
 {/if}
 <!-- 🚧 RF fix 4: a replaced reply wrote something here that stayed. The entry's

@@ -492,7 +492,8 @@ describe("server readers of a line read by the rule", () => {
 				const read = await cardMemberAt(testDb as any, {
 					lorebookId: book.id,
 					characterId: card.id,
-					at: { line, moment }
+					at: { line, moment },
+					timelineOff: false
 				})
 				expect(
 					sorted(read!.appearances.map((a) => a.personalPosition!)),

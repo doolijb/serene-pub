@@ -9,6 +9,7 @@
 		withoutKey
 	} from "$lib/shared/entries/keyList"
 	import { runawayPatternOf } from "$lib/shared/entries/runawayPattern"
+	import { bookReadOnly } from "../bookData.svelte"
 
 	/**
 	 * A key list, as the things it holds: one chip per key.
@@ -69,6 +70,9 @@
 				})
 			: []
 	)
+	// A read-only book's keywords stay readable as plain chips: no remove, no add.
+	const readOnlyBook = bookReadOnly()
+	let readOnly = $derived(readOnlyBook.value)
 	let adding = $state(false)
 	let typed = $state("")
 	let input = $state<HTMLInputElement | null>(null)
@@ -119,17 +123,19 @@
 						? 'decoration-error-500 underline decoration-wavy'
 						: ''}">{keyword}</span
 				>
-				<button
-					type="button"
-					class="opacity-70 hover:opacity-100"
-					aria-label="Remove {keyword}"
-					onclick={() => remove(keyword)}
-				>
-					<Icons.X size={12} aria-hidden="true" />
-				</button>
+				{#if !readOnly}
+					<button
+						type="button"
+						class="opacity-70 hover:opacity-100"
+						aria-label="Remove {keyword}"
+						onclick={() => remove(keyword)}
+					>
+						<Icons.X size={12} aria-hidden="true" />
+					</button>
+				{/if}
 			</span>
 		{/each}
-		{#if adding}
+		{#if !readOnly && adding}
 			<input
 				bind:this={input}
 				bind:value={typed}
@@ -141,7 +147,7 @@
 				onkeydown={onKeydown}
 				onblur={commit}
 			/>
-		{:else}
+		{:else if !readOnly}
 			<button
 				type="button"
 				class="chip preset-tonal-surface"

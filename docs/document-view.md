@@ -70,7 +70,7 @@ The edit page covers the name, characters, personas, guests, the turn order and 
 
 ### Characters
 
-The character list (personas included), a simple create form, an edit form, a view page, and **Browse Library** for the [character library](./characters.md#browsing-the-character-library). The forms cover **Name**, **Nickname**, **Description**, **Personality**, **Scenario** and **First message**, plus **Persona** and, when editing, **Default persona** (see [Personas](./personas.md)). Pictures, the gallery and the extra card fields are in the usual interface.
+The character list (personas included), a simple create form, an edit form, a view page, and **Browse character library** for the [character library](./characters.md#browsing-the-character-library). The forms cover **Name**, **Nickname**, **Description**, **Personality**, **Scenario** and **First message**, plus **Persona** and, when editing, **Default persona** (see [Personas](./personas.md)). Pictures, the gallery and the extra card fields are in the usual interface.
 
 ### Documentation
 
@@ -82,7 +82,7 @@ These docs, with a search that matches both pages and headings. Links between pa
 
 ### Admin pages
 
-- **Connections**: list, create and edit connections, and choose which model each job uses with **Use … for chat**, **Use … for embeddings** and the like. **Ollama, managed** and **KoboldCPP, run by Serene Pub** have the same download and connect steps as the usual interface. While one is off, its page has one button that turns it on and adds its connection if you don't have one. See [Connections](./connections.md).
+- **Connections**: list, create and edit connections, and choose which model each kind of work uses with **Use … for chat**, **Use … for embeddings** and the like. **Ollama, managed** and **KoboldCPP, run by Serene Pub** have the same download and connect steps as the usual interface. While one is off, its page has one button that turns it on and adds its connection if you don't have one. See [Connections](./connections.md).
 - **Pub settings**: whether Ollama, managed, and KoboldCPP, run by Serene Pub, are on, with a link to each one's page and a button to turn it off; context debugging, the CharaVault account, and user accounts. A line says whether embeddings are in use; they are chosen on **Connections**. See [Pub settings](./system-settings.md).
 - **Users** (once accounts are on): list, create, edit and delete accounts.
 

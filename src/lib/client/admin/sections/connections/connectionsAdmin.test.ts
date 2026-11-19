@@ -81,6 +81,34 @@ describe("managerFlagsReleased", () => {
 			"systemSettings:updateKoboldCppManagerEnabled"
 		])
 	})
+	it("turns audio.cpp off with the last audiocpp_managed row", () => {
+		const audio = {
+			id: 6,
+			name: "audio.cpp",
+			type: "audiocpp_managed",
+			models: []
+		}
+		const audio2 = { ...audio, id: 7 }
+		expect(managerFlagsReleased([6], [...rows, audio])).toEqual([
+			"audiocpp:updateSettings"
+		])
+		expect(managerFlagsReleased([6], [...rows, audio, audio2])).toEqual([])
+		expect(managerFlagsReleased([6, 7], [...rows, audio, audio2])).toEqual([
+			"audiocpp:updateSettings"
+		])
+	})
+	it("counts the managed image row as part of the KoboldCPP install", () => {
+		const image = {
+			id: 8,
+			name: "KoboldCPP image",
+			type: "koboldcpp_managed_image",
+			models: []
+		}
+		expect(managerFlagsReleased([1], [...rows, image])).toEqual([])
+		expect(managerFlagsReleased([1, 8], [...rows, image])).toEqual([
+			"systemSettings:updateKoboldCppManagerEnabled"
+		])
+	})
 	it("leaves both alone for an ordinary connection", () => {
 		expect(managerFlagsReleased([2], rows)).toEqual([])
 	})

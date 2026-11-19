@@ -46,6 +46,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
 import { alias } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
+import { liveProvidedBookSql } from "$lib/server/plugins/providedMarks"
 import { FOLD_REFUSALS } from "$lib/shared/lorebooks/sessionNotes"
 import type { IdMap, IdMaps } from "$lib/server/lorebooks/tableRegistry"
 import type { SeatChange } from "$lib/server/sessions/seats"
@@ -140,7 +141,11 @@ async function lockAndRead(t: Db, sessionId: number, mod: OwnBookModule) {
 	if (!session || session.lorebookId == null)
 		throw new mod.OwnBookRefusal(FOLD_REFUSALS.alreadyOwn)
 	const [parent] = await t
-		.select({ id: schema.lorebooks.id, name: schema.lorebooks.name })
+		.select({
+			id: schema.lorebooks.id,
+			name: schema.lorebooks.name,
+			provided: liveProvidedBookSql()
+		})
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, session.lorebookId))
 		.limit(1)
@@ -1708,10 +1713,8 @@ export async function foldInParent(
 		throw new mod.OwnBookRefusal(FOLD_REFUSALS.notOwner)
 	if (session.lorebookId == null)
 		throw new mod.OwnBookRefusal(FOLD_REFUSALS.alreadyOwn)
-	const { assertReadableBook } = await import("$lib/server/utils/ownedBook")
-	await assertReadableBook(db, input.userId, session.lorebookId, {
-		isAdmin: false
-	})
+	// The session's owner may read, for the merge, the lorebook their own session
+	// reads; the session's stored link is the proof. Nothing else is widened.
 
 	return db.transaction(async (tx) => {
 		const t = tx as unknown as Db
@@ -1833,6 +1836,19 @@ export async function foldInParent(
 					cause: difference
 				}
 			)
+		// A merged live provided lorebook leaves the notes holding no card of the
+		// plugin's: the copied members become card-less, after the guard compared
+		// each member's active card.
+		if (parent.provided) {
+			const { makeCopyCardless } = await import(
+				"$lib/server/lorebooks/starterKits"
+			)
+			await makeCopyCardless(
+				t,
+				ownId,
+				[...parentMembers].map((id) => maps.bindings.get(id)!)
+			)
+		}
 		return {
 			lorebookId: ownId,
 			foldedFrom: { id: parent.id, name: parent.name },

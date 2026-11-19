@@ -16,7 +16,8 @@
 	import { loreRoute } from "../loreRoute.svelte"
 	import { getBookData } from "../bookData.svelte"
 	import { lensEmptyMessage } from "../lenses/registry"
-	import { descriptorForKind, draftStale } from "../sections"
+	import { descriptorForKind, draftStale, newHistoryDate } from "../sections"
+	import { openBookTime } from "./bookTime.svelte"
 	import {
 		compareDates,
 		dateValue,
@@ -295,7 +296,7 @@
 		draftKey = "new"
 		draft = {
 			...descriptor.newDraft(lorebookId),
-			...(date ?? {}),
+			...(date ?? newHistoryDate(openBookTime, route.branch ?? null) ?? {}),
 			content
 		}
 		pristineDraft = { ...$state.snapshot(draft) }

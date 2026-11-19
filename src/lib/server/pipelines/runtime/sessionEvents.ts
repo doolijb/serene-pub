@@ -734,7 +734,7 @@ async function sessionGenreIs(db: Db, sessionId: number, genreId: string): Promi
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return !!row && (row.genreId ?? "core:genre/story") === genreId
+	return !!row && (row.genreId ?? STANDARD_GENRE_ID) === genreId
 }
 
 /** The same answer, for the callers that only need the slug. */

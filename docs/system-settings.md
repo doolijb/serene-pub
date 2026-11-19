@@ -16,7 +16,7 @@ Open **Admin** on the rail: **Pub** is the first group, under **Overview**. Each
 | **Users** | The account roster, once accounts are on: see [Users and accounts](./users-and-accounts.md) |
 | [Network](#network) | The tunnel that makes your pub reachable from outside, and the allowed hosts |
 | [Data and backups](#data-and-backups) | The backup policy, and the backups themselves |
-| [Diagnostics](#diagnostics) | The support report, context debugging, and scripts with no place to run |
+| [Diagnostics](#diagnostics) | The support report, context debugging, turning off step time limits, and scripts with no place to run |
 | [History](#history) | Who changed what on this pub, and when |
 | [Updates](#update-notifications) | A newer release, and installing it (not on pre-release builds) |
 
@@ -28,7 +28,7 @@ Which model each kind of work runs on is set by its [loadout](./connections.md#l
 
 The **User accounts** card controls whether Serene Pub runs in single-user mode or requires sign-in. A status line says which: a grey dot and _Off_, or a green dot and _On — sign-in is required_.
 
-Accounts are off on a new pub: there's no sign-in screen, and everyone who reaches the pub is the first administrator. That suits a personal install, but anyone who can reach the app has full admin access, which is why a [tunnel](#network) can't start until accounts are on.
+Accounts are off on a new pub: there's no sign-in screen, and everyone who reaches the pub is the first administrator. That suits a personal pub, but anyone who can reach the app has full admin access, which is why a [tunnel](#network) can't start until accounts are on.
 
 The **User accounts** switch turns sign-in on for everyone. It's **permanent**: once on, the switch locks. If your own account has no passphrase yet, the confirmation dialog asks you to set one first. Turning it on signs everyone out, you included, and the sign-in page says why: _User accounts are on now, so everyone signs in._ Sign back in with your username and passphrase. The card isn't shown in the Android app, which is single-user.
 
@@ -113,6 +113,10 @@ Every section has a fixed heading and the whole report ends with the same facts 
 
 **Context debugging** adds a prompt inspector to sessions, computes full retrieval diagnostics, and saves what was sent to the model alongside each reply, so you can see why a reply came out the way it did. It slows every reply a little, so leave it off unless you're investigating something.
 
+### Turn off step time limits
+
+**Turn off step time limits** is for finding out whether a time limit is what stops a step. It is off unless you turn it on. While it is on, runs that start after the change give their steps no time limit, not even the one hour any step may take, so a stuck step waits until someone stops it with **Stop** on the turn line or on the reply. It does not touch the limits that keep the pub safe: scripts and plugins are still stopped when they run too long, a tool an extension provides still has its own limit, and a model connection that sends nothing for ten minutes is still ended, because that is a dead connection, not a slow step. While it is on, every administrator sees **Step time limits are off** in Activity and on the Overview's **Needs you** card, both with a way back to this switch, and sessions show _Time limits off_ on the turn line to administrators. Turn it off again once you know the answer; runs already under way keep the setting they started with.
+
 ## History
 
 **History** lists every change an admin has made to this pub, newest first: when, who, what kind of change (added, changed, deleted, or an action such as starting a process), the object it touched, and a one-line summary such as *Changed default language from “en” to “fr”*. Select a change to open its own page, read-only: when, who, the action, the object and the event, then each changed field with its old and new value. Its **Open** button goes to the object (unless the change deleted it), and **This object's history** lists every change to that object.
@@ -135,7 +139,7 @@ Which connection and model each kind of work uses (writing replies, embeddings, 
 
 ## Update notifications
 
-Serene Pub checks GitHub for a newer release at most once a day. When one is out, every admin gets a notification in the [Activity](./getting-around.md#activity) view, *Serene Pub v0.7.0 is available*, whose **See the update** button opens **Admin › Updates**. The Admin Overview shows the release too: **Update to v0.7.0** when the launcher can install it for you, or **Get v0.7.0**, linking to the project's GitHub releases page, when it can't (Docker, Android, or a server started without its launcher). You are told once per release: dismissing the notification keeps it away until a newer release comes out, and it clears by itself once your install runs that version. Non-admins are never notified, since only an admin can update the install. Nothing is downloaded until an admin presses **Download update**, and nothing changes until they press **Restart to update**: see [Updating Serene Pub](./updating.md). The version you're running is on the **About** tab of **Settings**.
+Serene Pub checks GitHub for a newer release at most once a day. When one is out, every admin gets a notification in the [Activity](./getting-around.md#activity) view, *Serene Pub v0.7.0 is available*, whose **See the update** button opens **Admin › Updates**. The Admin Overview shows the release too: **Update to v0.7.0** when the launcher can install it for you, or **Get v0.7.0**, linking to the project's GitHub releases page, when it can't (Docker, Android, or a server started without its launcher). You are told once per release: dismissing the notification keeps it away until a newer release comes out, and it clears by itself once your pub runs that version. Non-admins are never notified, since only an admin can update the pub. Nothing is downloaded until an admin presses **Download update**, and nothing changes until they press **Restart to update**: see [Updating Serene Pub](./updating.md). The version you're running is on the **About** tab of **Settings**.
 
 Pre-release builds are the exception. On a version carrying a pre-release suffix (`0.6.0-pr-1`, `-rc-1`, `-dev`, or any suffix Serene Pub doesn't recognise), the check is switched off entirely — GitHub is never contacted about versions, no update notice appears anywhere, there is no **Admin › Updates** section, and the build never updates itself. Those builds instead carry a permanent, faint version marker in the bottom-right corner of the window, so a preview build is never mistaken for a release one. The marker never intercepts clicks and fades out as your cursor approaches it.
 

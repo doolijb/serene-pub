@@ -254,6 +254,48 @@ const earlierScenesCases: Array<[string, unknown]> = [
 	["undefined", undefined]
 ]
 
+/**
+ * `core:var/history@1`'s shape: `{ date, dateDelta?, content }` each. Every
+ * row carries a content: the binding only ever hands over whole rows, and the
+ * generic list cases below would hand it rows with none.
+ */
+const D = (year: number, month?: number) => ({
+	year: { number: year },
+	month: month == null ? null : { number: month },
+	day: null,
+	time: null
+})
+const historyCases: Array<[string, unknown]> = [
+	["an empty list", []],
+	["one entry", [{ date: D(412, 3), dateDelta: null, content: "The wall fell." }]],
+	[
+		"a delta",
+		[
+			{
+				date: D(412, 3),
+				dateDelta: { sign: -1, year: 0, month: 0, day: 2, time: null },
+				content: "Two days back."
+			}
+		]
+	],
+	[
+		"quotes, angle brackets and braces",
+		[{ date: D(412), content: `She said "no" & <left> {{user}}` }]
+	],
+	["newlines and tabs", [{ date: D(412), content: "one\ntwo\tthree\r\nfour" }]],
+	["a non-BMP emoji", [{ date: D(412), content: "🜁 👩‍🚒" }]],
+	["no date", [{ date: null, content: "Whenever." }]],
+	[
+		"two rows on one date",
+		[
+			{ date: D(412, 1), content: "one" },
+			{ date: D(412, 1), content: "two" }
+		]
+	],
+	["a structured content", [{ date: D(412), content: { a: [1, "x"] } }]],
+	["undefined", undefined]
+]
+
 const shapedCases = (key: string): Array<[string, unknown]> => {
 	const shared: Array<[string, unknown]> = [
 		["an empty list", []],
@@ -298,6 +340,7 @@ const shapedCases = (key: string): Array<[string, unknown]> => {
 	]
 	if (key === "characterLore") return characterLoreCases
 	if (key === "earlierScenes") return earlierScenesCases
+	if (key === "history") return historyCases
 	if (key !== "characters") return shared
 	return [
 		...shared,

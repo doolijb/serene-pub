@@ -55,9 +55,8 @@ describe("collectAliases", () => {
 	})
 
 	test("returns a fresh mutable array — callers push their own extras onto it", () => {
-		// buildSceneCastList appends parent-binding names; the graph build
-		// appends child names. Returning a shared or frozen array would break
-		// both.
+		// Callers append their own names (the graph build appends child names).
+		// Returning a shared or frozen array would break them.
 		const binding = { aliases: ["Ari"], absorbedAliases: [] }
 		const first = collectAliases(binding)
 		first.push("Child Name")

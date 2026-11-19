@@ -114,6 +114,17 @@ describe("session_cast: a card-less seat", () => {
 		expect(rows.some((r) => r.character?.name === "castellan")).toBe(false)
 	})
 
+	it("🚧 storyTime.sessionStart: the day of the first live stamped message, null while nothing is stamped (tl-4)", async () => {
+		expect(((await readCast()).storyTime as any)?.sessionStart).toBeNull()
+		const stamp = (day: number) => ({ storyClockYear: 2026, storyClockMonth: 3, storyClockDay: day, storyClockHour: 8, storyClockMinute: 0 })
+		await db.insert(schema.sessionMessages).values([
+			{ sessionId, role: "assistant", content: "Unstamped.", channel: "main" },
+			{ sessionId, role: "assistant", content: "Day one.", channel: "main", ...stamp(10) },
+			{ sessionId, role: "assistant", content: "Later.", channel: "main", ...stamp(12) }
+		] as any)
+		expect(((await readCast()).storyTime as any)?.sessionStart).toEqual({ year: 2026, month: 3, day: 10 })
+	})
+
 	it("the carded seat keeps its shape", async () => {
 		const read = await readCast()
 		const row = (read.sessionCharacters as any[]).find(

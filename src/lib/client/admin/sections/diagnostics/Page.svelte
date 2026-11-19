@@ -8,6 +8,7 @@
 	import { getContext } from "svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import ContextDebuggingCard from "$lib/client/components/admin/pub/ContextDebuggingCard.svelte"
+	import StepTimeLimitsCard from "$lib/client/components/admin/pub/StepTimeLimitsCard.svelte"
 	import SupportReportCard from "$lib/client/components/admin/pub/SupportReportCard.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
@@ -56,6 +57,7 @@
 		<SupportReportCard />
 		{#if systemSettingsCtx.settings}
 			<ContextDebuggingCard />
+			<StepTimeLimitsCard />
 		{:else}
 			<p class="text-surface-600-400 text-sm">Loading…</p>
 		{/if}

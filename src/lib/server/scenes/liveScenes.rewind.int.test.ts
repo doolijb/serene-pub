@@ -167,4 +167,32 @@ describe("scene boundaries under Back and Forward", () => {
 		await back(session.id)
 		expect(await scenesOf(session.id)).toEqual(before)
 	}, 60_000)
+
+	it("a scene opened at a taken row comes back with its cast and no Edit history row", async () => {
+		const { session } = await makeWorld()
+		const { openScene } = await import("./liveScenes")
+		const { insertCastMember } = await import("$lib/server/characters/versions")
+		const { writeSceneCast, readSceneCast } = await import("$lib/server/utils/sceneCast")
+		const members: number[] = []
+		for (const name of ["Ann", "Bo"]) {
+			const { member } = await insertCastMember(testDb as any, {
+				lorebookId: session.lorebookId!,
+				binding: `{{char:${name.toLowerCase()}}}`,
+				name
+			} as any)
+			members.push(member.id)
+		}
+		const m1 = await say(session.id, "one")
+		const opened = await openScene(testDb as any, { sessionId: session.id, userId: ownerId, atMessageId: m1.id })
+		await writeSceneCast(opened.scene.id, { participantCharacters: members }, testDb as any)
+		const redlines = async () =>
+			(await testDb.select().from(schema.loreRedlines).where(eq(schema.loreRedlines.sceneId, opened.scene.id))).length
+
+		await back(session.id)
+		expect(await scenesOf(session.id)).toHaveLength(0)
+		await forward(session.id)
+		expect(await scenesOf(session.id)).toHaveLength(1)
+		expect((await readSceneCast(opened.scene.id, testDb as any)).participantCharacters).toEqual(members)
+		expect(await redlines()).toBe(0)
+	}, 60_000)
 })

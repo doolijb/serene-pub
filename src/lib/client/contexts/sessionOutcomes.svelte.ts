@@ -23,6 +23,14 @@ export function closeOutToast(scenes: number): { title: string; description: str
 	}
 }
 
+/** 🚧 Apply removed play's knowledge ties because a hand tie stands for the pair (D39). */
+export function tiesRemovedToast(n: number): { title: string; description: string } {
+	return {
+		title: n === 1 ? "1 knowledge tie removed" : `${n} knowledge ties removed`,
+		description: "Knows or Kept from is set by hand for " + (n === 1 ? "it" : "them") + " in the lorebook."
+	}
+}
+
 export function createSessionOutcomes(): void {
 	useInterest<"sessions:applyOverlay">("sessions:applyOverlay", (msg) => {
 		// Nothing at all was waiting: no note applied, no held change applied or left held.
@@ -36,10 +44,15 @@ export function createSessionOutcomes(): void {
 				msg.appliedLinks?.length ||
 				msg.mergedDays?.length ||
 				msg.droppedLinks?.length ||
+				msg.appliedTies?.length ||
+				msg.droppedTies?.length ||
+				msg.supersededTies?.length ||
 				msg.heldDays?.length
 			)
 		)
 			notify.info({ ...SHARE_NOTHING_PENDING, source: "sessions:applyOverlay" })
+		const removed = msg?.supersededTies?.length ?? 0
+		if (!msg?.error && removed > 0) notify.info({ ...tiesRemovedToast(removed), source: "sessions:applyOverlay" })
 	})
 	useInterest<"sessions:closeOut">("sessions:closeOut", (msg) => {
 		const n = msg?.sceneIds?.length ?? 0

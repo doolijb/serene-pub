@@ -1386,11 +1386,34 @@ describe("scenes:compile by date", () => {
 		>
 	}
 
-	test("date null on a line with no dated entry: a moment before Year 1, Mo. 1, Day 1 is refused, and the entry it would have made is not", async () => {
-		const w = await seedBareBook("bydate-before-year-one")
+	const NO_DATE = "These scenes have no date, and this line has no dated history entry or story clock to file them under."
+
+	test("date null, no dated entry and no clock: refused with the sentence, nothing made or compiled", async () => {
+		const w = await seedBareBook("bydate-no-clock")
 		const { sceneCompileHandler } = await import("./scenes")
 		await unfiledOn(w, "Undated", null)
+		compiled.length = 0
+
+		await expect(
+			sceneCompileHandler.handler(
+				fakeSocket(w.owner.id),
+				byDate(w, { date: null }) as any,
+				() => {}
+			)
+		).rejects.toThrow(NO_DATE)
+
 		expect(await historyEntriesOf(w.book.id)).toHaveLength(0)
+		expect(compiled).toEqual([])
+	}, 60_000)
+
+	test("date null on a line with a clock: a moment before the clock's day is refused, and the entry it would have made is not", async () => {
+		const w = await seedBareBook("bydate-before-clock")
+		await testDb
+			.update(schema.lorebooks)
+			.set({ storyClockYear: 5, storyClockMonth: 2, storyClockDay: 3 } as any)
+			.where(eq(schema.lorebooks.id, w.book.id))
+		const { sceneCompileHandler } = await import("./scenes")
+		await unfiledOn(w, "Undated", null)
 		compiled.length = 0
 
 		await expect(
@@ -1408,8 +1431,12 @@ describe("scenes:compile by date", () => {
 		expect(compiled).toEqual([])
 	}, 60_000)
 
-	test("date null and moment null on a line with no dated entry: the Year 1, Mo. 1, Day 1 entry is made and compiled", async () => {
-		const w = await seedBareBook("bydate-year-one-made")
+	test("date null and moment null on a line with a clock: the entry is made on the clock's day and compiled", async () => {
+		const w = await seedBareBook("bydate-clock-made")
+		await testDb
+			.update(schema.lorebooks)
+			.set({ storyClockYear: 5, storyClockMonth: 2, storyClockDay: 3 } as any)
+			.where(eq(schema.lorebooks.id, w.book.id))
 		const { sceneCompileHandler } = await import("./scenes")
 		const { activityStore } = await import(
 			"$lib/server/utils/activityStore"
@@ -1425,7 +1452,7 @@ describe("scenes:compile by date", () => {
 
 		const entries = await historyEntriesOf(w.book.id)
 		expect(entries).toHaveLength(1)
-		expect((entries[0].fields as any).year).toBe(1)
+		expect(entries[0].fields).toMatchObject({ year: 5, month: 2, day: 3 })
 		expect(compiled).toEqual([[undated.id]])
 		activityStore.remove(
 			(await compileActivity(w.owner.id, entries[0].id)).id

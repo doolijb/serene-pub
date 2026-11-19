@@ -2,6 +2,7 @@
 	import { withoutShared } from "$lib/shared/utils/sharedRows"
 	import { seatCardAsShown } from "$lib/client/components/sessionPage/projections/characters"
 	import { onMount, getContext } from "svelte"
+	import EditSessionForm from "$lib/client/components/sessionForms/EditSessionForm.svelte"
 	import PipelineCards from "$lib/client/components/sessionForms/PipelineCards.svelte"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
@@ -22,6 +23,7 @@
 
 	let session: Sockets.Sessions.Get.Response["session"] | undefined = $state()
 	let loaded = $state(false)
+	let showGuestForm = $state(true)
 	let notFound = $state(false)
 	let error = $state("")
 	let saving = $state(false)
@@ -376,23 +378,22 @@
 	<title>Edit session — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>Edit session</h1>
+<h1>{isGuest ? "Participants" : "Edit session"}</h1>
 <p><a href="/document-view/sessions">Back to Sessions</a></p>
 
 {#if !loaded}
 	<p>Loading…</p>
 {:else if notFound}
 	<p>Session not found, or you don't have access to it.</p>
+{:else if isGuest}
+	<!-- A guest has the participants view, not the owner's form: the same
+	     one the dock gives them. -->
+	<EditSessionForm
+		editSessionId={sessionId}
+		bind:showEditSessionForm={showGuestForm}
+		onClose={() => goto(`/document-view/sessions/${sessionId}`)}
+	/>
 {:else}
-	{#if isGuest}
-		<div class="a11y-status">
-			<p>
-				You're a guest in this session. You can manage characters and
-				personas below — session name, scenario, tags, and reply
-				strategy can only be changed by the session owner.
-			</p>
-		</div>
-	{/if}
 	{#if error}
 		<div class="a11y-status a11y-status-error" role="alert">
 			<p class="a11y-error-text">{error}</p>

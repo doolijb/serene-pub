@@ -1,18 +1,18 @@
 # Connections
 
-A **connection** tells Serene Pub where a model runs and how to reach it: a program on your computer, a machine on your network, or an online service. This page covers the two rail views that look after them, every kind of connection, the KoboldCPP and Ollama that Serene Pub can look after for you, and the settings that shape what a model is sent: sampling configs, prompt formats, token counters, stop sequences and streaming.
+A **connection** tells Serene Pub where a model runs and how to reach it: a program on your computer, a machine on your network, or an online service. This page covers the three rail views that look after them, every kind of connection, the KoboldCPP and Ollama that Serene Pub can look after for you, and the settings that shape what a model is sent: sampling configs, prompt formats, token counters, stop sequences and streaming.
 
 :::tip Setting up for the first time?
 You need one connection and one model, and [Connect a model](./connect-a-model.md) walks you through it in about ten minutes. Come back here when you want to add a second service, tune how a model writes, or work out why something stopped answering.
 :::
 
-Two views on the rail share the work:
+Three views on the rail share the work:
 
 - **[Models](#the-models-view)** is every model you have in one list, and where you get a new one.
 - **[Loadouts](#loadouts)** is where you make your sessions work: which model each kind of work runs on, and how it is driven.
 - **[Connections](#the-connections-view)** is where models run: the services and programs Serene Pub talks to, the KoboldCPP and Ollama it runs for you, and each one's settings.
 
-Both belong to the administrator. **Models**, **Connections** and **Sampling** on the rail are only offered to administrators, and so are the **Admin › Models** pages. Members never see any of them; in a session, while the Reply loadout has no model, they see one line above the composer saying so (see [Sessions](./sessions.md)). Everyone else uses whatever the administrator has set up.
+All three belong to the administrator. **Models**, **Loadouts**, **Connections** and **Sampling** on the rail are only offered to administrators, and so are the **Admin › Models** pages. Members never see any of them; in a session, while the Reply loadout has no model, they see one line above the composer saying so (see [Sessions](./sessions.md)). Everyone else uses whatever the administrator has set up.
 
 ## How connections, models and loadouts fit together
 
@@ -146,7 +146,7 @@ There are five kinds of state, each with its own dot colour:
 | ------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | **Ready**                                                                 | green  | It works right now.                                                                                                                     |
 | **Stopped**, **Offline**, **Not tested**, **Installed**, **Not in use** | grey   | Set up, nothing wrong, not running. **Offline** is a KoboldCPP that is switched off with its files kept; **Start** switches it back on. **Not in use** is a local embeddings or entities connection while its loadout uses another connection. Its counterpart, **In use**, means the Embeddings or Entities loadout runs on it; **Loadout unfilled** means that loadout is empty. |
-| **Needs a key**, **Not set up**, **Pick a model**, **N no longer listed** | gold   | It is waiting for _you_. Nothing has failed.                                                                                            |
+| **Needs a key**, **Not set up**, **Not installed**, **Pick a model**, **N no longer listed** | gold   | It is waiting for _you_. Nothing has failed.                                                                                            |
 | **Checking**, **Downloading**                                             | amber  | Something is in progress.                                                                                                               |
 | **Not working**, **Not reachable**, **Crashed**                           | grey, or red | It was set up and it still failed. Red only when a loadout runs on it (see below).                                       |
 
@@ -249,7 +249,7 @@ A **session never picks a loadout**, just as it never picks a connection.
 
 Serene Pub can read a session's lines aloud. Which sessions do, and how, is the session's [Read aloud](./sessions.md#read-aloud) setting; this section is the pub's half: what can speak, and with which voices.
 
-**What can speak.** A model that **Speaks** on one of these connections: **OpenAI (Official)**, **KoboldCPP** (one you run, or the one Serene Pub runs), **Ollama**, **audio.cpp** (one you run, or the one Serene Pub runs), or **ElevenLabs**. [audio.cpp, run by Serene Pub](#audiocpp-run-by-serene-pub) is the route that needs no graphics card: it speaks on the processor alone. The KoboldCPP that Serene Pub runs loads a speech model (Kokoro, Qwen3-TTS) beside its text model, so narration needs no second server and no reload between a reply and its audio; its status card's **Details** shows the **Speech model** that is loaded. To fetch a speaking model, open [Get a model](#get-a-model) under **Speech**: audio.cpp's packages, or the speech models made for KoboldCPP. Tick **Speaks** on the model under [What it's for](#what-a-model-is-for), then put it in the **Narration** loadout. If the loadout says the connection cannot do **Speech**, switch **Speech** on in the connection's settings: for an OpenAI-compatible server or Ollama, whether it speaks is only known once it is asked. In this version Narration is the one place speech runs, so a pub has one speaking model at a time.
+**What can speak.** A model that **Speaks** on one of these connections: **OpenAI (Official)**, **KoboldCPP** (one you run, or the one Serene Pub runs), **Ollama**, **audio.cpp** (one you run, or the one Serene Pub runs), or **ElevenLabs**. [audio.cpp, run by Serene Pub](#audiocpp-run-by-serene-pub) is the route that needs no graphics card: it speaks on the processor alone. The KoboldCPP that Serene Pub runs loads a speech model (Kokoro, Qwen3-TTS) beside its text model, so narration needs no second server and no reload between a reply and its audio; its status card's **Details** shows the **Speech model** that is loaded. To fetch a speaking model, open [Get a model](#get-a-model) under **Speech**: audio.cpp's packages, or the speech models made for KoboldCPP. Tick **Speaks** on the model under [What it's for](#what-a-model-is-for), then put it in the **Narration** loadout. If the loadout says the connection cannot do **Speech**, switch **Speech** on in the connection's settings: for an OpenAI-compatible server or Ollama, whether it speaks is only known once it is asked. Narration is the default speaking loadout, but a pub can keep voices on several speaking models (see [The voicebank](#the-voicebank)).
 
 :::note OpenAI's older speech models are going away
 OpenAI is shutting down its current speech models on 2027-01-06. A model that is affected shows a ⏳ chip with the date. Pick a newer one in the speaking loadout before then.
@@ -304,7 +304,7 @@ Changing the embedding or entity model here rebuilds stored work, so it asks fir
 
 **Admin › Models › Connections** manages the same connections as a table, for working with several at once. It lists every connection with its service, kind, number of models, the defaults it holds and its state. Search matches name, service, address and notes; **Filter** narrows by service, kind, status or whether it holds a default; column headers sort. The address keeps your search and filters, so a filtered list can be bookmarked or shared.
 
-Tick rows and choose **Actions › Delete selected connections…** to delete several. The confirmation lists the models that go with each one and the defaults it releases. Deleting the KoboldCPP connection also switches KoboldCPP off, and deleting the last Ollama connection switches Ollama off.
+Tick rows and choose **Actions › Delete selected connections…** to delete several. The confirmation lists the models that go with each one and the defaults it releases. Deleting the last KoboldCPP connection (text or image) also switches KoboldCPP off, deleting the audio.cpp connection switches audio.cpp off, and deleting the last Ollama connection switches Ollama off.
 
 **Add connection** asks for the service and a name. A connection's own page has sections for its status and **Test**, its name and notes, its address and key, the KoboldCPP runtime (for the managed KoboldCPP), its models, the defaults that point at it, stop scripts and advanced settings, with **Save**, **Save and continue editing** (Ctrl+S) and **Delete**. **History** shows what changed and when. Starting, stopping and downloading stay in the Connections view; **Open in Connections**, on a row or a connection's page, opens that connection there, and **Open Connections view** at the top opens its list.
 
@@ -430,8 +430,8 @@ A **Google Gemini** connection draws pictures too, with Gemini's image models (N
 
 What Gemini takes:
 
-- **A shape and a size tier**, not an exact size: the nearest shape to the size you asked for (square, 16:9, 3:4 and others), drawn at 1K, 2K or 4K (and 512 on 3.1 Flash). Flash Lite draws at 1K only.
-- **Reference pictures** so a character keeps their likeness: up to four on Flash and Nano Banana, five on 3 Pro, none on Flash Lite.
+- **A shape and a size tier**, not an exact size: the nearest shape to the size you asked for (square, 16:9, 3:4 and others), drawn at 1K, 2K or 4K (and 512 on 3.1 Flash). Flash Lite draws at 1K only, and the older 2.5 Flash has no size tier.
+- **Reference pictures** so a character keeps their likeness: up to four on Flash and Nano Banana, three on the older 2.5 Flash, five on 3 Pro, none on Flash Lite.
 - **One picture per request.** Asking for several makes several requests.
 
 There is no negative prompt, seed, steps, CFG or transparent background. If you set them, they are skipped and the picture's details say so; a sprite's background is cut out afterwards instead. If Google's safety filter blocks a prompt, the step stops and shows the reason, and nothing is retried.
@@ -579,7 +579,7 @@ Further down the Settings tab, under the connection's own settings, **Managed mo
 
 A text model can also have a **Vision projector**: its mmproj file, which lets it read images. Set it in the model's **Model settings** (the **⋯** menu in the Models tab), as the file's name; the file must be in the Models directory, and files whose names contain `mmproj` are suggested. Setting one turns **Vision** on for that model. Clear the box to load the model without it. A recommended model tagged *vision* in the finder arrives paired: **Get** fetches its projector after the model and fills this box for you, so it reads pictures from its first use. A projector is a part of a model, so it never appears in the Models list on its own.
 
-Before each request, Serene Pub checks which model KoboldCPP has loaded and with which settings. If the model, any of the three settings above, its vision projector, or a larger context size than the one loaded doesn't match, it reloads KoboldCPP with the right ones and waits (up to ten minutes) before sending the request. So a change to these settings, or switching to another model, takes effect the next time the model is used, not when you save. The first request after restarting Serene Pub also reloads once, because the new Serene Pub can't be sure what the old one loaded.
+Before each request, Serene Pub checks which model KoboldCPP has loaded and with which settings. If the model, any of the three settings above, its vision projector, or a larger context size than the one loaded doesn't match, it reloads KoboldCPP with the right ones and waits (up to 30 minutes while KoboldCPP is running) before sending the request. So a change to these settings, or switching to another model, takes effect the next time the model is used, not when you save. The first request after restarting Serene Pub also reloads once, because the new Serene Pub can't be sure what the old one loaded.
 
 The connection's settings also have the **Prompt format**, **Token counter** and the [same request settings](#koboldcpp-you-run-yourself) as a KoboldCPP you run yourself. There is no Base URL field: the address is the Server URL in the Settings tab.
 
@@ -770,7 +770,7 @@ When the service's own list changes what a model is for, its answer stands even 
 
 A **sampling config** is a named set of generation settings: how adventurous or predictable a model's writing is, how long a reply may be, how much of the story it is sent. Each loadout names one, and a pipeline's settings can pick a different one for any of its model calls.
 
-Configs are edited in the **Sampling** view, on the rail. Its list groups every config by what it samples, **Large language models** or **Image generation**; a row says whether the config is built in, carries a star when a default loadout uses it (its tooltip names the loadouts, _In the Reply loadout_), and says how many settings it turns on and what uses it. **New** makes a config. Pick one and its editor opens beside the list: its name, its [parameters](#adjustable-parameters) with **Choose parameters**, and a **Used by** card naming the default loadouts that use it (each opens [that loadout](#the-loadout-editor) in Loadouts) and the pipelines that pick it (each opens in **Admin › Pipelines**). **Save** keeps your changes; **⋯** holds **Set as default…**, **Duplicate**, **Reset unsaved changes** and **Delete**, whose dialog says which jobs and pipelines lose it. A fresh install replies with the built-in **Reply** config: thinking off, up to 1024 tokens a reply.
+Configs are edited in the **Sampling** view, on the rail. Its list groups every config by what it samples, **Large language models** or **Image generation**; a row says whether the config is built in, carries a star when a default loadout uses it (its tooltip names the loadouts, _In the Reply loadout_), and says how many settings it turns on and what uses it. **New** makes a config. Pick one and its editor opens beside the list: its name, its [parameters](#adjustable-parameters) with **Choose parameters**, and a **Used by** card naming the default loadouts that use it (each opens [that loadout](#the-loadout-editor) in Loadouts) and the pipelines that pick it (each opens in **Admin › Pipelines**). **Save** keeps your changes; **⋯** holds **Set as default…**, **Duplicate**, **Reset unsaved changes** and **Delete**, whose dialog says which jobs and pipelines lose it. A fresh install replies with the built-in **Reply** config: reasoning off, up to 1024 tokens a reply.
 
 A config is chosen wherever it is used:
 
@@ -831,11 +831,12 @@ A ComfyUI workflow has no sampling configs of its own. Its settings are its **va
 
 ### Immutable presets
 
-Serene Pub ships eleven configs you can't change or delete; duplicate one to make your own.
+Serene Pub ships twelve configs you can't change or delete; duplicate one to make your own.
 
 For text:
 
 - **Default**: temperature, response tokens (reply length) and context tokens; everything else is left to the service.
+- **Reply**: the Default values with reasoning off and 1024 response tokens. The Reply loadout starts with it.
 - **Disabled**: nothing at all, so the service's own settings apply.
 - **Precise (Extraction)**: low temperature, tighter top P and top K, and reasoning off, for steps that extract facts rather than write.
 - **Extraction**: low temperature and a short answer. The _Extraction_ and _Scene prompt_ loadouts start with it.

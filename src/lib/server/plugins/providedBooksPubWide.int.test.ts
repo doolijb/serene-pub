@@ -21,11 +21,14 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db, getCryptoSecretKey: () => "pub-wide-test-secret" }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return {
+		...testDbModule(await createTestDb()),
+		getCryptoSecretKey: () => "pub-wide-test-secret"
+	}
 })
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -278,13 +281,27 @@ describe("a live provided book is read pub-wide, never written", () => {
 			canEdit: false
 		})
 
-		// Attach: only sessions:create. A later move is refused by the book
+		// Attach: a new session never attaches it (it starts from a copy instead),
+		// so sessions:create answers in words. A later move is refused by the book
 		// lock (★B-5, 2026-11-08) through sessions:update; the library's
 		// attach-lorebook op no longer exists (★B-4), so it refuses in the
 		// SDK's removal sentence.
+		const { kitIsNotReadSentence } = await import(
+			"$lib/server/lorebooks/starterKits"
+		)
 		const created = await createSession(m.id, p.book.id)
 		expect(created.error).toBeUndefined()
-		expect(created.res.session.lorebookId).toBe(p.book.id)
+		expect(created.res.error).toBe(kitIsNotReadSentence(p.book.name))
+		// A session that already reads it: its rows built directly.
+		const [reading] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: m.id,
+				isGroup: false,
+				name: "Reads it",
+				lorebookId: p.book.id
+			} as any)
+			.returning()
 		const plain = await createSession(m.id)
 		expect(plain.error).toBeUndefined()
 		const upd = await call(sessionsUpdateHandler, m.id, {
@@ -311,10 +328,10 @@ describe("a live provided book is read pub-wide, never written", () => {
 
 		// The member's session reads the entries; writes follow the book's mode.
 		const se = await call(entrySessionEntriesHandler, m.id, {
-			sessionId: created.res.session.id
+			sessionId: reading.id
 		})
 		expect((se.res as any).ownerOnly).toBeUndefined()
-		expect(await sessionLoreWriteMode(db(), created.res.session.id)).toBe(
+		expect(await sessionLoreWriteMode(db(), reading.id)).toBe(
 			await bookLoreWriteMode(db(), p.book.id)
 		)
 	})

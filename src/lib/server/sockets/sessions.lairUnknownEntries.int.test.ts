@@ -7,6 +7,7 @@
  * the delver has an active tie to it; the Castellan's own turn reads
  * everything. Story's half is `unknownEntries.reply.int.test.ts`.
  */
+import { appendFileSync } from "node:fs"
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { createHash } from "crypto"
 import fs from "fs/promises"
@@ -328,8 +329,8 @@ async function fire(w: World, entry: Record<string, unknown>, voice: string) {
 const pickBrannoc = (w: World) =>
 	fire(w, { ref: `character:${w.brannoc}`, via: "pick" }, "Brannoc")
 
-/** The notes of the `unknown-entries` node on the newest `lair-reply` run. */
-async function unknownEntriesNotes(w: World) {
+/** The notes of each lore-lane node (world lore, character lore, history) on the newest `lair-reply` run. */
+async function loreLaneNotes(w: World) {
 	const schema = await import("$lib/server/db/schema")
 	const runs = await testDb
 		.select({
@@ -342,13 +343,19 @@ async function unknownEntriesNotes(w: World) {
 	const run = runs
 		.filter((r) => r.specSlug === "core:spec/lair-reply")
 		.at(-1)!
-	const node = ((run.receipt as { nodes: any[] }).nodes ?? []).find((x) =>
-		/unknownEntries/.test(String(x.nodeKey))
-	)
-	return node ? ((node.notes as string[] | undefined) ?? []) : null
+	return ((run.receipt as { nodes: any[] }).nodes ?? [])
+		.filter((x) =>
+			/\.(worldLore|characterLore|historyEntries)\.read$/.test(String(x.nodeKey))
+		)
+		.map((x) => (x.notes as string[] | undefined) ?? [])
 }
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex")
+/** kn-2 lane evidence: with `KN2_SHA_LOG` set, each prompt's sha line is also appended there. */
+const kn2Note = (line: string) => {
+	console.info(line)
+	if (process.env.KN2_SHA_LOG) appendFileSync(process.env.KN2_SHA_LOG, line + "\n")
+}
 
 /** Where two prompts first part, with the words around it. */
 const firstDifference = (a: string, b: string) => {
@@ -366,34 +373,34 @@ describe("The Lair's delver turn and the knowledge filter", () => {
 		const second = await world()
 		const b = await pickBrannoc(second)
 		expect(b.prompt).toContain(SECRET)
-		console.info(
+		kn2Note(
 			`[unknown-entries lair baseline] sha256=${sha(a.prompt)} statements=${a.statements} (second world ${sha(b.prompt)}, ${b.statements})`
 		)
 		expect(firstDifference(a.prompt, b.prompt)).toBe("identical")
 	})
 
-	test("b: the node's receipt holds the nothing-marked sentence", async () => {
+	test("b: each lore-lane node's receipt holds the nothing-marked sentence", async () => {
 		const w = await world()
 		await pickBrannoc(w)
-		const notes = await unknownEntriesNotes(w)
-		expect(
-			notes,
-			"no unknown-entries node on the run's receipt"
-		).not.toBeNull()
-		expect(notes!.join(" ")).toContain(NOTHING_MARKED_RECEIPT)
+		const lanes = await loreLaneNotes(w)
+		expect(lanes.length, "no lore-lane node on the run's receipt").toBeGreaterThan(0)
+		for (const notes of lanes)
+			expect(notes.join(" ")).toContain(NOTHING_MARKED_RECEIPT)
 	})
 
 	test("c: marked and untied, the delver's own turn lacks the entry", async () => {
 		const w = await world()
 		await mark(w)
-		const { prompt } = await pickBrannoc(w)
+		const { prompt, statements } = await pickBrannoc(w)
+		kn2Note(`[kn-2 lair c] sha256=${sha(prompt)} statements=${statements}`)
 		expect(prompt).not.toContain(SECRET)
 	})
 
 	test("d: marked and untied, the Castellan's own turn still reads it", async () => {
 		const w = await world()
 		await mark(w)
-		const { prompt } = await fire(w, { ref: null }, "castellan")
+		const { prompt, statements } = await fire(w, { ref: null }, "castellan")
+		kn2Note(`[kn-2 lair d] sha256=${sha(prompt)} statements=${statements}`)
 		expect(prompt).toContain(SECRET)
 	})
 
@@ -407,7 +414,8 @@ describe("The Lair's delver turn and the knowledge filter", () => {
 			entryId: w.entryId,
 			kind: "knows"
 		})
-		const { prompt } = await pickBrannoc(w)
+		const { prompt, statements } = await pickBrannoc(w)
+		kn2Note(`[kn-2 lair e] sha256=${sha(prompt)} statements=${statements}`)
 		expect(prompt).toContain(SECRET)
 	})
 })

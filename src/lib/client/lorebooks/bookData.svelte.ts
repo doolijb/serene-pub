@@ -51,6 +51,13 @@ export interface BookData {
 	 * time control reads this, never the row.
 	 */
 	readonly timelineEnabled: boolean
+	/** The session whose own notes the open book is, or null when it is not a session's notes. */
+	readonly sessionId: number | null
+	/**
+	 * The sessions that read the open book, newest first (the list row's
+	 * `readBy`): a session's own notes are read by that session, open or not.
+	 */
+	readonly readBy: readonly { id: number; name: string | null }[]
 	/** The open book's name, or null when it is not known. */
 	readonly bookName: string | null
 	/** Whose book it is, by name — null when it is the reader's own or not known. */
@@ -139,6 +146,21 @@ export function bookReadOnly(): { readonly value: boolean } {
 }
 
 /**
+ * The sessions that read the open book (`readBy`) — empty outside the
+ * workspace. Call during init; the answer is a getter.
+ */
+export function bookReaders(): {
+	readonly value: readonly { id: number; name: string | null }[]
+} {
+	const data = getContext<BookData | undefined>(KEY)
+	return {
+		get value() {
+			return data?.readBy ?? []
+		}
+	}
+}
+
+/**
  * Whether the open book keeps a timeline — true outside the workspace (a
  * component mounted alone, or in a session page). Call during init; the
  * answer is a getter, so read it inside a `$derived`.
@@ -180,6 +202,8 @@ export function staticBookData(
 		library: BookLibrary | null
 		bookAccess: BookAccess
 		timelineEnabled: boolean
+		sessionId: number | null
+		readBy: { id: number; name: string | null }[]
 		bookName: string | null
 		ownerName: string | null
 	}>,
@@ -197,6 +221,12 @@ export function staticBookData(
 		},
 		get timelineEnabled() {
 			return values().timelineEnabled ?? true
+		},
+		get sessionId() {
+			return values().sessionId ?? null
+		},
+		get readBy() {
+			return values().readBy ?? []
 		},
 		get bookName() {
 			return values().bookName ?? null

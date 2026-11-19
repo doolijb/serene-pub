@@ -758,7 +758,8 @@ export async function followOpenSceneCast(
 		const moved = await refreshOpenSceneCast(db, {
 			sessionId: params.sessionId,
 			channel,
-			messageId: params.messageId
+			messageId: params.messageId,
+			placeKey: ctx.placeKey
 		})
 		if (!moved || !open) return null
 		if (params.io) {

@@ -1,6 +1,6 @@
 # Story
 
-Story is the genre for playing with characters: your characters and personas in a room with you, from a quiet conversation with one companion to a living world that keeps itself as you play. It is the everyday genre, and the one a new install starts you in.
+Story is the genre for playing with characters: your characters and personas in a room with you, from a quiet conversation with one companion to a living world that keeps itself as you play. It is the everyday genre, and the one a new pub starts you in.
 
 :::tip What it's for
 - Talking with one or more characters, as yourself or as a persona.
@@ -14,17 +14,17 @@ Pick **Story** on the start screen, then a **preset**. The preset is the one cho
 
 | Preset | What it does | Model calls per turn |
 | --- | --- | --- |
-| **Minimal** | One reply per turn. On a lorebook with a timeline, the clock moves on a few minutes each round; nothing else changes unless you change it. A new session's own notes start without a timeline, so messages show their real time (see [A timeline for a new session](./sessions.md#a-timeline-for-a-new-session)). Nobody is required: start with no characters and no persona if you like. | 1 |
+| **Minimal** | One reply per turn. On a lorebook with a timeline, the clock moves on a few minutes each round; nothing else changes unless you change it. Nobody is required: start with no characters and no persona if you like. | 1 |
 | **Living** (the default) | The world keeps itself, in words. After each round one more call reads what happened and writes it down: time, place, health, belongings, conditions. Every five turns a batched call looks back over the story and files lore and the cast. | 2, plus one look back every five turns |
 | **Rule Based** | The session's rules decide, in words where they have nothing to say. The same two calls as Living; the rules resolve what they can for free, and **How strict** stays at **The rules decide**. With no rules chosen it plays as Living, and the form says so. | 2, plus one look back every five turns |
 
-Each card says its number, worked out from what the preset runs. A preset may ask a question or two before you start (**Before you start**), such as the **Tone**. You can switch presets later under **Edit session › Settings › Preset**; it applies at once.
+Each card says its number, worked out from what the preset runs. A preset may ask a question or two before you start (**Before you start**) when an administrator set one of Story's settings, such as **Tone**, to **Ask at start** on it (none of the built-in presets does). You can switch presets later under **Edit session › Settings › Preset**; it applies at once.
 
 ### Who is in it
 
 - **Characters**: none, one or many. With several, the turn order decides who speaks: see [Group sessions](./group-sessions.md). With nobody seated at all — no character and no persona — there is no one to reply, so the composer stays closed and says so (*No one is here to reply yet*) until someone is added.
 - **You**: write as yourself, under your own name, or pick a persona. No persona is chosen for you.
-- **A lorebook**, if you like: the world's places, people, history and rules live there, and on Living and Rule Based the session writes back into it.
+- **A lorebook**, if you like: the world's places, people, history and rules live there, and on Living and Rule Based the session writes back into it. On every preset, a session's own notes start without a timeline (see [A timeline for a new session](./sessions.md#a-timeline-for-a-new-session) and [A lorebook's timeline](./lorebook-time.md#a-lorebooks-timeline)).
 - **Rules**, if you like: **Freeform** (no numbers, words only) is the default. Pick other rules and the form rates how well they fit Story: **Perfect**, **Great**, **Good**, **Ok**, **Poor** or **Incompatible**, with a line saying why. An administrator can open **Why?** beside a choice to see the whole examination.
 
 ### What it keeps
@@ -62,6 +62,8 @@ What each one does, and the switches it offers in its own card in the same Setti
 - **Picture each new scene** turns the last few lines into a picture when a scene opens. It needs a model that draws: on a pub without one it never runs, and its row says _Unavailable: needs a model that can draw pictures._ until an administrator sets one.
 
 **Each round moves the clock.** On every preset, when a round ends, the story clock moves on by the session's **Minutes each round moves the clock** (5 by default), with no model. It isn't a routine, so it isn't on the **Routines** card, and it has no card of its own: the amount is a setting, under **Turns** in Story's settings (0 turns it off). It moves only a story whose clock is set, the session's own or the one set on its lorebook's line; a story with no clock set is left alone and gets no line. 🚧 On a lorebook with no [timeline](./lorebook-time.md#a-lorebooks-timeline) no clock moves at all: not the round's, **Note what changed**'s, **After a rest**'s or **Time passes…**'s. The move shows under the line that ended the round and goes back if you delete that line, but not if you swipe or regenerate it (see [The story clock](./lorebook-time.md#the-story-clock)). **Note what changed**'s **Move the clock** switch ships off on every preset; switched on, both moves happen: the round's minutes, and the time the routine judges the story took (set the round's minutes to 0 for only the routine's).
+
+**Without a timeline.** A session on undated notes shows each message's real time, and no story time moves: no round's clock, **Note what changed**'s or **After a rest**'s, and **Time passes…** is refused with *This lorebook has no timeline, so its story time doesn't move.* No history day is kept (*This lorebook has no timeline, so no history is kept.*), and the Chronicle shows scenes only (*This lorebook keeps no timeline, so there are no story dates here.*). Scenes are still kept. To keep story time, switch **Keep a timeline** on when you start the session, switch the notes' **Timeline** on in Book settings, or start the session on a lorebook that keeps one (see [What you won't see](./lorebook-time.md#what-you-wont-see)).
 
 **When it runs.** **Note what changed** runs after each round unless you pick **After each turn** on its row in **Settings › Routines**: after each round notes a whole exchange at once; after each turn notes every line, which costs a model call per line.
 

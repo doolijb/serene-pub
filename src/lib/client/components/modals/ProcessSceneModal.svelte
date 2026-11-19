@@ -18,15 +18,12 @@
 		name?: string
 		participantCharacters: number[]
 		mentionedCharacters: number[]
-		suggestedParticipantCharacters?: string[]
-		suggestedMentionedCharacters?: string[]
 		raw: string
 	}
 
-	/** A name not yet backed by a real lorebookBindings id — either
-	 * suggested by character extraction or typed manually in review. Only
-	 * resolved to a real binding (matched or newly created) at Save. */
-	type PendingNewCharacter = { name: string; source: "suggested" | "manual" }
+	/** A name typed in review, not yet backed by a real lorebookBindings id.
+	 * Only resolved to a real binding (matched or newly created) at Save. */
+	type PendingNewCharacter = { name: string; source: "manual" }
 
 	interface Props {
 		open: boolean
@@ -85,24 +82,8 @@
 	)
 	let newParticipantId = $state("")
 	let newMentionedId = $state("")
-	let pendingNewParticipants = $state<PendingNewCharacter[]>(
-		untrack(() =>
-			(pendingResult?.suggestedParticipantCharacters ?? []).map(
-				(name) => ({
-					name,
-					source: "suggested" as const
-				})
-			)
-		)
-	)
-	let pendingNewMentioned = $state<PendingNewCharacter[]>(
-		untrack(() =>
-			(pendingResult?.suggestedMentionedCharacters ?? []).map((name) => ({
-				name,
-				source: "suggested" as const
-			}))
-		)
-	)
+	let pendingNewParticipants = $state<PendingNewCharacter[]>([])
+	let pendingNewMentioned = $state<PendingNewCharacter[]>([])
 	let newParticipantName = $state("")
 	let newMentionedName = $state("")
 	let isSaving = $state(false)
@@ -150,12 +131,8 @@
 		reviewContent = pendingResult.content
 		reviewParticipants = [...pendingResult.participantCharacters]
 		reviewMentioned = [...pendingResult.mentionedCharacters]
-		pendingNewParticipants = (
-			pendingResult.suggestedParticipantCharacters ?? []
-		).map((name) => ({ name, source: "suggested" as const }))
-		pendingNewMentioned = (
-			pendingResult.suggestedMentionedCharacters ?? []
-		).map((name) => ({ name, source: "suggested" as const }))
+		pendingNewParticipants = []
+		pendingNewMentioned = []
 	})
 
 	function addParticipant() {
@@ -337,12 +314,8 @@
 				reviewContent = result.content
 				reviewParticipants = [...(result.participantCharacters ?? [])]
 				reviewMentioned = [...(result.mentionedCharacters ?? [])]
-				pendingNewParticipants = (
-					result.suggestedParticipantCharacters ?? []
-				).map((name) => ({ name, source: "suggested" as const }))
-				pendingNewMentioned = (
-					result.suggestedMentionedCharacters ?? []
-				).map((name) => ({ name, source: "suggested" as const }))
+				pendingNewParticipants = []
+				pendingNewMentioned = []
 				step = "review"
 			} else if (status === "error") {
 				errorMessage = failure || "The scene was not summarized."
@@ -382,12 +355,8 @@
 		reviewContent = msg.content
 		reviewParticipants = [...msg.participantCharacters]
 		reviewMentioned = [...msg.mentionedCharacters]
-		pendingNewParticipants = (msg.suggestedParticipantCharacters ?? []).map(
-			(name) => ({ name, source: "suggested" as const })
-		)
-		pendingNewMentioned = (msg.suggestedMentionedCharacters ?? []).map(
-			(name) => ({ name, source: "suggested" as const })
-		)
+		pendingNewParticipants = []
+		pendingNewMentioned = []
 		step = "review"
 	}
 

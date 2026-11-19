@@ -12,7 +12,7 @@ import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
-import { PROVIDED_BOOK_CAST_REFUSAL } from "$lib/server/plugins/providedMarks"
+import { primerRowEditRefusal } from "$lib/server/plugins/providedMarks"
 import { insertCastMember } from "$lib/server/characters/versions"
 import { memberColumnsOfVersion } from "$lib/server/lorebooks/retold"
 
@@ -240,7 +240,7 @@ describe("own names on a carded member", () => {
 	})
 })
 
-describe("a provided book keeps its cast's names and faces", () => {
+describe("a live provided lorebook refuses every edit of its cast; its clone and an uninstalled book's copy accept", () => {
 	async function provided(plugin = "acme", installed = true) {
 		const s = await setup()
 		await s.update({ ownName: "Maren" })
@@ -270,7 +270,7 @@ describe("a provided book keeps its cast's names and faces", () => {
 		return s
 	}
 
-	test("a change to the own name, own nickname, face or face flag is refused", async () => {
+	test("a change to the own name, own nickname, face or face flag is refused with the general sentence", async () => {
 		const { update, row } = await provided()
 		for (const fields of [
 			{ ownName: "Other" },
@@ -280,22 +280,24 @@ describe("a provided book keeps its cast's names and faces", () => {
 			{ retold: { face: true } }
 		])
 			await expect(update(fields)).rejects.toThrow(
-				PROVIDED_BOOK_CAST_REFUSAL
+				primerRowEditRefusal("acme")
 			)
 		expect((await row()).ownName).toBe("Maren")
 	})
 
-	test("a save that sends the stored values is not refused", async () => {
+	test("a save that sends the stored values is refused too, and nothing changes", async () => {
 		const { update, row } = await provided()
 		const stored = await row()
-		const res = await update({
-			ownName: stored.ownName,
-			ownNickname: stored.ownNickname,
-			faceMediaId: stored.faceMediaId,
-			retold: stored.retold,
-			summary: "Edited"
-		})
-		expect(res.ownName).toBe("Maren")
+		await expect(
+			update({
+				ownName: stored.ownName,
+				ownNickname: stored.ownNickname,
+				faceMediaId: stored.faceMediaId,
+				retold: stored.retold,
+				summary: "Edited"
+			})
+		).rejects.toThrow(primerRowEditRefusal("acme"))
+		expect(await row()).toEqual(stored)
 	})
 
 	test("its clone carries the own names and accepts a new one", async () => {
@@ -335,10 +337,10 @@ describe("a provided book keeps its cast's names and faces", () => {
 		expect((await row()).ownName).toBe("Other")
 	})
 
-	test("a core-marked book refuses", async () => {
+	test("a core-marked book refuses with the core sentence", async () => {
 		const { update, row } = await provided("core", false)
 		await expect(update({ ownName: "Other" })).rejects.toThrow(
-			PROVIDED_BOOK_CAST_REFUSAL
+			primerRowEditRefusal(null)
 		)
 		expect((await row()).ownName).toBe("Maren")
 	})

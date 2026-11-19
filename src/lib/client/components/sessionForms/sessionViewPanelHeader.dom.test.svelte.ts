@@ -28,7 +28,8 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 	declareInterest: (key: string, handler: (msg: any) => void) => {
 		listeners.set(key, handler)
 		return () => listeners.delete(key)
-	}
+	},
+	requestWithInterest: (_event: string, _params: unknown, _handler: (msg: any) => void) => () => {}
 }))
 
 import SessionViewPanel from "./SessionViewPanel.svelte"
@@ -49,16 +50,16 @@ afterEach(() => {
 	document.body.innerHTML = ""
 })
 
-async function mountPanel(canEdit: boolean) {
+async function mountPanel(canEdit: boolean, isOwner = canEdit, session: object = SESSION) {
 	const onOpen = vi.fn()
 	const onEdit = vi.fn()
 	app = mount(SessionViewPanel, {
 		target: document.body,
-		props: { sessionId: SESSION.id, onOpen, onEdit, canEdit }
+		props: { sessionId: SESSION.id, onOpen, onEdit, canEdit, isOwner, onViewLorebook: () => {} }
 	})
 	flushSync()
 	await tick()
-	for (const handler of listeners.values()) handler({ session: SESSION })
+	for (const handler of listeners.values()) handler({ session })
 	flushSync()
 	await tick()
 	return { onOpen, onEdit }
@@ -85,9 +86,30 @@ describe("Session detail header (notes 32)", () => {
 		expect(onEdit).toHaveBeenCalledOnce()
 	})
 
+	test("a guest's button opens the participants view and says so", async () => {
+		const { onEdit } = await mountPanel(true, false)
+		expect(button("Edit")).toBeUndefined()
+		const participants = button("Participants")
+		expect(participants, "a labelled Participants button").toBeTruthy()
+		participants!.click()
+		expect(onEdit).toHaveBeenCalledOnce()
+	})
+
 	test("a reader who cannot edit sees no Edit", async () => {
 		await mountPanel(false)
 		expect(button("Open session")).toBeTruthy()
 		expect(button("Edit")).toBeUndefined()
+	})
+
+	test("View lorebook is the owner's: absent for a guest, in the card and the menu", async () => {
+		const withBook = { ...SESSION, lorebookId: 5, lorebookName: "Stair" }
+		await mountPanel(true, false, withBook)
+		expect(button("View lorebook")).toBeUndefined()
+		unmount(app!)
+		app = null
+		listeners.clear()
+		document.body.innerHTML = ""
+		await mountPanel(true, true, withBook)
+		expect(button("View lorebook")).toBeTruthy()
 	})
 })

@@ -23,6 +23,7 @@
  * No node can do it: a cancelled run has nothing left to run.
  */
 
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
 import { appletOfSession, frameCauseFor, type FrameCause } from "$lib/server/sockets/appletCause"
 import {
 	run,
@@ -119,7 +120,10 @@ import { hostSeatRefOf } from "$lib/server/pipelines/prompt/seatCards"
 import { memberFormOn } from "$lib/server/state/memberForm"
 import { parseSeatRef, seatInPlay, seatOf } from "$lib/server/sessions/seats"
 import * as schema from "$lib/server/db/schema"
-import { ceilingFor } from "$lib/server/pipelines/runtime/callTether"
+import { ComposedError } from "$lib/server/connections/visibility"
+import { forPeople, takePeopleSentence } from "./host.types"
+import { receiptPeopleSentence } from "./haltExplanation"
+import { ceilingFor, stepTimeLimitsOff } from "$lib/server/pipelines/runtime/callTether"
 import { currentRunFamily, withRunFamily } from "$lib/server/utils/llmQueue"
 
 export class PipelineUnavailableError extends Error {}
@@ -965,6 +969,9 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	// before scripts existed" — chains and attachments kept, waiting.
 	const scriptsOn = await scriptsEnabledFor(request.db)
 
+	// 🚧 The diagnostic switch (Admin › Diagnostics), read once as the run starts: a change reaches runs that start after it.
+	const limitsOff = await stepTimeLimitsOff(request.db)
+
 	// The extension-hook executor. Behind the same seam as core scripts and
 	// gated three ways: chains must be on at all, the plugin subsystem must be
 	// enabled (dark by default in 0.6), and startup must have finished so a
@@ -1058,7 +1065,10 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	const { resolveSessionSettings } = await import(
 		"$lib/server/sessions/settings"
 	)
-	const session = await resolveSessionSettings(request.db, request.sessionId)
+	const host = createHost(request.db, scope)
+	const session = await resolveSessionSettings(request.db, request.sessionId, {
+		host
+	})
 	const input =
 		session &&
 		request.input &&
@@ -1131,7 +1141,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// render going — the SDK's `TaskCtx` carries no run id for a binding to
 		// read, so this is where the association has to be made.
 		bindings: { ...coreBindings({ runId, user, seed }), ...pluginNodes },
-		host: createHost(request.db, scope),
+		host,
 		// The script engine, behind the executor's seam (18 §4a). Chains are
 		// config, so which ones run is already decided by the world above;
 		// this is only *how* a link executes — sandboxed, seeded, recorded.
@@ -1198,6 +1208,8 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// (`callTether`); this is what still ends one that never ends.
 		// 🚧 LS3: chosen per run, from its trigger family (`ceilingFor`).
 		timeoutCeilingMs: ceilingFor(triggerFamilyOf(request)),
+		// 🚧 Diagnostic switch on: the executor applies no step limit and no ceiling; Stop still ends the run.
+		...(limitsOff ? { stepTimeLimitsOff: true } : {}),
 		/**
 		 * The run-level guarantee (R-17): a row this run created and did not
 		 * fill is finalised here — stopped with the partial text, failed with
@@ -1212,6 +1224,24 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 			// in the receipt becomes the plain sentence (`receipts.ts`), for
 			// the row, its notification, the stored run and every caller.
 			receiptWithoutQueryText(end.receipt)
+			// The people sentence the halt's raise site marked, when it is the one
+			// that ended this run, rides the receipt (`meta.peopleSentence`).
+			const people = takePeopleSentence(runId, end.receipt.haltReason)
+			if (
+				(end.receipt.outcome === "halt" || end.receipt.outcome === "err") &&
+				typeof people === "string"
+			)
+				end.receipt.meta = {
+					...(end.receipt.meta ?? {}),
+					peopleSentence: people
+				}
+			// The failed row stores that sentence as written.
+			const peopleWords = receiptPeopleSentence(end.receipt)
+			if (
+				peopleWords !== undefined &&
+				(end.kind === "err" || end.kind === "halt")
+			)
+				live.failedWith(forPeople(new ComposedError(peopleWords), peopleWords))
 			// `status.end()` in `finally`: a row that failed to finalise must
 			// not also leave the session list stuck on the run's last status —
 			// a rejecting `finish` would otherwise skip straight past it and
@@ -1269,6 +1299,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	}).catch(async (error: unknown) => {
 		// 🚧 A run that threw settles no line (A1): forget what it landed.
 		(await import("$lib/server/pipelines/runtime/settledLines")).dropLandedLines(runId)
+		takePeopleSentence(runId, undefined)
 		// 🚧 Every run records its receipt (lair fix 2): a throw ends the run
 		// as `err` (the executor wrote the reason), and the receipt is saved
 		// before the throw goes on to the caller, as a returned one is below.
@@ -1602,7 +1633,7 @@ async function dispatchAddressedForms(
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, request.sessionId))
 		.limit(1)
-	const genreId = session?.genreId ?? "core:genre/chat"
+	const genreId = session?.genreId ?? STANDARD_GENRE_ID
 	const lineage = childLineage({ runId: receipt.runId, lineage: request.lineage })
 	const { resolveSessionEventSpec } = await import(
 		"$lib/server/pipelines/runtime/sessionEvents"

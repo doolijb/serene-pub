@@ -167,6 +167,7 @@ export const OUTLET_WRITES: Record<string, string> = {
 	"core:outlet/update-character": "changes a character",
 	"core:outlet/create-lorebook": "makes a lorebook",
 	"core:outlet/link-lore-entries": "links lore entries",
+	"core:outlet/note-entry-knowledge": "notes who knows a lore entry",
 	"core:outlet/graph-proposal": "proposes a state change"
 }
 

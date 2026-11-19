@@ -47,7 +47,8 @@ export interface Exclusion {
 /** `core:query/cast-presences@1`'s row. */
 export interface PresenceRow {
 	bindingId: number
-	from: StoryDate
+	/** Null: the span is ignored (a lorebook with no timeline), the member is present. */
+	from: StoryDate | null
 	until: StoryDate | null
 	position?: number | null
 }
@@ -113,7 +114,7 @@ const canonical = (ref: unknown): string | null => {
 }
 
 /** A presence row back in the flat shape `holdsAt` reads. */
-function asPresence(row: PresenceRow, i: number): Presence {
+function asPresence(row: PresenceRow & { from: StoryDate }, i: number): Presence {
 	return {
 		id: i,
 		castId: row.bindingId,
@@ -151,7 +152,7 @@ export function applyEligibility(input: EligibilityInput): {
 	;(input.presences ?? []).forEach((row, i) => {
 		if (!row || typeof row.bindingId !== "number" || !row.from) return
 		const list = presencesOf.get(row.bindingId) ?? []
-		list.push(asPresence(row, i))
+		list.push(asPresence(row as PresenceRow & { from: StoryDate }, i))
 		presencesOf.set(row.bindingId, list)
 	})
 	const at = input.at ?? null

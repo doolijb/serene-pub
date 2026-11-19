@@ -37,6 +37,11 @@ export interface ComposerFlowDeps {
 	restoreDraft(content: string): void
 	/** The viewer's user id — whose pushed row is their own send landing. */
 	userId(): number | null
+	/**
+	 * Whether the viewer is an administrator: the token count is theirs alone
+	 * (`readsPrompt`), so only they ask for it.
+	 */
+	isAdmin(): boolean
 }
 
 /** The page's composer half. Registers its listeners on the inbox at once. */
@@ -216,6 +221,7 @@ export function createComposerFlow(d: ComposerFlowDeps) {
 		const _newMessage = newMessage // DO NOT REMOVE THIS LINE - REACTIVITY TRIGGER
 		if (!sessionId || !lastSettledMessageKey) return
 		if (!systemSettingsCtx.settings?.contextDebuggingEnabled) return
+		if (!d.isAdmin()) return
 		if (promptTokenCountTimeout) clearTimeout(promptTokenCountTimeout)
 		promptTokenCountTimeout = setTimeout(() => {
 			socket.emit("sessions:promptTokenCount", {

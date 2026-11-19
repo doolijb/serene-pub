@@ -191,6 +191,9 @@ describe("0108 layering registrations", () => {
 		})
 		expect(p3.filter((r) => r.dropped && r.key.includes("#")).map((r) => r.key).sort()).toEqual(
 			[
+				// ⏳ The speech verbs (`read-aloud`, `say-it-as`) are dropped with every action an include list does not name, though no list could have named them. Pinned as it behaves; whether universal message verbs are kept is open (plans/DISCUSS-LATER.md D23).
+				"speak-message#read-aloud→speak-message",
+				"speak-message#say-it-as→speak-message",
 				"story-advance-time#advance-time→story-advance-time",
 				"story-answer#answer→story-answer",
 				"story-generate-image#generate-image→story-generate-image",

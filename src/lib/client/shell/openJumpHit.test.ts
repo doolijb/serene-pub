@@ -202,6 +202,20 @@ describe("openSessionPage — the one way a session opens", () => {
 	})
 })
 
+describe("openSessionPage — a phone's sheet", () => {
+	test("closes after the navigation, never before it", async () => {
+		const seen: Array<string | null> = []
+		const ctx = { isMobileMenuOpen: false, mobilePanel: "sessions" } as unknown as PanelsCtx
+		goto.mockClear()
+		goto.mockImplementationOnce(async () => {
+			seen.push(ctx.mobilePanel)
+		})
+		await openSessionPage(ctx, 9)
+		expect(seen).toEqual(["sessions"])
+		expect(ctx.mobilePanel).toBeNull()
+	})
+})
+
 /**
  * The docs are the one kind whose id is not a number, so the branch is pinned,
  * and so is the guard it has to run in front of.

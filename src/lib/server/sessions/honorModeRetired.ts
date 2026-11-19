@@ -32,7 +32,7 @@
  * drops it: a second boot finds none and changes nothing.
  *
  * **When it can go.** When no 0.6 data older than the rename can still arrive
- * (the 0.7 squash, or the importer no longer accepting older files).
+ * (the 0.7 squash, or the importer refusing older files).
  *
  * Imports are leaf only (schema, drizzle) and `db` is a parameter:
  * `db/defaults.ts` reaches this from `sync()`.

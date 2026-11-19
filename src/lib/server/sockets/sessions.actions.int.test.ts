@@ -1571,7 +1571,9 @@ describe("sessions:fireAction announces its run (R-19)", () => {
 		expect(told).toEqual([{ sessionId: session.id, frame: { sessionId: session.id, runId: res.runId, outcome: "ok" } }])
 	}, 60_000)
 
-	test("🚧 M2a a6: a press whose run halts answers { halted: true, reason, runId }, and sessions:runEnded carries the halt and its sentence", async () => {
+	const PLAIN_RUN_ENDED_REASON = "The action could not finish. An administrator can see the details."
+
+	test("🚧 M2a a6: a press whose run halts answers { halted: true, reason, runId }, and sessions:runEnded carries the halt in plain words", async () => {
 		const { sessionsFireActionHandler } = await import("./sessions")
 		const { owner, session } = await sessionWithGuest("run-ended-halt")
 		await publishActionSpec("core:spec/test-run-ended-halt", { key: "stumble" }, { halts: true })
@@ -1584,10 +1586,27 @@ describe("sessions:fireAction announces its run (R-19)", () => {
 		expect(res.halted).toBe(true)
 		expect(typeof res.runId).toBe("string")
 		expect(res.reason).toBe(res.error)
-		expect(res.reason).toMatch(/stop/)
+		expect(res.reason).toBe(PLAIN_RUN_ENDED_REASON)
 		const told = runEndedHooks.told.filter((t) => t.frame.runId === res.runId)
 		expect(told).toEqual([
-			{ sessionId: session.id, frame: { sessionId: session.id, runId: res.runId, outcome: "halt", reason: res.reason } }
+			{ sessionId: session.id, frame: { sessionId: session.id, runId: res.runId, outcome: "halt", reason: PLAIN_RUN_ENDED_REASON } }
+		])
+	}, 60_000)
+
+	test("🚧 M2a a6: the same halting press by an administrator tells sessions:runEnded the same plain words", async () => {
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const { owner, session } = await sessionWithGuest("run-ended-halt-admin")
+		await publishActionSpec("core:spec/test-run-ended-halt-admin", { key: "trip" }, { halts: true })
+		runEndedHooks.told.length = 0
+		const res = await sessionsFireActionHandler.handler(
+			fakeSocket(owner.id, true),
+			{ sessionId: session.id, action: "core:spec/test-run-ended-halt-admin#trip" },
+			noopEmit
+		)
+		expect(res.halted).toBe(true)
+		const told = runEndedHooks.told.filter((t) => t.frame.runId === res.runId)
+		expect(told).toEqual([
+			{ sessionId: session.id, frame: { sessionId: session.id, runId: res.runId, outcome: "halt", reason: PLAIN_RUN_ENDED_REASON } }
 		])
 	}, 60_000)
 

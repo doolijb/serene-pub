@@ -314,8 +314,7 @@
 								onCheckedChange={(e) => (keepTimeline = e.checked)}
 							/>
 							<p class="text-surface-600-400 text-xs">
-								<!-- 🚧 -->Dates, history and a story clock. You can turn it
-								on later in Book settings.
+								<!-- 🚧 -->Dates, history and a story clock.{#if !keepTimeline}{" "}You can turn it on later in Book settings.{/if}
 							</p>
 						</div>
 					{/if}

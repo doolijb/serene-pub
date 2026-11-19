@@ -21,12 +21,6 @@ import {
 	writeSceneCast
 } from "$lib/server/utils/sceneCast"
 import {
-	buildSceneCastList,
-	reconcileParticipantsAndMentioned,
-	reconcileSuggestedNames,
-	resolveCharacterRefs
-} from "$lib/server/utils/summarizer/availableSceneCast"
-import {
 	resolveCapabilityTarget,
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
@@ -38,6 +32,7 @@ import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
 import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { loreSourceIdsOf } from "$lib/server/pipelines/runtime/loreSources"
+import { haltExplanationFor } from "$lib/server/pipelines/runtime/haltExplanation"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
 import {
 	compareDates,
@@ -61,6 +56,7 @@ import { onLineSql } from "$lib/server/state/lineSql"
 import { lockBookCalendar } from "$lib/server/state/storyTime"
 import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
 import { bookShownName } from "$lib/server/lorebooks/notesShown"
+import { withoutSceneText } from "$lib/server/scenes/sceneListShape"
 import { TIMELINE_OFF_SENTENCES, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import {
 	sceneDay,
@@ -76,6 +72,10 @@ import {
 	assertReadableBook,
 	findOwnedBook
 } from "$lib/server/utils/ownedBook"
+import {
+	RUN_LOCK_SENTENCES,
+	sceneLockedAgainstRuns
+} from "$lib/shared/lorebooks/runLocks"
 
 /**
  * Every downstream consumer (graphBuilder.ts, lorebookExportMapper.ts,
@@ -88,8 +88,8 @@ import {
  * These arrays hold **lorebookBindings ids**, not character ids. This scoped
  * by `b.characterId` until now, which is pre-merge semantics the column
  * outgrew — every producer feeding it emits binding ids
- * (scenes:process/sessions:summarize via resolveCharacterRefs' castEntries[].id
- * and resolveOrCreateBinding; the graph build via its seed map). Filtering
+ * (scenes:process via resolveOrCreateBinding; the graph build via its seed
+ * map). Filtering
  * binding ids through a characterId lookup silently dropped any id that
  * didn't coincidentally equal some bound character's id — and an unbound
  * background/NPC binding, whose characterId is NULL, could never match at
@@ -218,10 +218,13 @@ const SCENE_REPLY_COLUMNS = { embedding: false, embeddingModel: false } as const
  * by `emitToUser`, where the handler's own reply would surface it as an error
  * event.
  */
-async function buildSceneList(
+async function buildSceneListFull(
 	sessionId: number,
 	userId: number
-): Promise<Sockets.Scenes.List.Response> {
+): Promise<{
+	reply: Sockets.Scenes.List.Response
+	isOwner: boolean
+}> {
 	// Read access: any session participant (owner or guest) can view scenes —
 	// this fires on every session page load, so an owner-only check here
 	// locks guests out of the session entirely, not just scene management.
@@ -268,22 +271,52 @@ async function buildSceneList(
 		...castFor(casts, s.id),
 		loreSources: sources.get(s.id) ?? null,
 		...causeKeys(causes.get(s.id)),
-		historyEntry: s.historyEntry
-			? {
-					id: s.historyEntry.id,
-					...historyDateOf(s.historyEntry),
-					isCompleted: s.historyEntry.fields?.isCompleted ?? false
-				}
-			: null
+		// An entry with no year (a legacy row) reads as no entry: the scene lists
+		// as unfiled, never at a Year 1 nobody wrote.
+		historyEntry:
+			s.historyEntry && historyDateOf(s.historyEntry).year !== null
+				? {
+						id: s.historyEntry.id,
+						...historyDateOf(s.historyEntry),
+						isCompleted: s.historyEntry.fields?.isCompleted ?? false
+					}
+				: null
 	}))
 
 	return {
-		// Present so the interest scope can be derived — one builder, so every
-		// emit of this event carries it: the handler's own reply and the three
-		// write cascades alike.
-		sessionId,
-		sceneList: sceneList as unknown as Sockets.Scenes.List.SceneWithEntry[]
+		isOwner: sessionAccess.isOwner,
+		reply: {
+			// Present so the interest scope can be derived — one builder, so every
+			// emit of this event carries it: the handler's own reply and the three
+			// write cascades alike.
+			sessionId,
+			sceneList: sceneList as unknown as Sockets.Scenes.List.SceneWithEntry[]
+		}
 	}
+}
+
+/**
+ * The list as `userId` is sent it: a guest (an administrator in another
+ * person's session included) gets no `summary` or `notes` text, only
+ * `hasSummary` (`sceneListShape.ts`).
+ */
+async function buildSceneList(
+	sessionId: number,
+	userId: number
+): Promise<Sockets.Scenes.List.Response> {
+	const { reply, isOwner } = await buildSceneListFull(sessionId, userId)
+	return isOwner ? reply : withoutSceneText(reply)
+}
+
+/**
+ * The full list for a broadcast: `broadcastToSessionUsers` shapes each
+ * recipient's copy (it looks the session's owner up once).
+ */
+async function buildSceneListForBroadcast(
+	sessionId: number,
+	userId: number
+): Promise<Sockets.Scenes.List.Response> {
+	return (await buildSceneListFull(sessionId, userId)).reply
 }
 
 export const sceneListHandler: Handler<
@@ -572,6 +605,8 @@ export async function saveSceneSummary(input: {
 	by: "person" | "routine"
 	userId: number
 	params: Sockets.Scenes.Update.Params
+	/** Why a person's write was made: their own save, or a Restore from the scene's Edit history. */
+	cause?: "save" | "restore"
 	io?: unknown
 	emitToUser?: (event: string, data: any) => void | Promise<void>
 	/** The routine's run: the spec that ran, the model's name for the scene, and what the summary was written from. */
@@ -603,7 +638,21 @@ export async function saveSceneSummary(input: {
 	// A session's scene saved is a session writing the book: lore writes
 	// Off refuses it, as it refuses the scene's creation (plan A22). A
 	// scene with no session is a person at a book, which it does not touch.
-	if (existing.sessionId != null) {
+	// An update that carries only the scene lock is no lore write.
+	const lockOnly =
+		!byRoutine &&
+		typeof params.scene.sceneLock === "boolean" &&
+		(
+			[
+				"name",
+				"summary",
+				"selectedMessageIds",
+				"participantCharacters",
+				"mentionedCharacters",
+				"graphed"
+			] as const
+		).every((k) => params.scene[k] === undefined)
+	if (existing.sessionId != null && !lockOnly) {
 		const off = await loreWritesOffRefusal(db, existing.sessionId)
 		if (off) throw new Error(off)
 	}
@@ -624,6 +673,11 @@ export async function saveSceneSummary(input: {
 		mentionedCharacters,
 		graphed
 	} = params.scene
+	// The lock is a person's to set; the routine never carries it.
+	const sceneLock =
+		!byRoutine && typeof params.scene.sceneLock === "boolean"
+			? params.scene.sceneLock
+			: undefined
 
 	// Cast is only rewritten when the payload actually carries it; a rename
 	// or summary edit leaves the existing scene_characters rows alone. The routine
@@ -790,7 +844,8 @@ export async function saveSceneSummary(input: {
 					// A rename or a summary edit must not — otherwise every scene
 					// touched for any reason would claim it needs no extraction.
 					...(carriesCast ? { castResolvedAt: new Date() } : {}),
-					...(graphed !== undefined ? { graphed } : {})
+					...(graphed !== undefined ? { graphed } : {}),
+					...(sceneLock !== undefined ? { sceneLock } : {})
 				}
 		if (byRoutine) {
 			// Only while the scene still reads `running`: a person who saved, discarded
@@ -801,7 +856,8 @@ export async function saveSceneSummary(input: {
 				.where(
 					and(
 						eq(schema.scenes.id, params.scene.id),
-						eq(schema.scenes.summaryStatus, "running")
+						eq(schema.scenes.summaryStatus, "running"),
+						eq(schema.scenes.sceneLock, false)
 					)
 				)
 				.returning({ id: schema.scenes.id })
@@ -819,7 +875,8 @@ export async function saveSceneSummary(input: {
 			await writeSceneCast(
 				params.scene.id,
 				{ participantCharacters, mentionedCharacters },
-				tx
+				tx,
+				{ by: { userId }, cause: input.cause ?? "save" }
 			)
 		}
 
@@ -913,13 +970,20 @@ export async function saveSceneSummary(input: {
 		)
 	}
 
+	let note: string | undefined
+	if (!landed) {
+		if (sceneLockedAgainstRuns(updated)) {
+			const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
+			const shown = (await sceneDisplayNames(db, [updated])).get(updated.id)
+			note = RUN_LOCK_SENTENCES.scene(shown ?? updated.name ?? "This scene")
+		} else
+			note =
+				"The scene's summary changed while the routine was writing it, so the routine saved nothing."
+	}
+
 	return {
 		saved: landed,
-		...(landed
-			? {}
-			: {
-					note: "The scene's summary changed while the routine was writing it, so the routine saved nothing."
-				}),
+		...(note ? { note } : {}),
 		scene: { ...updated, ...(await readSceneCast(params.scene.id)) }
 	}
 }
@@ -1472,8 +1536,9 @@ export const sceneCompileHandler: Handler<
 						{ lorebookId: lorebookId!, branchId: askedBranchId, date },
 						{ create: true }
 					)
-					// A dateless press on a line with no dated entry makes Year 1,
-					// Month 1, Day 1; a moment before that is a refusal the entry
+					// A dateless press on a line with no dated entry files under the
+					// line's story clock's day, or is refused (`historyEntryOfDate`);
+					// a moment before the made entry's date is a refusal the entry
 					// path would make anyway, so the creation is rolled back here.
 					if (
 						made.created &&
@@ -2094,28 +2159,8 @@ export async function processScene(
 			return failRun("No messages found for this scene.")
 		}
 
-		const charIds = [
-			...new Set(
-				rawMessages
-					.filter((m) => m.characterId)
-					.map((m) => m.characterId!)
-			)
-		]
-		const personaIds = [
-			...new Set(
-				rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
-			)
-		]
-
-		const knownCast = await buildSceneCastList(
-			params.sceneId,
-			scene.lorebookId,
-			scene.sessionId ?? null
-		)
-
 		/**
-		 * The scene summarize pipeline — its own namespace, with the cast
-		 * extraction step the other three lore types do not carry. Stopped
+		 * The scene summarize pipeline — its own namespace. Stopped
 		 * before its `save` consumer: this handler's result goes to the
 		 * Review & Save screen, and the save there is the person's act.
 		 */
@@ -2124,8 +2169,6 @@ export async function processScene(
 			name?: string
 			raw: string
 			batchCount: number
-			participantCharacters?: any[]
-			mentionedCharacters?: any[]
 		}
 		// A failure here — the model's service, a query — reaches the catch
 		// that ends this run's card, in the card's own sentence.
@@ -2186,7 +2229,6 @@ export async function processScene(
 					// (`sceneId`, `channel`, `openedAt`, `closedAt`) and
 					// the asides beside it.
 					messageIds: sceneMessageIds,
-					knownCast,
 					sceneId: scene.id,
 					channel: scene.channel,
 					// What the transcript's preamble names (`render`'s
@@ -2242,16 +2284,25 @@ export async function processScene(
 			(receipt.nodes.find((n: any) => n.nodeKey === key) as any)
 				?.output
 		const content: string | undefined = nodeOut("synth")?.content
-		const castOut = nodeOut("cast")?.cast
 
 		if (!content) {
 			const why =
 				receipt.haltReason ??
 				"the pipeline stopped without producing a summary"
+			// Only an administrator reads the reason; the routine has no
+			// socket, so the reader is looked up by id.
+			const reader = await db.query.users.findFirst({
+				where: eq(schema.users.id, userId),
+				columns: { isAdmin: true }
+			})
 			return failRun(
-				receipt.haltNodeKey
-					? `${why} (at '${receipt.haltNodeKey}')`
-					: why
+				haltExplanationFor(
+					reader,
+					"summary",
+					receipt.haltNodeKey
+						? `${why} (at '${receipt.haltNodeKey}')`
+						: why
+				)
 			)
 		}
 
@@ -2263,9 +2314,7 @@ export async function processScene(
 				String(n.typeId ?? "").startsWith(
 					"core:oracle/summarize-batch"
 				)
-			).length,
-			participantCharacters: castOut?.participants,
-			mentionedCharacters: castOut?.mentioned
+			).length
 		}
 
 		// Cooperating abort can make the call above resolve normally (with a
@@ -2345,71 +2394,42 @@ export async function processScene(
 			processedBySpecId: resolvedSpec.specId
 		})
 
-		// Resolve the LLM's raw name output against the same knownCast built
-		// above — a name that matches nothing becomes a suggested name
-		// instead of an immediate new binding, so the user gets to accept or
-		// reject it on the Review & Save screen before anything is created
-		// (see resolveOrCreateBindingByName, called at Save time).
-		const {
-			participantIds,
-			mentionedIds,
-			suggestedParticipants,
-			suggestedMentioned
-		} = (() => {
-			const participants = resolveCharacterRefs(
-				result.participantCharacters ?? [],
-				knownCast
-			)
-			// ⚠ ICED (plan §1/§6). `result.mentionedCharacters` is deliberately
-			// not resolved: `mentioned` is derived from `message_annotations`
-			// now (utils/sceneMentions.ts) and is internal — §6 ruled it is not
-			// surfaced — so the Review & Save screen has nothing to write back.
-			// The field is left on `result` so reviving the extraction is a
-			// one-line change rather than a re-derivation.
-			const suggested = reconcileSuggestedNames(
-				participants.suggestedNames,
-				[]
-			)
-			return {
-				participantIds: participants.ids,
-				mentionedIds: [] as number[],
-				suggestedParticipants: suggested.participants,
-				suggestedMentioned: suggested.mentioned
-			}
-		})()
-
-		// Guarantee: whoever actually sent a message in this scene is a
-		// participant, regardless of what the extraction LLM decided —
-		// charIds/personaIds (every distinct sender) were already computed
-		// above for building sender names.
+		// ⚠ The seed never reads a model's cast (who spoke is code's to decide, P1);
+		// a person adds anyone else by hand in the review. `mentioned` is derived
+		// from `message_annotations` (utils/sceneMentions.ts) and is internal, not
+		// surfaced.
+		// The seed is the senders core's cast rule keeps: who sent at least one
+		// line and whose place does not rule them out (`sceneCastSpeakers`).
 		//
 		// A sender whose card was deleted, and no member has, is left out
 		// rather than given a member (null).
+		const { sceneCastSpeakers } = await import(
+			"$lib/server/scenes/liveScenes"
+		)
+		const speakers = await sceneCastSpeakers(
+			db,
+			{ sessionId: scene.sessionId!, lorebookId: scene.lorebookId },
+			rawMessages as any
+		)
 		const senderBindingIds = new Set<number>()
-		for (const characterId of [...charIds, ...personaIds]) {
+		for (const ref of speakers) {
+			const [kind, id] = ref.split(":")
+			if (kind === "member") {
+				senderBindingIds.add(Number(id))
+				continue
+			}
 			const memberId = await resolveOrCreateBinding({
 				lorebookId: scene.lorebookId,
-				characterId
+				characterId: Number(id)
 			})
 			if (memberId != null) senderBindingIds.add(memberId)
 		}
 
-		const {
-			participants: resolvedParticipants,
-			mentioned: resolvedMentioned
-		} = reconcileParticipantsAndMentioned(
-			participantIds,
-			mentionedIds,
-			senderBindingIds
-		)
-
 		const pendingResult = {
 			content: result.content ?? result.raw ?? "",
 			name: result.name ?? shownSceneName ?? scene.name ?? undefined,
-			participantCharacters: resolvedParticipants,
-			mentionedCharacters: resolvedMentioned,
-			suggestedParticipantCharacters: suggestedParticipants,
-			suggestedMentionedCharacters: suggestedMentioned,
+			participantCharacters: [...senderBindingIds],
+			mentionedCharacters: [] as number[],
 			raw: result.raw
 		}
 
@@ -2973,6 +2993,24 @@ export function runSceneSummaries(
 	})()
 }
 
+/** The scenes of `sceneIds` a run may write (none locked): the summaries that start by themselves take only these. */
+export async function sceneIdsOpenToRuns(
+	sceneIds: readonly number[]
+): Promise<number[]> {
+	if (!sceneIds.length) return []
+	const locked = await db
+		.select({ id: schema.scenes.id })
+		.from(schema.scenes)
+		.where(
+			and(
+				inArray(schema.scenes.id, [...sceneIds]),
+				eq(schema.scenes.sceneLock, true)
+			)
+		)
+	const held = new Set(locked.map((r) => r.id))
+	return sceneIds.filter((id) => !held.has(id))
+}
+
 /**
  * 🚧 The scene summaries routine's start (the host's outlet calls this and
  * nothing else): the session genre's scene summarizer runs for a finished
@@ -2995,6 +3033,14 @@ export async function startRoutineSceneSummary(params: {
 	})
 	if (!scene || scene.sessionId !== sessionId)
 		return { started: false, note: "That scene is not in this session." }
+	if (sceneLockedAgainstRuns(scene)) {
+		const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
+		const shown = (await sceneDisplayNames(db, [scene])).get(scene.id)
+		return {
+			started: false,
+			note: RUN_LOCK_SENTENCES.scene(shown ?? scene.name ?? "This scene")
+		}
+	}
 	if (scene.summaryStatus !== "none")
 		return { started: false, note: "That scene's summary is already written, running or waiting." }
 	const [session] = await db
@@ -3040,7 +3086,7 @@ async function summarizeOnClose(
 		const { sessionSceneContext } = await import("$lib/server/sessions/sceneSettings")
 		const ctx = await sessionSceneContext(db, sessionId)
 		if (ctx?.settings.summary !== "onClose") return
-		void runSceneSummaries(sceneIds, userId, emitToUser)
+		void runSceneSummaries(await sceneIdsOpenToRuns(sceneIds), userId, emitToUser)
 	} catch (err) {
 		console.warn("[scenes] the summaries on close did not start:", err)
 	}
@@ -3060,7 +3106,7 @@ export async function pushSceneList(
 		"$lib/server/sockets/utils/broadcastHelpers"
 	)
 	await broadcastToSessionUsers(io as any, params.sessionId, "scenes:list", () =>
-		buildSceneList(params.sessionId, params.userId)
+		buildSceneListForBroadcast(params.sessionId, params.userId)
 	)
 }
 
@@ -3092,7 +3138,7 @@ export async function afterBoundaryPlaced(
 			"$lib/server/sockets/utils/broadcastHelpers"
 		)
 		await broadcastToSessionUsers(io as any, sessionId, "scenes:list", () =>
-			buildSceneList(sessionId, userId)
+			buildSceneListForBroadcast(sessionId, userId)
 		)
 		await broadcastToSessionUsers(
 			io as any,

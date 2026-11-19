@@ -54,7 +54,7 @@
 		signalsResult
 	} from "$lib/client/lorebooks/editor/signals"
 	import type { RunExplanation } from "$lib/client/lorebooks/editor/readIn"
-	import { bookReadOnly } from "$lib/client/lorebooks/bookData.svelte"
+	import { bookReadOnly, bookReaders } from "$lib/client/lorebooks/bookData.svelte"
 	import {
 		marksAsRead,
 		teachButtons,
@@ -109,10 +109,15 @@
 	/** The press's own id; only its answer is this panel's (plan B8). */
 	let askedId: string | null = null
 
+	/** The book's own readers (`readBy`): a session's notes are read by that session. */
+	const readers = bookReaders()
+
 	const onSessions = (res: Sockets.Sessions.List.Response) => {
 		// Newest first is the server's order (`updatedAt` descending), kept.
 		sessions = (res.sessionList ?? []).filter(
-			(s) => s.lorebookId === lorebookId
+			(s) =>
+				s.lorebookId === lorebookId ||
+				readers.value.some((r) => r.id === s.id)
 		)
 		sessionsLoaded = true
 		// Default to the most recent one, and leave a deliberate pick alone —

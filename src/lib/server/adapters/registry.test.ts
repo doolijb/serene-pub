@@ -61,6 +61,7 @@ vi.mock(
 vi.mock("$lib/server/imageAdapters/HordeAdapter", stub("Horde"))
 vi.mock("$lib/server/imageAdapters/NovelAIImageAdapter", stub("NovelAIImage"))
 vi.mock("$lib/server/imageAdapters/BflAdapter", stub("Bfl"))
+vi.mock("$lib/server/imageAdapters/ComfyAdapter", stub("Comfy"))
 // Folded into OPENAI's image module, so the stub carries the fold too.
 vi.mock("$lib/server/imageAdapters/GeminiImageAdapter", () => {
 	const base = stub("GeminiImage")()
@@ -88,6 +89,10 @@ vi.mock(
 vi.mock(
 	"$lib/server/embeddingAdapters/LMStudioEmbeddingAdapter",
 	stub("LMStudioEmbedding")
+)
+vi.mock(
+	"$lib/server/embeddingAdapters/KoboldCppEmbeddingAdapter",
+	stub("KoboldCppEmbedding")
 )
 vi.mock(
 	"$lib/server/embeddingAdapters/LlamaCppEmbeddingAdapter",

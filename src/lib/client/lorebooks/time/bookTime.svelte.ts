@@ -41,6 +41,8 @@ export class BookTime {
 	presents = $state.raw<Sockets.Lorebooks.BookStoryTime["presents"] | null>(
 		null
 	)
+	/** 🚧 Where a new session on the book would start; null until it arrives. */
+	start = $state.raw<Sockets.Lorebooks.BookStoryTime["start"] | null>(null)
 	/** Whether the story time and the lines have arrived for the book. */
 	timeLoaded = $state(false)
 	linesLoaded = $state(false)
@@ -58,6 +60,7 @@ export class BookTime {
 		this.calendar = null
 		this.clocks = NO_CLOCKS
 		this.presents = null
+		this.start = null
 		this.branches = []
 		this.timeLoaded = false
 		this.linesLoaded = false
@@ -109,6 +112,7 @@ export class BookTime {
 		this.calendar = msg.calendar
 		this.clocks = msg.clocks
 		if (msg.presents) this.presents = msg.presents
+		if (msg.start) this.start = msg.start
 		this.timeLoaded = true
 	}
 

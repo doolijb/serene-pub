@@ -234,7 +234,8 @@ export async function spriteChoicesFor(
 			at: {
 				line: lineOfReading(reading),
 				moment: reading.moment
-			}
+			},
+			timelineOff: reading.timelineOff === true
 		})
 		const member = resolved?.member as
 			| { characterId?: unknown; spriteSet?: unknown }

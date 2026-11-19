@@ -162,9 +162,10 @@ async function world() {
 		.insert(schema.lorebooks)
 		.values({ userId: owner.id, name: `Book ${++n}` })
 		.returning()
+	// The seater's own card: a card the session owner owns is the owner's sheet (HM1, 2026-11-17).
 	const [vera] = await testDb
 		.insert(schema.characters)
-		.values({ userId: owner.id, name: "Vera", description: "…" } as any)
+		.values({ userId: g.id, name: "Vera", description: "…" } as any)
 		.returning()
 	const carded = (
 		await insertCastMember(testDb, {

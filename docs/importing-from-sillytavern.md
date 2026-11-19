@@ -57,7 +57,7 @@ Each session lists the characters it needs. Untick one of them and the session i
 - **Chats** keep every message, in order, with its swipes. The characters and persona are seated by name. A chat file with a damaged line isn't imported, and the error names the line (*Line 3 of the chat file is not valid JSON*) so you can fix it and import again. An empty chat file isn't imported either.
 - **A chat's Author's Note** becomes the session's [author's note](./sessions.md#authors-note), with its depth, interval and role. A note SillyTavern placed outside the chat (before or after the story string) is placed by its depth instead, and the import summary says so.
 - **Lorebooks**: every World Info entry becomes world lore, and each of its keys becomes one keyword. A book's scan depth, token budget and recursive scanning come with it.
-- **A session that reads a lorebook** (its chat's World Info, or its character's own book) seats its characters and persona in that book's cast, as reading a book into a session does.
+- **A session that reads a lorebook** (its chat's World Info, or its character's own book) seats its characters and persona in that book's cast, as a new session on that book does.
 - **Sprites**: SillyTavern keeps them in a folder named after the character. The images at the top of that folder go into the character's default [sprite set](./characters.md#sprite-sets), and each subfolder becomes a set of the same name. A `backgrounds` subfolder is skipped.
 - Each thing is made whole or not at all: a session with all its messages, a lorebook with all its entries. Nothing is left half-imported.
 

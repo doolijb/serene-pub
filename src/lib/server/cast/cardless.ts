@@ -39,12 +39,16 @@ import { copySpriteSetsToMember, spriteFileIds } from "$lib/server/sprites"
 import { addToMemberGallery, fileForOwner, mediaFor } from "$lib/server/media"
 import { MediaKind } from "$lib/shared/constants/MediaVisibility"
 
-/** Why a member is losing its card. */
+/**
+ * Why a member is losing its card. `shared`: a copy of a card shared with the
+ * asker, made into a new member of a session's notes (`copySharedCard`).
+ */
 export type CardlessCause =
 	| "unlink"
 	| "card-delete"
 	| "provided-uninstall"
 	| "starter"
+	| "shared"
 
 export interface CardlessOutcome {
 	/** The book the member belongs to. */

@@ -564,6 +564,17 @@ describe("user-scoped plugin settings", () => {
 			values: { notation: "3d8" },
 			own: ["notation"]
 		})
+		// The refusal answered on :set:error alone; the success on :list, then
+		// :set naming the plugin.
+		const own = c.events.filter((e) =>
+			e.event.startsWith("pluginUserSettings:")
+		)
+		expect(own.map((e) => e.event)).toEqual([
+			"pluginUserSettings:set:error",
+			"pluginUserSettings:list",
+			"pluginUserSettings:set"
+		])
+		expect(own[2].data.pluginId).toBe(f.pluginId)
 		// The instance value did not move.
 		const [after] = await testDb
 			.select()

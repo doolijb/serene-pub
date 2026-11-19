@@ -37,12 +37,19 @@ export const writeScopeFor = (viewer: Viewer): WriteScope =>
  * answer. The 0.6 line (user-ratified, DECOMPOSITION §26): a non-admin sees
  * **prompts and nothing else**. To them the pipeline is how the application
  * works, not a thing they operate — weights, sampling, review gates and
- * connections are the instance's configuration. Prompts stay visible because
- * wording is the one thing that is genuinely theirs to change *for a session*;
- * outside a session their panel is a reading surface.
+ * connections are the instance's configuration.
  *
- * The test is the ROLE, not the moment (owner ruling 2026-09-30): a row is
- * sent when this viewer's role can normally edit it somewhere, and only then.
+ * And only in a session they own (owner ruling D58, 2026-11-16: "The session's
+ * owner picks and may read the wording; a guest sees nothing; outside a session
+ * only an administrator"). That narrows the older line (2026-09-30: "Prompts
+ * stay visible because wording is the one thing that is genuinely theirs to
+ * change for a session; outside a session their panel is a reading surface"):
+ * `Viewer.sessionId` is set only for the session's owner, so a guest and a
+ * member outside any session are sent no row at all.
+ *
+ * The test is the ROLE, not the moment (owner ruling 2026-09-30, which stands
+ * for administrators): a row is sent when this viewer's role can normally edit
+ * it somewhere, and only then.
  * So a non-admin never sees a connection — not even its name — because they
  * never change one anywhere; an administrator in a session sees the Model row
  * read-only, because they change it in Pipelines. A row the role normally
@@ -57,7 +64,27 @@ export const writeScopeFor = (viewer: Viewer): WriteScope =>
  * show.
  */
 export const visibleTo = (matrixSlot: string, viewer: Viewer): boolean =>
-	viewer.isAdmin || matrixSlot === "prompts"
+	viewer.isAdmin || (matrixSlot === "prompts" && viewer.sessionId != null)
+
+/**
+ * 🚧 Who reads a pipeline's prompts and settings here (owner ruling D58,
+ * 2026-11-16). `"owner"` when the caller owns the session asked about;
+ * `"administrator"` when an administrator does not; `null` for anyone else.
+ * The caller decides what `isAdmin` and `ownsSession` mean for a session (an
+ * administrator in someone else's session is passed as not an administrator
+ * there, G6). Not the rule for **Prompt details** on a reply: that is
+ * `readsPrompt` (`server/messages/debugMeta.ts`).
+ *
+ * Kept beside `Viewer`, never inside it: `Viewer.sessionId` stays owner-only,
+ * which is also what refuses a guest's writes (`writeScopeFor` then picks
+ * config scope and `resolveWriteScope` refuses a non-admin).
+ */
+export type PipelineReader = "owner" | "administrator"
+export const pipelineReaderOf = (who: {
+	isAdmin: boolean
+	ownsSession: boolean
+}): PipelineReader | null =>
+	who.ownsSession ? "owner" : who.isAdmin ? "administrator" : null
 
 /**
  * Decide where a write lands, and refuse in a sentence if it may not.

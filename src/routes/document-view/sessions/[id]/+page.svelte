@@ -57,8 +57,9 @@
 	let isOwner = $derived(!!session && session.userId === userCtx.user?.id)
 
 	let userPersonasInSession = $derived(
+		// A seat's person is its `userId`, else its card's owner (the owner's card seated for a guest is the guest's to speak as).
 		(session?.sessionPersonas || []).filter(
-			(cp) => cp.persona?.userId === userCtx.user?.id
+			(cp) => (cp.userId ?? cp.persona?.userId) === userCtx.user?.id
 		)
 	)
 	let selectedPersonaId: number | null = $state(null)
@@ -680,7 +681,7 @@
 <p>
 	<a href="/document-view/sessions">Back to Sessions</a>
 	{#if session?.sessionMessages}
-		· <a href="/document-view/sessions/{sessionId}/edit">Edit session</a>
+		· <a href="/document-view/sessions/{sessionId}/edit">{isOwner ? "Edit session" : "Participants"}</a>
 	{/if}
 </p>
 
@@ -884,7 +885,7 @@
 					bind:value={selectedPersonaId}
 				>
 					{#each userPersonasInSession as cp (cp.personaId)}
-						<option value={cp.personaId}>{cp.persona?.name}</option>
+						<option value={cp.personaId}>{cp.seatName?.trim() || cp.persona?.name}</option>
 					{/each}
 				</select>
 			</div>

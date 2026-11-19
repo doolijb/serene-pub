@@ -37,10 +37,15 @@ export const isProvidedBook = (
  * row's clone-only sentence) and not `sharedFromLine` (a person's share).
  */
 export const providedRowLine = (
-	book: { provided?: unknown } | null | undefined
+	book: { provided?: unknown; readOnly?: unknown } | null | undefined
 ): string | null => {
 	if (!book?.provided) return null
-	const pluginName = (book.provided as { pluginName?: unknown }).pluginName
+	// The open book carries the name on `readOnly`; a list row on `provided`.
+	const pluginName =
+		"pluginName" in (book.provided as object)
+			? (book.provided as { pluginName?: unknown }).pluginName
+			: (book.readOnly as { pluginName?: unknown } | undefined)
+					?.pluginName
 	if (pluginName === null) return "Comes with Serene Pub"
 	if (typeof pluginName === "string" && pluginName)
 		return `Comes with ${pluginName}`
@@ -55,6 +60,15 @@ export const providedRowLine = (
 export const isReadOnlyBook = (
 	book: { readOnly?: unknown } | null | undefined
 ) => !!book?.readOnly
+
+/**
+ * A primer row: a read-only starter lorebook (its one verb is Clone). A
+ * read-only provided lorebook of another kind is read in the shared-book view
+ * and copied with Duplicate.
+ */
+export const isPrimerRow = (
+	book: { readOnly?: unknown; kind?: string | null } | null | undefined
+) => isReadOnlyBook(book) && isStarterKit(book)
 
 /**
  * The one line a primer row shows in place of its editors — the server's own

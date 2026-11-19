@@ -20,11 +20,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -103,6 +103,7 @@ async function attached() {
 		.returning()
 	const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
 	const own = await ownBookFor(db(), session!.id)
+	await testDb.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, own.id)) // the notes state their timeline
 	return { user, book: book!, fork: fork!, session: session!, own }
 }
 
@@ -230,6 +231,7 @@ describe("a session on a book whose timeline is off", () => {
 			.returning()
 		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
 		const own = await ownBookFor(db(), session!.id)
+		await testDb.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, own.id)) // the notes state their timeline
 		const on = (await sessionReadingOf(db(), session!.id))!
 		expect(on.onOwnBook).toBe(true)
 		expect(on.moment).toEqual({ year: 4, month: null, day: null })

@@ -53,13 +53,12 @@ vi.mock("$lib/server/sessions/seats", async (importOriginal) => {
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
 	return {
-		...actual,
-		db,
+		...testDbModule(await createTestDb()),
 		getCryptoSecretKey: () => "card-less-seat-test-secret"
 	}
 })
@@ -454,5 +453,30 @@ describe("sessions:update with castMemberIds", () => {
 		expect(String((r.error as Error)?.message)).toBe(
 			SEAT_REFUSALS.outsideBooks("Stranger")
 		)
+	})
+
+	test("a member a player seat already holds is refused a second seat", async () => {
+		const u = await owner()
+		const book = await ownBook(u.id)
+		const wanderer = await cardless(book.id, "Wanderer")
+		const { res } = await make(u.id, {
+			session: { name: "S", lorebookId: book.id }
+		})
+		const sessionId = res.session.id as number
+		await testDb.insert(schema.sessionPersonas).values({
+			sessionId,
+			castMemberId: wanderer.id,
+			seatName: "Wanderer",
+			userId: u.id,
+			position: 0
+		} as any)
+		const r = await update(u.id, {
+			session: { id: sessionId },
+			castMemberIds: [wanderer.id]
+		})
+		expect(String((r.error as Error)?.message)).toBe(
+			"Wanderer already has a seat in this session."
+		)
+		expect(await seats(sessionId)).toHaveLength(0)
 	})
 })

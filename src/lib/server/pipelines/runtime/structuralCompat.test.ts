@@ -183,8 +183,11 @@ describe("requiresOf — the runtime twin of SharedInput", () => {
 	it("one contract gives that contract's whole surface", () => {
 		const r = requiresOf(C.vectorSearch)
 		expect([...r.params].sort()).toEqual([
+			"knownToSpeaker",
 			"maxEntries",
 			"similarityFalloff",
+			// wt-1b-fix2 (2026-11-17): beside `knownToSpeaker` (was: absent).
+			"speakerInCast",
 			"topK"
 		])
 	})

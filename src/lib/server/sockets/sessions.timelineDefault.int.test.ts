@@ -56,10 +56,15 @@ const quietIo = () => ({
 const fakeSocket = (uid: number) => ({ user: { id: uid, isAdmin: false }, io: quietIo() }) as any
 const emit = () => {}
 
-const OFF = ["core-story-minimal", "core-chat-basic", "core-chat-agentic", "core-guide-default"]
-const ON = [
+const OFF = [
+	"core-story-minimal",
 	"core-story-living",
 	"core-story-rule-based",
+	"core-chat-basic",
+	"core-chat-agentic",
+	"core-guide-default"
+]
+const ON = [
 	"core-lair-words-only",
 	"core-lair-default",
 	"core-lair-rules-and-dice",
@@ -133,6 +138,20 @@ describe("a new session's own notes", () => {
 	})
 })
 
+describe("an existing Story session (a boot of an install that kept notes on)", () => {
+	it("an existing Story session's own notes keep their timeline across a boot, the pass not yet run and run again", async () => {
+		const sessionId = await create("core-story-living")
+		// What the create path did before the default changed: notes on, nothing dated.
+		await db.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.sessionId, sessionId))
+		expect(await notesSwitch(sessionId)).toBe(true)
+		const { settleTimelineSwitches } = await import("$lib/server/lorebooks/timelinePass")
+		await settleTimelineSwitches(db as any)
+		expect(await notesSwitch(sessionId)).toBe(true)
+		await settleTimelineSwitches(db as any)
+		expect(await notesSwitch(sessionId)).toBe(true)
+	})
+})
+
 describe("an attached lorebook", () => {
 	it.each([true, false])("keeps its switch (%s) under Story Minimal and Living", async (on) => {
 		for (const key of ["core-story-minimal", "core-story-living"]) {
@@ -159,6 +178,20 @@ describe("the start form's preset rows", () => {
 				.from(schema.sessionPresets)
 				.where(eq(schema.sessionPresets.id, row.id))
 			if (r?.seedKey) bySeed.set(r.seedKey, row.timelineDefault)
+		}
+		for (const key of OFF) expect(bySeed.get(key), key).toBe(false)
+		for (const key of ON) expect(bySeed.get(key), key).toBe(true)
+	})
+	it("carry whether the genre requires one: Lair and Dungeon Crawler yes, Story, Chat, Guide no", async () => {
+		const { sessionPresetsList } = await import("$lib/server/sockets/sessionAdmin")
+		const res: any = await sessionPresetsList.handler(fakeSocket(ownerId), {} as any, emit as any)
+		const bySeed = new Map<string, boolean | undefined>()
+		for (const row of res.presets as any[]) {
+			const [r] = await db
+				.select({ seedKey: schema.sessionPresets.seedKey })
+				.from(schema.sessionPresets)
+				.where(eq(schema.sessionPresets.id, row.id))
+			if (r?.seedKey) bySeed.set(r.seedKey, row.timelineRequired)
 		}
 		for (const key of OFF) expect(bySeed.get(key), key).toBe(false)
 		for (const key of ON) expect(bySeed.get(key), key).toBe(true)

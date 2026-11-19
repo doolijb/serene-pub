@@ -163,7 +163,7 @@ describe("cull", () => {
 })
 
 describe("media:spokenSummary / media:clearSpoken", () => {
-	test("per session: owner and admin allowed, stranger refused; counts correct; others untouched", async () => {
+	test("per session: the owner allowed, an administrator and a stranger refused (G6); counts correct; others untouched", async () => {
 		await wipe()
 		const { mediaSpokenSummary, mediaClearSpoken } = await import("./media")
 		const a1 = await spoken(owner, sessA)
@@ -175,8 +175,14 @@ describe("media:spokenSummary / media:clearSpoken", () => {
 		expect(sum.sessionId).toBe(sessA)
 		const expectBytes = (await variantRows(a1.id)).concat(await variantRows(a2.id)).reduce((s, v) => s + v.bytes, 0)
 		expect(sum.bytes).toBe(expectBytes)
-		const adminSum = await mediaSpokenSummary.handler(sock(admin, true), { sessionId: sessA }, noop)
-		expect(adminSum.count).toBe(2)
+		// Old: any administrator read and cleared any session's audio. Now: only its owner.
+		await expect(
+			mediaSpokenSummary.handler(sock(admin, true), { sessionId: sessA }, noop)
+		).rejects.toThrow("Session not found.")
+		await expect(
+			mediaClearSpoken.handler(sock(admin, true), { sessionId: sessA }, noop)
+		).rejects.toThrow("Session not found.")
+		expect(await exists(a1.id)).toBe(true)
 		await expect(
 			mediaSpokenSummary.handler(sock(stranger), { sessionId: sessA }, noop)
 		).rejects.toThrow()

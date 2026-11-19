@@ -32,15 +32,26 @@ import { lorebookIndexing } from "$lib/client/stores/lorebookIndexing.svelte"
 
 let view: ReturnType<typeof mount> | null = null
 
-function open(user: { id: number; isAdmin: boolean }) {
+const opened: unknown[] = []
+
+function open(
+	user: { id: number; isAdmin: boolean },
+	extra: [string, unknown][] = []
+) {
+	opened.length = 0
 	view = mount(ActivitySidebar, {
 		target: document.body,
 		context: new Map<string, unknown>([
 			["userCtx", { user }],
 			[
 				"panelsCtx",
-				{ activeView: "activity", digest: {}, openPanel() {} }
-			]
+				{
+					activeView: "activity",
+					digest: {},
+					openPanel: (p: unknown) => opened.push(p)
+				}
+			],
+			...extra
 		])
 	})
 	flushSync()
@@ -99,5 +110,42 @@ describe("Activity: lorebook indexing", () => {
 			)
 		).toBe(false)
 		expect(document.body.textContent).toContain("Harbor")
+	})
+})
+
+describe("Activity: another person's scene summary", () => {
+	const scene = {
+		activityId: "s1",
+		userId: 7,
+		sceneId: 5,
+		sceneName: "The gate",
+		lorebookId: 3,
+		lorebookLabel: "Harbor",
+		historyEntryId: 4,
+		status: "review",
+		startedAt: "2026-11-04T00:00:00.000Z"
+	}
+	const ctx = (): [string, unknown][] => [
+		[
+			"sceneSummarizesCtx",
+			{ activities: [scene], setReviewSceneId() {}, dismiss() {} }
+		]
+	]
+
+	test("an administrator viewing it can open nothing of the notes; the owner can", () => {
+		open({ id: 1, isAdmin: true }, ctx())
+		const buttons = () => [...document.querySelectorAll("button")]
+		expect(document.body.textContent).toContain("The gate")
+		expect(buttons().some((b) => b.textContent?.includes("Review results"))).toBe(false)
+		expect(buttons().some((b) => b.textContent?.trim() === "The gate")).toBe(false)
+		expect(opened).toEqual([])
+		unmount(view!)
+		view = null
+		document.body.innerHTML = ""
+		open({ id: 7, isAdmin: false }, ctx())
+		const review = buttons().find((b) => b.textContent?.includes("Review results"))!
+		review.click()
+		flushSync()
+		expect(opened).toHaveLength(1)
 	})
 })

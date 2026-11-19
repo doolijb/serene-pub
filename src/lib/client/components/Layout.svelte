@@ -379,7 +379,10 @@
 		"scenes:delete:error",
 		"lorebooks:duplicate:error",
 		"entries:update:error",
-		"entries:delete:error"
+		"entries:delete:error",
+		"entryKnowledge:list:error",
+		"entryKnowledge:setCommonKnowledge:error",
+		"entryKnowledge:setTie:error"
 	])
 
 	/**
@@ -440,6 +443,12 @@
 	// request's refusal to the tab that asked and no other (`answerAsker` in
 	// `server/sockets/index.ts`), so this toasts in that tab alone.
 	function handleAnyEvent(event: string, payload: any) {
+		// 🚧 Back that left a made lorebook in place says so (D50).
+		if (event === "sessions:rewindTurn" && Array.isArray(payload?.stayed) && payload.stayed.length) {
+			for (const sentence of payload.stayed as string[])
+				notify.info({ title: "Back left a lorebook", description: sentence, source: `socket:sessions:rewindTurn:stayed:${sentence}` })
+			return
+		}
 		if (event === "error" || !event.endsWith(":error")) return
 		if (HANDLED_ERROR_EVENTS.has(event)) return
 		if (
@@ -1963,8 +1972,14 @@
 	// Full page is a desktop shape — below `lg` the view already fills the
 	// screen. Crossing the breakpoint with it set would leave `<main>` hidden
 	// behind a sheet, and closing the sheet would show a blank window.
+	// Leaving Focus this way is not a step down: the view stays open as the
+	// sheet and the address stays, so the "Focus → the address" effect must not
+	// read it as a step down (which, on an address loaded cold, goes Home).
 	$effect(() => {
-		if (!desktop.matches && fullPageView !== null) fullPageView = null
+		if (!desktop.matches && fullPageView !== null) {
+			syncedFocus = null
+			fullPageView = null
+		}
 	})
 
 	// Body scroll lock for the Views sheet (moved here from Header.svelte along

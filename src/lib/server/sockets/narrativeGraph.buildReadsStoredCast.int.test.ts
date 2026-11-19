@@ -377,6 +377,53 @@ describe("the graph build reads cast from scene_characters", () => {
 			bindings[1].id
 		])
 	})
+
+	test("an apply that changes a scene's participants records one save row made by the applier; the same list again records none", async () => {
+		const { user, lorebook, bindings, scene } = await seedLorebook("redline")
+		const { narrativeGraphApplyProposalHandler } = await import(
+			"./narrativeGraph"
+		)
+		const tempIds = [
+			`existing_${bindings[0].id}`,
+			`existing_${bindings[1].id}`
+		]
+		const apply = () =>
+			narrativeGraphApplyProposalHandler.handler(
+				fakeSocket(user.id),
+				applyAtReview(user.id, {
+					lorebookId: lorebook.id,
+					mode: "replace",
+					proposal: {
+						nodes: [],
+						relationships: [],
+						updatedNodes: tempIds.map((tempId) => ({ tempId })),
+						resolvedSceneCast: [
+							{
+								sceneId: scene.id,
+								historyEntryId: null,
+								participantTempIds: tempIds,
+								mentionedTempIds: []
+							}
+						]
+					}
+				} as any),
+				noopEmit as any
+			)
+		const rowsOf = () =>
+			testDb
+				.select()
+				.from(schema.loreRedlines)
+				.where(eq(schema.loreRedlines.sceneId, scene.id))
+		await apply()
+		const rows = await rowsOf()
+		expect(rows).toHaveLength(1)
+		expect(rows[0]).toMatchObject({ cause: "save", userId: user.id })
+		expect(rows[0].changes.participantCharacters.after).toEqual({
+			v: [bindings[0].id, bindings[1].id]
+		})
+		await apply()
+		expect(await rowsOf()).toHaveLength(1)
+	})
 })
 
 describe("a cast tag reads as its member in what the build reads (plan A19)", () => {

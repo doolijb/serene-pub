@@ -329,6 +329,27 @@ describe("loadEntryKnowledge", () => {
 		])
 	})
 
+	test("a hand kept_from wins over a later dated was_told, in the run's filter", async () => {
+		const w = await world()
+		const e = await w.entry(w.book.id)
+		const late = await w.entry(w.book.id, { year: 20 }, HISTORY_TYPE_ID)
+		await w.tie("Ana", e, "kept_from")
+		await w.tie("Ana", e, "was_told", { historyEntryId: late })
+		expect(leftOut(await w.read("Ana"))).toEqual([
+			{ entryId: e, cause: "kept-from" }
+		])
+	})
+
+	test("a hand knows wins over a dated kept_from, in the run's filter", async () => {
+		const w = await world()
+		const e = await w.entry(w.book.id)
+		await w.mark(e)
+		const late = await w.entry(w.book.id, { year: 20 }, HISTORY_TYPE_ID)
+		await w.tie("Ana", e, "knows")
+		await w.tie("Ana", e, "kept_from", { historyEntryId: late })
+		expect(leftOut(await w.read("Ana"))).toEqual([])
+	})
+
 	test("a tie kept in the session's notes counts, for an entry of the attached book", async () => {
 		const w = await world()
 		const e = await w.entry(w.book.id)

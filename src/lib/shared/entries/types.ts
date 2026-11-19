@@ -291,6 +291,8 @@ export interface EntryColumns {
 	 * list without being destroyed. Writable, like `enabled`.
 	 */
 	archived: boolean
+	/** 🚧 The entry lock: sessions and their routines leave the row as it is. Never dated, never a content change; written by `entries:setMarks`. */
+	entryLock?: boolean
 	/**
 	 * Who wrote this row — `human`, `summarizer`, `graph-builder`.
 	 *

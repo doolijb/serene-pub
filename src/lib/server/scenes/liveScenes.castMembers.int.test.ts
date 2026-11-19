@@ -3,9 +3,8 @@
  * that member (owner ruling 2026-11-06; ★9 2026-11-08: the key is stored
  * alone, readers filter members that no longer exist).
  *
- * The first two tests need `loadVocabulary` to resolve a named card-less
- * member to `cast_member:<id>`; the third drives a stale key through a
- * vocabulary stand-in, so it does not.
+ * A card-less member is listed by its member id when it sends a line (the line's
+ * `cast_member_id`); a member that is gone, or is another book's, lists nobody.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -17,7 +16,6 @@ import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 import { insertLegacy } from "$lib/server/messages/store"
 import { historyValues } from "$lib/server/pipelines/testing/fixtures"
-import { buildGazetteer } from "$lib/server/pipelines/ranking/entities"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -25,17 +23,11 @@ let testDb: TestDb
 let dataDir: string
 let seq = 0
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
-})
-
-vi.mock("$lib/server/annotations", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("$lib/server/annotations")>()
-	return { ...actual, loadVocabulary: vi.fn(actual.loadVocabulary) }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -113,12 +105,12 @@ const bindingCount = async (lorebookId: number) =>
 	).length
 
 describe("refreshOpenSceneCast — a card-less member", () => {
-	test("is written as that member, no binding minted, and a repeat writes nothing", async () => {
+	test("is listed by member id when it sends a line, no binding minted, and a repeat writes nothing", async () => {
 		const { refreshOpenSceneCast } = await import(
 			"$lib/server/scenes/liveScenes"
 		)
 		const { book, session, scene, messageIds } = await openScene([
-			'Grust poured two. "Two it is," Grust said.'
+			"The cellar door creaked open."
 		])
 		const [grust] = await testDb
 			.insert(schema.lorebookBindings)
@@ -130,30 +122,39 @@ describe("refreshOpenSceneCast — a card-less member", () => {
 			})
 			.returning()
 		const before = await bindingCount(book.id)
+		const spoken = await insertLegacy(db(), {
+			sessionId: session.id,
+			role: "assistant",
+			castMemberId: grust.id,
+			content: '"Two it is."'
+		} as any)
+		// The opening line has no speaker: a refresh for it lists nobody.
+		expect(
+			await refreshOpenSceneCast(db(), {
+				sessionId: session.id,
+				channel: "main",
+				messageId: messageIds[0]
+			})
+		).toBe(false)
+		expect(await participantsOf(scene.id)).toEqual([])
 
-		const wrote = await refreshOpenSceneCast(db(), {
+		const args = {
 			sessionId: session.id,
 			channel: "main",
-			messageId: messageIds[0]
-		})
-		expect(wrote).toBe(true)
+			messageId: spoken.id
+		}
+		expect(await refreshOpenSceneCast(db(), args)).toBe(true)
 		expect(await participantsOf(scene.id)).toEqual([grust.id])
 		expect(await bindingCount(book.id)).toBe(before)
-
-		const again = await refreshOpenSceneCast(db(), {
-			sessionId: session.id,
-			channel: "main",
-			messageId: messageIds[0]
-		})
-		expect(again).toBe(false)
+		expect(await refreshOpenSceneCast(db(), args)).toBe(false)
 	})
 
 	test("whose card is soft-deleted still compares as the same cast", async () => {
 		const { refreshOpenSceneCast } = await import(
 			"$lib/server/scenes/liveScenes"
 		)
-		const { user, book, session, scene, messageIds } = await openScene([
-			'Grust poured two. "Two it is," Grust said.'
+		const { user, book, session, scene } = await openScene([
+			"The cellar door creaked open."
 		])
 		const [card] = await testDb
 			.insert(schema.characters)
@@ -173,14 +174,28 @@ describe("refreshOpenSceneCast — a card-less member", () => {
 				name: "Grust"
 			})
 			.returning()
-		const args = {
+		// One line by the member alone (`cast_member_id`), one by the card: one person.
+		const byMember = await insertLegacy(db(), {
+			sessionId: session.id,
+			role: "assistant",
+			castMemberId: grust.id,
+			content: '"Two it is."'
+		} as any)
+		const byCard = await insertLegacy(db(), {
+			sessionId: session.id,
+			role: "assistant",
+			characterId: card.id,
+			content: '"Two more."'
+		} as any)
+		const at = (messageId: number) => ({
 			sessionId: session.id,
 			channel: "main",
-			messageId: messageIds[0]
-		}
-		await refreshOpenSceneCast(db(), args)
+			messageId
+		})
+		expect(await refreshOpenSceneCast(db(), at(byMember.id))).toBe(true)
 		expect(await participantsOf(scene.id)).toEqual([grust.id])
-		expect(await refreshOpenSceneCast(db(), args)).toBe(false)
+		expect(await refreshOpenSceneCast(db(), at(byCard.id))).toBe(false)
+		expect(await participantsOf(scene.id)).toEqual([grust.id])
 	})
 
 	test("who speaks by a soft-deleted card and is named is one member, and a repeat writes nothing", async () => {
@@ -227,36 +242,44 @@ describe("refreshOpenSceneCast — a card-less member", () => {
 	})
 })
 
-describe("refreshOpenSceneCast — a stale cast_member key", () => {
+describe("refreshOpenSceneCast — a member that is gone", () => {
 	test("writes nothing for a member that is gone, and never throws", async () => {
 		const { refreshOpenSceneCast, readCastProposal } = await import(
 			"$lib/server/scenes/liveScenes"
 		)
-		const annotations = await import("$lib/server/annotations")
-		const { book, session, scene, messageIds } = await openScene([
-			'Ghost poured two. "Two it is," Ghost said.'
+		const { user, session, scene } = await openScene([
+			"The cellar door creaked open."
 		])
-		const real = await annotations.loadVocabulary(db(), book.id)
-		vi.mocked(annotations.loadVocabulary).mockResolvedValue({
-			...real,
-			gazetteer: buildGazetteer([
-				{ name: "Ghost", ref: { kind: "cast_member", id: 987654 } }
-			])
-		})
-		try {
-			const proposal = await readCastProposal(db(), scene as any)
-			expect(proposal!.participants.map((p) => p.key)).toContain(
-				"cast_member:987654"
-			)
+		// A member of another book: the line names it, this book has no such member.
+		const [other] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: user.id, name: `other-${seq++}` } as any)
+			.returning()
+		const [stranger] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: other.id,
+				characterId: null,
+				binding: "{{char:stranger}}",
+				name: "Stranger"
+			})
+			.returning()
+		const spoken = await insertLegacy(db(), {
+			sessionId: session.id,
+			role: "assistant",
+			castMemberId: stranger.id,
+			content: '"Who is there?"'
+		} as any)
+		const proposal = await readCastProposal(db(), scene as any)
+		expect(proposal!.participants).toEqual([])
+		expect(
 			await refreshOpenSceneCast(db(), {
 				sessionId: session.id,
 				channel: "main",
-				messageId: messageIds[0]
+				messageId: spoken.id
 			})
-			expect(await participantsOf(scene.id)).toEqual([])
-		} finally {
-			vi.mocked(annotations.loadVocabulary).mockRestore()
-		}
+		).toBe(false)
+		expect(await participantsOf(scene.id)).toEqual([])
 	})
 })
 

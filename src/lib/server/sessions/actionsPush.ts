@@ -98,6 +98,10 @@ async function pushNow(
 		return
 	}
 	const { buildSessionActions } = await import("$lib/server/sockets/sessions")
+	// What does not depend on the member is read once for the push, on the
+	// first member who is sent a list (see `buildSessionActions`'s `perPush`);
+	// never kept past this call.
+	const perPush = {}
 	for (const userId of members) {
 		// The exact scope, per member: one whose only tab is on another
 		// session wants no list of this one, so none is built.
@@ -112,6 +116,7 @@ async function pushNow(
 				{
 					member: true,
 					withRewind: true,
+					perPush,
 					...(opts.starting ? { starting: true } : {})
 				}
 			)

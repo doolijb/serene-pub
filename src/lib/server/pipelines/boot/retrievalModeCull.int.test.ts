@@ -57,10 +57,12 @@ const LORE_PARAMS = [
 /**
  * Each lane's OWN — its band intent (R-7 P5, 2026-09-16): declared unmarked
  * beside the shared seven, resolved at the lane's own address through the
- * `slot.params({ node })` reference, rendered on every lane. Not `minEntries`:
- * lore has no floor (R6).
+ * `slot.params({ node })` reference, rendered on every lane (`knownToSpeaker` excepted: the panel shows one ganged switch, `config/panel/ganged.ts`). Not `minEntries`:
+ * lore has no floor (R6). `knownToSpeaker` limits a lane's read to what the
+ * speaker knows; the bindings read it as `params.knownToSpeaker !== false`.
  */
-const LANE_OWN_PARAMS = ["maxEntries", "priority", "share"]
+// 🚧 `speakerInCast` rides beside `knownToSpeaker` on every lane (wt-1b-fix2, 2026-11-17; was: history alone).
+const LANE_OWN_PARAMS = ["knownToSpeaker", "maxEntries", "priority", "share", "speakerInCast"]
 /**
  * ⚠ `minScore` was here and is gone (0099), replaced by `similarityFalloff`.
  *
@@ -68,7 +70,13 @@ const LANE_OWN_PARAMS = ["maxEntries", "priority", "share"]
  * other mechanism can find it either; the replacement shapes the semantic
  * signal's contribution and leaves the row where it was, at every setting.
  */
-const VECTOR_PARAMS = ["maxEntries", "similarityFalloff", "topK"]
+const VECTOR_PARAMS = [
+	"knownToSpeaker",
+	"maxEntries",
+	"similarityFalloff",
+	"speakerInCast",
+	"topK"
+]
 
 let db: TestDb
 let respondSpecRow: { id: number; activeVersionId: number }
@@ -162,11 +170,8 @@ describe("the four retrieval query types after the cull", () => {
 		expect(await declaredParams("core:query/world-lore")).toEqual(
 			[...LORE_PARAMS, ...LANE_OWN_PARAMS].sort()
 		)
-		for (const definitionId of [
-			"core:query/character-lore",
-			"core:query/history-entries"
-		])
-			expect(await declaredParams(definitionId)).toEqual(LANE_OWN_PARAMS)
+		expect(await declaredParams("core:query/character-lore")).toEqual(LANE_OWN_PARAMS)
+		expect(await declaredParams("core:query/history-entries")).toEqual(LANE_OWN_PARAMS)
 		const decls = await declarations(db, respondSpecRow.activeVersionId)
 		const loreKeys = new Set(LORE_TYPES.flatMap((t) => nodesByType.get(t) ?? []))
 		const shown = decls.filter(

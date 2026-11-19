@@ -9,7 +9,8 @@ import { cardsNow } from "$lib/server/cast/seatedCast"
 import { entryDeclaration } from "$lib/server/entries/declarations"
 import { answeringRows, keyTerms } from "$lib/shared/lorebooks/describingRow"
 import { namesName } from "@serene-pub/sdk"
-import { HostScopeError } from "$lib/server/pipelines/runtime/host"
+import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+import { HostScopeError } from "$lib/server/pipelines/runtime/host.types"
 
 const fold = (s: string): string => s.trim().toLowerCase()
 
@@ -271,6 +272,14 @@ function textsOf(messages: unknown): string[] {
  * (held changes laid on; switched-off, archived and unseen ones left out). At
  * most `maxEntries`; with `maxTokens` a number, an entry costing more than what
  * is left is skipped and the later ones are still tried. Reads only.
+ *
+ * `leaveOut`: entries the speaker does not know (`entryKnowledge.ts`). One a
+ * line names is neither matched nor read — neither its name nor its text is
+ * returned — and its id is reported to `onLeftOut`.
+ *
+ * A session whose lorebook keeps no timeline (`reading.timelineOff`) reads no
+ * history entry: those are neither matched nor returned, and the live ones
+ * left out are counted to `onHistoryLeftOut` (the receipt's number).
  */
 export async function entriesNamedIn(
 	db: Db,
@@ -281,6 +290,9 @@ export async function entriesNamedIn(
 		maxEntries: number
 		maxTokens: number | null
 		countTokens?: (text: string) => number
+		leaveOut?: ReadonlySet<number>
+		onLeftOut?: (entryIds: number[]) => void
+		onHistoryLeftOut?: (count: number) => void
 	}
 ): Promise<NamedEntry[]> {
 	if (opts.maxEntries <= 0) return []
@@ -306,9 +318,22 @@ export async function entriesNamedIn(
 	const count = opts.countTokens ?? ((t: string) => Math.ceil(t.length / 4))
 	let left = opts.maxTokens
 	const out: NamedEntry[] = []
+	const leftOutNamed: number[] = []
+	let historyLeft = 0
+	const done = () => {
+		opts.onLeftOut?.(leftOutNamed)
+		opts.onHistoryLeftOut?.(historyLeft)
+	}
 	for (const bookId of order) {
 		const at = bookId === reading?.lorebookId ? (reading ?? MAIN_HEAD) : MAIN_HEAD
-		const seen = (await entriesAsRead(db, bookId, at, "session", opts.typeIds)).filter((e) => !e.unseen)
+		const seen = (await entriesAsRead(db, bookId, at, "session", opts.typeIds)).filter((e) => {
+			if (e.unseen) return false
+			if (reading?.timelineOff === true && e.typeId === HISTORY_TYPE_ID) {
+				historyLeft++
+				return false
+			}
+			return true
+		})
 		if (!seen.length) continue
 		// The names are looked for on the listing alone; an entry's text is read only once a line names it.
 		const marks = await db
@@ -334,7 +359,12 @@ export async function entriesNamedIn(
 			// A key kept as a regular expression is a pattern, not a word: only its name is looked for.
 			const regex = mark.matchMode === "regex" || (mark.matchMode == null && mark.useRegex === true)
 			const terms = [entry.name, ...(regex ? [] : keyTerms(entry.keys))]
-			return texts.some((t) => terms.some((term) => namesName(t, term)))
+			const names = texts.some((t) => terms.some((term) => namesName(t, term)))
+			if (names && opts.leaveOut?.has(entry.entryId)) {
+				leftOutNamed.push(entry.entryId)
+				return false
+			}
+			return names
 		})
 		if (!named.length) continue
 		const ids = named.map((e) => e.entryId)
@@ -345,7 +375,10 @@ export async function entriesNamedIn(
 		const stored = new Map(rows.map((r) => [r.id, r]))
 		const overlays = await entryOverlaysFor(db, bookId, at, ids)
 		for (const entry of named) {
-			if (out.length >= opts.maxEntries) return out
+			if (out.length >= opts.maxEntries) {
+				done()
+				return out
+			}
 			const row = stored.get(entry.entryId)
 			if (!row) continue
 			const read = entryAt(toEntryRow(row), overlays, at)
@@ -364,5 +397,6 @@ export async function entriesNamedIn(
 			})
 		}
 	}
+	done()
 	return out
 }

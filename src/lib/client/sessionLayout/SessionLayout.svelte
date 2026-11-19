@@ -58,6 +58,8 @@
 		manager: SurfaceManager
 		sessionId: number | null
 		session?: unknown
+		/** False while the session's book keeps no timeline: the conversation draws no story date. */
+		storyDates?: boolean
 		/**
 		 * 🚧 What core's conversation widget is told about the session (C0b):
 		 * its `session_full.v1`, granted to that one widget.
@@ -103,6 +105,7 @@
 		manager,
 		sessionId,
 		session,
+		storyDates = true,
 		conversationDossier = null,
 		viewerId = null,
 		annex = {},
@@ -354,6 +357,7 @@
 		{manager}
 		{sessionId}
 		{session}
+		{storyDates}
 		{actions}
 		{actionDispatch}
 		{onFrameAction}

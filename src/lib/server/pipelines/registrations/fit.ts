@@ -22,6 +22,7 @@
  * at boot and on every change, never stored — a row is data with an origin
  * (§11-1); whether it fits is a fact about this instance now.
  */
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
 import { eq, inArray, or } from "drizzle-orm"
 import type { RegistrationDecl, SpecDocument } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
@@ -100,7 +101,7 @@ async function genreOfRows(db: Db, rows: readonly RegistrationRow[]): Promise<Ma
 			if (g) out.set(r.id, g)
 		} else if (r.scopeKind === "session") {
 			const g = sessions.find((s) => s.id === r.sessionId)?.genreId
-			out.set(r.id, g ?? "core:genre/story")
+			out.set(r.id, g ?? STANDARD_GENRE_ID)
 		}
 	}
 	return out

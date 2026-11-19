@@ -8,7 +8,7 @@
  * that loadout's `default_voice_id` is still null, the loadout's voice becomes
  * the row. Nothing else is touched, so a second run changes nothing.
  *
- * Raw SQL through `tx` only (schema.ts no longer has the star columns); no ids
+ * Raw SQL through `tx` only (schema.ts does not declare the star columns); no ids
  * written down.
  */
 import { sql } from "drizzle-orm"

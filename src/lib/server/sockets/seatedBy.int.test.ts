@@ -22,11 +22,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 vi.mock("$lib/server/embedding/vectorizationQueue", async (importOriginal) => ({
 	...(await importOriginal<object>()),
@@ -205,19 +205,23 @@ describe("a seat is seated by whoever acted", () => {
 				}
 			} as any)
 			.returning()
-		await testDb.insert(schema.lorebookBindings).values({
-			lorebookId: book!.id,
-			characterId: theirs!.id,
-			binding: `{{char:${++n}}}`,
-			name: "Theirs"
-		} as any)
+		const [theirMember] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({
+				lorebookId: book!.id,
+				characterId: theirs!.id,
+				binding: `{{char:${++n}}}`,
+				name: "Theirs"
+			} as any)
+			.returning()
 		const { sessionsCreateHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
 		const res = (await sessionsCreateHandler.handler(
 			socket(creator.id),
 			{
-				session: { name: "S", genreId: DECLARED, lorebookId: book!.id },
+				session: { name: "S", genreId: DECLARED },
+				starterKit: { lorebookId: book!.id },
 				characterIds: [],
 				personaIds: []
 			} as any,
@@ -225,7 +229,19 @@ describe("a seat is seated by whoever acted", () => {
 		)) as any
 		expect(res.error).toBeUndefined()
 		const seats = await seatsOf(res.session.id)
-		expect(seats.map((r) => r.characterId)).toEqual([theirs!.id])
+		// The seat names the member of the copy in the session's notes, not the provided book's.
+		expect(seats).toHaveLength(1)
+		expect(seats[0]!.castMemberId).not.toBeNull()
+		expect(seats[0]!.castMemberId).not.toBe(theirMember!.id)
+		const [seated] = await testDb
+			.select({ lorebookId: schema.lorebookBindings.lorebookId })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, seats[0]!.castMemberId!))
+		const [notes] = await testDb
+			.select({ id: schema.lorebooks.id })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.sessionId, res.session.id))
+		expect(seated!.lorebookId).toBe(notes!.id)
 		expect(seats[0]!.seatedByUserId).toBe(creator.id)
 		expect(creator.id).not.toBe(admin.id)
 	})

@@ -294,7 +294,9 @@ describe("🚧 M2e: a provided book is disabled, never deleted", () => {
 			.returning()
 		const socket = { id: "s-admin", user: { id: admin.id, isAdmin: true } } as any
 		await setProvidedBookDisabled(testDb as any, pluginId, "world", true, admin.id)
-		// A new attach (a session made onto it) is refused: the disabled book reads as absent.
+		// A new attach (a session made onto it) is refused, naming nothing: the disabled book reads as absent;
+		// and starting from it is refused as unknown while it is disabled.
+		const { STARTER_KIT_SENTENCES } = await import("$lib/server/lorebooks/starterKits")
 		await expect(
 			sessionsCreateHandler.handler(
 				socket,
@@ -302,6 +304,13 @@ describe("🚧 M2e: a provided book is disabled, never deleted", () => {
 				(() => {}) as any
 			)
 		).rejects.toThrow("Access denied. You can only read a lorebook you own into a session.")
+		expect(
+			await sessionsCreateHandler.handler(
+				socket,
+				{ session: { name: "new" }, starterKit: { lorebookId: book.id }, characterIds: [], personaIds: [] } as any,
+				(() => {}) as any
+			)
+		).toEqual({ error: STARTER_KIT_SENTENCES.unknown })
 		// Already reading it: naming it again is not a new attach, and the session keeps it.
 		await sessionsUpdateHandler.handler(
 			socket,
@@ -562,31 +571,57 @@ describe("provided books", () => {
 		// Delete: the marked book goes; the copy is the person's.
 		const gone = await deleteProvidedBooks(testDb as any, pluginId)
 		expect(gone.books).toBe(1)
+		expect(gone.kept).toEqual([])
 		expect(await provided(pluginId)).toHaveLength(0)
 		const left = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, copy.id))
 		expect(left).toHaveLength(1)
 	})
 
-	test("a person's update cannot mint or move the mark", async () => {
+	test("uninstall keeps a provided book a session plays on, as an ordinary book, and names it", async () => {
+		const { syncProvidedBooks, deleteProvidedBooks } = await import("./providedBooks")
+		const { pluginId, admin, manifest } = await seedPlugin()
+		await grant(pluginId, manifest)
+		await syncProvidedBooks(testDb as any, pluginId)
+		const [book] = await provided(pluginId)
+		await testDb.insert(schema.sessions).values({ userId: admin.id, isGroup: false, name: "Plays", lorebookId: book.id })
+		await testDb.update(schema.lorebooks).set({ extraJson: { ...(book.extraJson as object), provided: { ...(book.extraJson as any).provided, disabled: { at: 1, by: admin.id, version: "1" } } } }).where(eq(schema.lorebooks.id, book.id))
+		const out = await deleteProvidedBooks(testDb as any, pluginId)
+		expect(out.books).toBe(0)
+		expect(out.kept).toEqual([book.name])
+		const [after] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, book.id))
+		expect(after).toBeTruthy()
+		expect((after!.extraJson as any).provided.disabled).toBeUndefined()
+	})
+
+	test("a live provided lorebook refuses even its enabling administrator's update; once the plugin is gone the update lands and the sent mark is ignored", async () => {
 		const { syncProvidedBooks } = await import("./providedBooks")
+		const { primerRowEditRefusal } = await import("./providedMarks")
 		const { lorebooksUpdateHandler } = await import("$lib/server/sockets/lorebooks")
 		const { pluginId, admin, manifest } = await seedPlugin()
 		await grant(pluginId, manifest)
 		await syncProvidedBooks(testDb as any, pluginId)
 		const [book] = await provided(pluginId)
 		const stored = (book.extraJson as any).provided
+		const update = () =>
+			lorebooksUpdateHandler.handler(
+				{ user: { id: admin.id } } as any,
+				{
+					lorebook: {
+						id: book.id,
+						name: "Renamed",
+						extraJson: { provided: { plugin: "someone.else", slug: "x", version: "9", uuid: book.uuid } }
+					}
+				} as any,
+				() => {}
+			)
 
-		await lorebooksUpdateHandler.handler(
-			{ user: { id: admin.id } } as any,
-			{
-				lorebook: {
-					id: book.id,
-					name: "Renamed",
-					extraJson: { provided: { plugin: "someone.else", slug: "x", version: "9", uuid: book.uuid } }
-				}
-			} as any,
-			() => {}
-		)
+		await expect(update()).rejects.toThrow(primerRowEditRefusal(pluginId))
+		const [refused] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, book.id))
+		expect(refused.name).toBe(book.name)
+		expect((refused.extraJson as any).provided).toEqual(stored)
+
+		await testDb.delete(schema.plugins).where(eq(schema.plugins.pluginId, pluginId))
+		await update()
 		const [after] = await testDb.select().from(schema.lorebooks).where(eq(schema.lorebooks.id, book.id))
 		expect(after.name).toBe("Renamed")
 		expect((after.extraJson as any).provided).toEqual(stored)

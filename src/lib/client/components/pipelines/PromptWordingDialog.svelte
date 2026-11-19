@@ -4,10 +4,12 @@
 	 * previewed, i.e. in a popout"): every prompt one step offers, and the
 	 * wording of the one being read, so a person can compare before picking.
 	 *
-	 * Session settings show a member only a dropdown of prompt names; this is
-	 * where they read what each one tells the model. The text comes from
-	 * `pipelines:promptWording`, which answers only for a prompt the option
-	 * offers this viewer. Not a **preview** — in the canon that word is a dry
+	 * Where a person reads what each prompt tells the model. The text comes
+	 * from `pipelines:promptWording`, which answers only for a prompt the
+	 * row offers this viewer. Two callers, two addresses: the settings panel
+	 * names a pipeline *option* (`option.id`); a session's settings form
+	 * names a form *field* (`fieldId`, the field's `id`) and the server
+	 * answers only the session's owner. Not a **preview** — in the canon that word is a dry
 	 * run — so the code says *wording* and the button says *Read*.
 	 *
 	 * Two choices per row (STYLE-GUIDE §6.6, a dialog that lets you read each
@@ -22,10 +24,26 @@
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import ListGroupLabel from "$lib/client/components/panels/ListGroupLabel.svelte"
 
+	type Choice = {
+		id: number
+		label: string
+		description?: string
+		group?: string
+	}
+	/** What the dialog reads of a row: the panel's option and the settings form's field both fit. */
+	interface DialogOption {
+		id: string
+		value?: unknown
+		choices?: Choice[]
+		prompt?: { id: number; name: string }
+	}
+
 	interface Props {
 		slug: string
 		sessionId?: number
-		option: Sockets.Pipelines.Option
+		option: DialogOption
+		/** Set by a session's settings form: asks by this form field's `id` instead of the option's. */
+		fieldId?: string
 		/** The row's label in the panel — the step whose prompt this is. */
 		rowLabel: string
 		/** The panel's own field labels, so both places name a field alike. */
@@ -40,6 +58,7 @@
 		slug,
 		sessionId,
 		option,
+		fieldId,
 		rowLabel,
 		fieldLabel,
 		canPick,
@@ -51,13 +70,6 @@
 	const titleId = $props.id()
 
 	type Wording = Sockets.Pipelines.PromptWording.Response
-	type Choice = {
-		id: number
-		label: string
-		description?: string
-		group?: string
-	}
-
 	const GROUPS = [
 		{ key: "usedHere", label: "Used in this pipeline" },
 		{ key: "shipped", label: "Serene Pub ships" },
@@ -69,24 +81,32 @@
 	)
 	/** Every prompt on offer, the one in use included even when it is not a choice. */
 	const choices = $derived.by((): Choice[] => {
-		const list = ((option.choices ?? []) as Choice[]).slice()
+		const list = (option.choices ?? []).slice()
 		if (
 			inUseId != null &&
 			!list.some((c) => c.id === inUseId) &&
-			(option as any).prompt?.id === inUseId
+			option.prompt?.id === inUseId
 		)
 			list.unshift({
 				id: inUseId,
-				label: (option as any).prompt.name,
+				label: option.prompt.name,
 				group: "usedHere"
 			})
 		return list
 	})
+	/** One list, no label, when no choice names a group: "Also fits" would be untrue there. */
+	const ungrouped = $derived(!choices.some((c) => c.group))
 	const grouped = $derived(
-		GROUPS.map((g) => ({
-			...g,
-			rows: choices.filter((c) => (c.group ?? "alsoFits") === g.key)
-		})).filter((g) => g.rows.length)
+		ungrouped
+			? choices.length
+				? [{ key: "all", label: "", rows: choices }]
+				: []
+			: GROUPS.map((g) => ({
+					...g,
+					rows: choices.filter(
+						(c) => (c.group ?? "alsoFits") === g.key
+					)
+				})).filter((g) => g.rows.length)
 	)
 
 	/** The prompt being read: the one in use, else the first offered. */
@@ -99,7 +119,20 @@
 	const asked = new Set<number>()
 
 	const mine = (res: Wording) =>
-		res.slug === slug && res.optionId === option.id && res.promptId != null
+		res.slug === slug &&
+		(fieldId != null
+			? res.fieldId === fieldId
+			: res.optionId === option.id) &&
+		res.promptId != null
+
+	/** The request for one prompt, addressed by field or by option (never both). */
+	const ask = (promptId: number) =>
+		socket.emit(
+			"pipelines:promptWording",
+			fieldId != null
+				? { slug, fieldId, promptId, sessionId }
+				: { slug, optionId: option.id, promptId, sessionId }
+		)
 
 	// Declared before the request effect below: the key is held before the
 	// request goes out.
@@ -119,24 +152,14 @@
 	function retry(id: number) {
 		wordings.delete(id)
 		asked.add(id)
-		socket.emit("pipelines:promptWording", {
-			slug,
-			optionId: option.id,
-			promptId: id,
-			sessionId
-		})
+		ask(id)
 	}
 
 	$effect(() => {
 		const id = reading
 		if (id == null || asked.has(id)) return
 		asked.add(id)
-		socket.emit("pipelines:promptWording", {
-			slug,
-			optionId: option.id,
-			promptId: id,
-			sessionId
-		})
+		ask(id)
 	})
 
 	const current = $derived(
@@ -205,13 +228,20 @@
 					>
 						{#each grouped as g (g.key)}
 							<div class="flex flex-col gap-1">
-								<ListGroupLabel
-									label={g.label}
-									id="{titleId}-{g.key}"
-								/>
+								{#if !ungrouped}
+									<ListGroupLabel
+										label={g.label}
+										id="{titleId}-{g.key}"
+									/>
+								{/if}
 								<ul
 									class="flex flex-col gap-1"
-									aria-labelledby="{titleId}-{g.key}"
+									aria-label={ungrouped
+										? "Prompts on offer"
+										: undefined}
+									aria-labelledby={ungrouped
+										? undefined
+										: `${titleId}-${g.key}`}
 								>
 									{#each g.rows as c (c.id)}
 										{@const isReading = c.id === reading}

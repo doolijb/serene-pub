@@ -136,7 +136,8 @@ export async function previewTurn(db: Db, sessionId: number): Promise<PreviewOut
 
 /**
  * What the pipeline layer holds for configurations, as comparable rows: the
- * configs, their values, every selection and every session override. Ids
+ * configs, their values, every selection, every session override and every
+ * session's registration values. Ids
  * are kept — a second boot that renumbered a row changed it.
  */
 export async function configurationState(db: Db) {
@@ -155,6 +156,10 @@ export async function configurationState(db: Db) {
 		overrides: await rows(
 			`SELECT spec_id, scope_kind, scope_id, node_key, slot, path, value::text AS value FROM pipeline_node_overrides ORDER BY spec_id, scope_kind, scope_id, node_key, slot, path`
 		),
+		// A session's step values live on its own registration rows.
+		sessionValues: await rows(
+			`SELECT id, session_id, key, values::text AS values FROM registrations WHERE scope_kind = 'session' ORDER BY session_id, key, id`
+		),
 		connections: await rows(
 			`SELECT id, name, type, base_url, preset, extra_json::text AS extra, capabilities::text AS caps FROM connections ORDER BY id`
 		),
@@ -170,4 +175,39 @@ export async function configurationState(db: Db) {
 			`SELECT id, history_entry_id FROM narrative_relationships ORDER BY id`
 		)
 	}
+}
+
+/**
+ * The step values a session's registrations hold at `slot` (and `path` when
+ * given), one entry per registration key, with the pipeline the key runs.
+ * Reads the effective registrations, so a change row and a registering row
+ * are both found under the key they answer.
+ */
+export async function sessionStepValues(
+	db: Db,
+	sessionId: number,
+	where: { slot: string; path?: string }
+): Promise<Array<{ slug: string; key: string; nodeKey: string; path: string; value: unknown }>> {
+	const { effectiveRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const resolved = await effectiveRegistrations(db, sessionId)
+	const client = (db as any).$client
+	const rows = (
+		await client.query(
+			`SELECT key, values FROM registrations WHERE scope_kind = 'session' AND session_id = $1`,
+			[sessionId]
+		)
+	).rows as Array<{ key: string; values: Record<string, Record<string, unknown>> | null }>
+	const out: Array<{ slug: string; key: string; nodeKey: string; path: string; value: unknown }> = []
+	for (const row of rows) {
+		const slug = resolved?.effective.find((r) => r.key === row.key)?.pipeline
+		if (!slug) continue
+		for (const [nodeKey, slots] of Object.entries(row.values ?? {})) {
+			const cur = slots[where.slot]
+			if (cur === undefined) continue
+			if (where.path === undefined) out.push({ slug, key: row.key, nodeKey, path: "", value: cur })
+			else if (cur && typeof cur === "object" && where.path in (cur as object))
+				out.push({ slug, key: row.key, nodeKey, path: where.path, value: (cur as Record<string, unknown>)[where.path] })
+		}
+	}
+	return out
 }

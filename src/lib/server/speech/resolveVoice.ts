@@ -14,6 +14,7 @@ import { and, eq, isNull, sql } from "drizzle-orm"
 import { readSpeechFacts } from "$lib/shared/connectionAdapters/speechFacts"
 import { parseParticipantRef, type ParticipantRef } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { writeGenreFields } from "$lib/server/sessions/settingsWrite"
 import { db as appDb, dbReady } from "$lib/server/db"
 import { timbreOfExtensions, type CharacterTimbreInput } from "$lib/shared/characters/timbre"
 import type { VoiceResolution } from "$lib/shared/speech/voicebank"
@@ -415,20 +416,15 @@ async function rememberAutoPick(
 	const key = speechAutoVoiceKey(await autoVoiceRefOf(d, sessionId, speakerRef))
 	await d.transaction(async (tx) => {
 		await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"speech_auto_voice:" + sessionId}))`)
-		const [row] = await tx
-			.select({ genreFields: schema.sessions.genreFields })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-			.limit(1)
-		if (!row) return
-		const fields = { ...((row.genreFields ?? {}) as Record<string, unknown>) }
-		const cur = typeof fields[key] === "string" ? (fields[key] as string).trim() : ""
-		const valid = !!cur && o.candidateSlugs.includes(cur) && cur !== o.narratorSlug
-		if (valid) return
-		if (write && o.pick.slug) fields[key] = o.pick.slug
-		else if (key in fields) delete fields[key]
-		else return
-		await tx.update(schema.sessions).set({ genreFields: fields }).where(eq(schema.sessions.id, sessionId))
+		await writeGenreFields(tx, sessionId, (fields) => {
+			const cur = typeof fields[key] === "string" ? (fields[key] as string).trim() : ""
+			const valid = !!cur && o.candidateSlugs.includes(cur) && cur !== o.narratorSlug
+			if (valid) return null
+			if (write && o.pick.slug) fields[key] = o.pick.slug
+			else if (key in fields) delete fields[key]
+			else return null
+			return fields
+		})
 	})
 }
 

@@ -556,6 +556,8 @@ describe("deleting the book (B0's open item; L4 review)", () => {
 			{ ownerKind: "session_location", ownerId: w.crypt.id, slotId: INVENTORY, value: { v: [] }, sessionId: s.id }
 		])
 		await set(other.user.id, { ...at(other, other.crypt.id), slotId: INVENTORY, value: ["kept"] })
+		// A book a session plays on is not deleted; this session's rows stay, the session leaves the book.
+		await testDb.update(schema.sessions).set({ lorebookId: null }).where(eq(schema.sessions.id, s.id))
 
 		const { lorebooksDeleteHandler } = await import("./lorebooks")
 		const c = caller(w.user.id)

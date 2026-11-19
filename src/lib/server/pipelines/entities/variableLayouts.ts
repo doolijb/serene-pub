@@ -372,28 +372,31 @@ const recordEntries = (key: string): string =>
 	].join("\n")
 
 /**
- * History's rows, each keyed by its date and, when the row has one, its
- * distance from the story's now: `"412-03-03 (-0y 0m 2d)"`.
+ * History's rows as minified JSON, newest first (the value's order): a list of
+ * `{"date", "dateDelta"?, "content"}` objects, one per row.
  *
  * ```
- * {
+ * [
  *   {{~#each history~}}
- *     "{{{formatDate date}}}{{#if dateDelta}} ({{{formatDateDelta dateDelta}}}){{/if}}":{{{jsonValue content indent=0}}}{{#unless @last}},{{/unless}}
+ *     {"date":{{{jsonValue (formatDate date) indent=0}}}{{#if dateDelta}},"dateDelta":"{{{formatDateDelta dateDelta}}}"{{/if}},"content":{{{jsonValue content indent=0}~}}
+ *     }{{#unless @last}},{{/unless}}
  *   {{~/each~}}
- * }
+ * ]
  * ```
  *
- * The date text sits inside literal quotes, unescaped, exactly as the source
- * writes it: a calendar name holding `"` or `\` prints as written, and the
- * floor (`historyJson`) agrees. A list keeps two rows on one date as two keys;
- * the `(2)` suffix belonged to the keyed record this replaced.
+ * The date text goes through `jsonValue`, so a calendar name holding `"` or
+ * `\` prints as valid JSON. A row is its own object: two rows on one date are
+ * two objects. `dateDelta` is printed as its text and only when the row has
+ * one; a row with no date prints `"date":""`. The line breaks follow
+ * `earlierSceneEntries`, for the same reason.
  */
 const historyEntries = [
-	`{`,
+	`[`,
 	`  {{~#each history~}}`,
-	`    "{{{formatDate date}}}{{#if dateDelta}} ({{{formatDateDelta dateDelta}}}){{/if}}":{{{jsonValue content indent=0}}}{{#unless @last}},{{/unless}}`,
+	`    {"date":{{{jsonValue (formatDate date) indent=0}}}{{#if dateDelta}},"dateDelta":"{{{formatDateDelta dateDelta}}}"{{/if}},"content":{{{jsonValue content indent=0}~}}`,
+	`    }{{#unless @last}},{{/unless}}`,
 	`  {{~/each~}}`,
-	`}`
+	`]`
 ].join("\n")
 
 /**
@@ -402,15 +405,12 @@ const historyEntries = [
  */
 const historyJson = (v: unknown): string => {
 	if (!Array.isArray(v) || v.length === 0) return ""
-	return (
-		"{" +
-		v
-			.map(
-				(r: { date?: unknown; dateDelta?: unknown; content?: unknown }) =>
-					`"${storyDateText(r?.date)}${r?.dateDelta ? ` (${storyDateDeltaText(r.dateDelta)})` : ""}":${JSON.stringify(r?.content) ?? ""}`
-			)
-			.join(",") +
-		"}"
+	return JSON.stringify(
+		v.map((r: { date?: unknown; dateDelta?: unknown; content?: unknown }) => ({
+			date: storyDateText(r?.date),
+			...(r?.dateDelta ? { dateDelta: storyDateDeltaText(r.dateDelta) } : {}),
+			content: r?.content
+		}))
 	)
 }
 
@@ -1363,8 +1363,9 @@ export async function renderVariable(
 	run?: RenderRun,
 	/**
 	 * Told, in one line, when the value's kind is not the kind its variable
-	 * declares for its root: the value is then written out as it came, without
-	 * a layout (see below).
+	 * declares for its root: the variable then prints its floor (its plain
+	 * default rendering, heading included) instead of its layout, or nothing
+	 * when the floor cannot render the value either. The line says which.
 	 */
 	report?: (line: string) => void
 ): Promise<string> {
@@ -1374,22 +1375,43 @@ export async function renderVariable(
 	const variableId = variableOfKey(layouts, key)
 	const def = variableId ? definitionByVariable.get(variableId) : undefined
 
+	const shipped = variableId ? shippedByVariable.get(variableId) : undefined
+	// A key core ships nothing for is a plugin's band or a variable with an
+	// automatic layout (`objectVariableLayouts.ts`). An object there floors to
+	// that automatic layout's own output — minified JSON — and never to
+	// `String(value)`, which is `[object Object]` in someone's prompt.
+	const floor = () =>
+		shipped
+			? shipped.codeDefault(value)
+			: value !== null && typeof value === "object"
+				? asMinifiedJson(value)
+				: asWritten(value)
+
 	// Scope guard, before the absence rule and before any layout: a value whose
 	// kind is not its root's declared kind would make a layout throw or print
-	// nonsense, and the variable's own floor reads the declared shape. Written
-	// out as it came instead, with the cause reported. The ROOT KIND only: a
-	// full shape check would refuse rows with extra fields, which open rows
-	// carry. An `'any'` or name-list root is never guarded.
+	// nonsense. The variable falls back to its floor, which reads the declared
+	// shape and may still render it, heading included; a floor that throws or
+	// comes back empty prints nothing. The cause is reported either way. The
+	// ROOT KIND only: a full shape check would refuse rows with extra fields,
+	// which open rows carry. An `'any'` or name-list root is never guarded.
 	if (variableId && value != null) {
 		const declared = declaredRootField(variableId, key)
 		const got = declared ? kindMismatch(declared.type, value) : undefined
 		if (got) {
+			let text = ""
+			try {
+				text = floor()
+			} catch {
+				text = ""
+			}
+			const instead =
+				text === ""
+					? "nothing was printed, because its plain default could not render it either"
+					: "it was rendered with its plain default instead of its layout"
 			report?.(
-				`layout: '${key}' (${variableId}) was handed ${got} where its variable declares ${A_KIND[declared!.type]}, so it was written out as it came, without a layout. The step that produced it should hand down the declared shape.`
+				`layout: '${key}' (${variableId}) was handed ${got} where its variable declares ${A_KIND[declared!.type]}, so ${instead}. The step that produced it should hand down the declared shape.`
 			)
-			return value !== null && typeof value === "object"
-				? asMinifiedJson(value)
-				: asWritten(value)
+			return text
 		}
 	}
 
@@ -1407,18 +1429,6 @@ export async function renderVariable(
 	// nothing, heading included — so a plugin's titled layout never writes its
 	// heading above an absent band.
 	if (!def && value == null) return ""
-
-	const shipped = variableId ? shippedByVariable.get(variableId) : undefined
-	// A key core ships nothing for is a plugin's band or a variable with an
-	// automatic layout (`objectVariableLayouts.ts`). An object there floors to
-	// that automatic layout's own output — minified JSON — and never to
-	// `String(value)`, which is `[object Object]` in someone's prompt.
-	const floor = () =>
-		shipped
-			? shipped.codeDefault(value)
-			: value !== null && typeof value === "object"
-				? asMinifiedJson(value)
-				: asWritten(value)
 
 	const chosen = layouts?.[key]
 	if (!chosen?.source) return floor()
@@ -1458,8 +1468,8 @@ const LIQUID_CALL = new RegExp(
  * The layout a reference names **within one variable**, as the render needs it
  * — by variable, never by key (a layout is the same row wherever the variable
  * renders). Undefined when no row answers: the reference is unknown, withdrawn,
- * or its row was written for another variable. The one lookup the world
- * (`world.ts`) and the template preview share.
+ * or its row was written for another variable. The world (`world.ts`) and the
+ * template preview share its rule, `referencedLayoutFrom`, and the lookups under it.
  */
 export async function referencedLayoutOf(
 	db: Db,
@@ -1471,13 +1481,27 @@ export async function referencedLayoutOf(
 	)
 	const id = await layoutByReference(db, variableId, reference)
 	if (id == null) return undefined
-	const row = await resolveVariableTemplate(db, id)
-	if (!row || row.variableId !== variableId) return undefined
+	return referencedLayoutFrom(await resolveVariableTemplate(db, id), variableId)
+}
+
+/**
+ * `referencedLayoutOf` over the layout already resolved from the row the
+ * reference named (`layoutOfRow`; null or undefined when none): undefined
+ * unless it was written for this variable.
+ */
+export function referencedLayoutFrom(
+	layout:
+		| { variableId: string; engine: string; source: string; name: string; origin: ReferencedLayout["origin"] }
+		| null
+		| undefined,
+	variableId: string
+): ReferencedLayout | undefined {
+	if (!layout || layout.variableId !== variableId) return undefined
 	return {
-		engine: row.engine,
-		source: row.source,
-		name: row.name,
-		origin: row.origin
+		engine: layout.engine,
+		source: layout.source,
+		name: layout.name,
+		origin: layout.origin
 	}
 }
 

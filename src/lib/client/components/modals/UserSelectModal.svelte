@@ -176,7 +176,7 @@
 				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
 			>
 				<header class="flex items-center justify-between">
-					<h2 class="h2">{title}</h2>
+					<Dialog.Title class="h2">{title}</Dialog.Title>
 					<button
 						class="btn btn-sm"
 						aria-label="Close"

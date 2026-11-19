@@ -1,6 +1,6 @@
 /**
  * True when running inside the bundled Android app wrapper (NodeService.kt sets
- * this env var before spawning the server). Used to hide features that don't
+ * this env var before spawning the server). Hides features that don't
  * make sense in that sandbox — managed local model runners need a binary we
  * don't/can't bundle for Android, and on-device embedding models are an
  * unverified native-dependency risk there.

@@ -37,6 +37,7 @@ const LOREBOOK_FAMILIES = [
 	"bindingCheck:",
 	"scenes:",
 	"narrativeGraph:",
+	"entryKnowledge:",
 	// The summarize modal's run, which writes lore (Phase D).
 	"sessions:summarize:"
 ] as const
@@ -70,6 +71,8 @@ const SCOPE_PATHS = {
 	"entries:restoreRedline": ["lorebookId"],
 	"entries:clearRedlines": ["lorebookId"],
 	"entries:redlineCount": ["lorebookId"],
+	"scenes:redlines": ["lorebookId"],
+	"scenes:restoreRedline": ["lorebookId"],
 	"characterVersions:redlines": ["characterVersionId"],
 	"characterVersions:restoreRedline": ["characterVersionId"],
 	"characterVersions:clearRedlines": ["characterVersionId"],
@@ -98,6 +101,9 @@ const SCOPE_PATHS = {
 	"narrativeGraph:list": ["lorebookId"],
 	"narrativeGraph:duplicateCandidates": ["lorebookId"],
 	"narrativeGraph:listMergeLogs": ["lorebookId"],
+	"entryKnowledge:list": ["lorebookId"],
+	"entryKnowledge:setCommonKnowledge": ["lorebookId"],
+	"entryKnowledge:setTie": ["lorebookId"],
 	"sessions:summarize:progress": ["sessionId"],
 	"sessions:summarize:complete": ["sessionId"]
 } as const satisfies Partial<

@@ -1,0 +1,16 @@
+{
+	// The type-check svelte-check runs: tsconfig.json minus the integration tests, which
+	// `tsc --noEmit -p .` still checks. `exclude` replaces the base's list, so it restates
+	// the generated one (.svelte-kit/tsconfig.json) with root-relative paths.
+	"extends": "./tsconfig.json",
+	"exclude": [
+		"node_modules/**",
+		"src/service-worker.js",
+		"src/service-worker/**/*.js",
+		"src/service-worker.ts",
+		"src/service-worker/**/*.ts",
+		"src/service-worker.d.ts",
+		"src/service-worker/**/*.d.ts",
+		"src/**/*.int.test.ts"
+	]
+}

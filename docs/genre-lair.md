@@ -232,7 +232,7 @@ A Lair turn writes several messages: the beats in the Sanctum, the Oracle's roll
 2. **Regenerate** takes the whole turn after your line, every reply of it, as **Back** does, on both conversations, along with any stat change or proposal they made. Your own lines are never taken, and nor is anything you did after the turn.
 3. The same turn runs again from its start. Under **On revision: Branch** the session branches first and the turn is played there.
 
-Tick **Don't ask again for this session** to skip the dialog; **Ask before regenerating a turn** in the settings brings it back. Only you can do this, and only while nothing is being written. It's grey, with the reason, when your own line is the newest (*Your line is the newest. Press Continue.*), when nothing has been written yet, or when the newest message came from **Trigger trap** or **Reveal**. In an [archived session](./sessions.md#archive-and-unarchive) it is grey too.
+Tick **Don't ask again for this session** to skip the dialog; **Ask before regenerating a turn** in the settings brings it back. Only you can do this, and only while nothing is being written and no reply, action or routine is running (it reads *Wait for ‹name› to finish, or stop it first.*; press **Stop** in the **Turn line**). It's grey, with the reason, when your own line is the newest (*Your line is the newest. Press Continue.*), when nothing has been written yet, or when the newest message came from **Trigger trap** or **Reveal**. In an [archived session](./sessions.md#archive-and-unarchive) it is grey too.
 
 ## What your lines are called
 

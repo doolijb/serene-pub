@@ -3,8 +3,8 @@
 	 * Session data (owner-approved 2026-09-26): a look at the session's
 	 * annex — for each owner (core, then each plugin) every key it declares,
 	 * with its shape, who can see it, who can change it and the value stored
-	 * now; then legacy keys no declaration covers. For the session's owner and
-	 * administrators; the server refuses anyone else.
+	 * now; then legacy keys no declaration covers. For the session's owner only;
+	 * the server refuses anyone else, administrators included.
 	 *
 	 * **Editable in place** (lair re-plan R13, 2026-09-28): a text field its
 	 * declaration lets people set (`act`) gets an Edit button — the way to

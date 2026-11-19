@@ -1,7 +1,9 @@
 /**
- * 🚧 (m2e-F-D, ★M2e-D-4) A primer row is read-only: every person-facing write
- * door on a book refuses it with one sentence, a clone still works, and the
- * boot sync and the admin disable/enable still write.
+ * 🚧 (m2e-F-D, ★M2e-D-4) A live provided lorebook (a primer row or any
+ * provided book, of either kind) is read-only to every person, the enabling
+ * administrator included: every person-facing write door refuses it with one
+ * sentence, a clone still works, and the boot sync, the admin disable/enable
+ * and the plugin's removal still write.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -17,13 +19,12 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
 	return {
-		...actual,
-		db,
+		...testDbModule(await createTestDb()),
 		getCryptoSecretKey: () => "primer-read-only-test-secret"
 	}
 })
@@ -51,6 +52,8 @@ vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 const VIS_PRIMER = "core:primer/vis-itineris@1"
 const PLUGIN_ID = "acme/primer-kit"
 const PLUGIN_NAME = "Acme Kit"
+const WORLD_PLUGIN_ID = "acme/world-book"
+const WORLD_PLUGIN_NAME = "Acme Worlds"
 const quiet = (() => {}) as any
 const db = () => testDb as unknown as Db
 const socket = (userId: number, isAdmin = false) =>
@@ -73,6 +76,8 @@ let primerId: number
 let pluginKitId: number
 let adminKitId: number
 let plainProvidedId: number
+let worldBookId: number
+let worldMemberId: number
 
 async function bookRow(id: number) {
 	const [row] = await testDb
@@ -188,6 +193,28 @@ beforeAll(async () => {
 		{ name: "Plain provided", kind: "book" },
 		"core"
 	)
+	await testDb.insert(schema.plugins).values({
+		pluginId: WORLD_PLUGIN_ID,
+		name: WORLD_PLUGIN_NAME,
+		version: "0.1.0",
+		bundleSource: "",
+		bundleHash: "y",
+		enabled: true,
+		manifest: {},
+		adminDenied: []
+	} as any)
+	worldBookId = await insertBook(
+		{ name: "Plugin world", kind: "book" },
+		WORLD_PLUGIN_ID
+	)
+	const { insertCastMember } = await import("$lib/server/characters/versions")
+	worldMemberId = (
+		await insertCastMember(db(), {
+			lorebookId: worldBookId,
+			name: "Verity",
+			binding: "{{char:world-member}}"
+		})
+	).member.id
 }, 180_000)
 
 afterAll(async () => {
@@ -370,9 +397,9 @@ describe("a core primer row refuses every person's edit", () => {
 		expect(await entriesOf(primerId)).toEqual(before)
 	}, 60_000)
 
-	test("the Brackenvale sentence names the pub, not a plugin", () => {
+	test("the core sentence names the pub, not a plugin", () => {
 		expect(REFUSAL_CORE()).toBe(
-			"This starter lorebook comes with the pub: clone it to make your own."
+			"This lorebook comes with the pub: make your own copy to change it."
 		)
 	})
 })
@@ -386,7 +413,7 @@ describe("who is and is not a primer row", () => {
 			primerRowEditRefusalOf(PLUGIN_NAME)
 		)
 		await expect(table["entries:create"]()).rejects.toThrow(
-			`This starter lorebook comes with ${PLUGIN_NAME}: clone it to make your own.`
+			`This lorebook comes with ${PLUGIN_NAME}: make your own copy to change it.`
 		)
 		const { primerRowEditProblem } = await import("./providedMarks")
 		expect(await primerRowEditProblem(db(), pluginKitId)).toBe(
@@ -419,28 +446,228 @@ describe("who is and is not a primer row", () => {
 		expect((await bookRow(pluginKitId)).name).toBe("Renamed")
 	}, 60_000)
 
-	test("an admin kit with no mark and a plain provided book stay editable", async () => {
+	test("an admin kit with no mark stays editable", async () => {
 		const { primerRowEditProblem } = await import("./providedMarks")
-		for (const id of [adminKitId, plainProvidedId]) {
-			expect(await primerRowEditProblem(db(), id)).toBeNull()
-			const entry = (await entriesOf(id))[0]
-			const table = await doors(
-				id,
-				entry.id,
-				entry.typeId,
-				socket(adminId, true)
-			)
-			await table["lorebooks:update settings"]()
-			expect((await bookRow(id)).name).toBe("Renamed")
-			await table["entries:update"]()
-			expect((await entriesOf(id))[0].content).toBe("changed")
-		}
+		expect(await primerRowEditProblem(db(), adminKitId)).toBeNull()
+		const entry = (await entriesOf(adminKitId))[0]
+		const table = await doors(
+			adminKitId,
+			entry.id,
+			entry.typeId,
+			socket(adminId, true)
+		)
+		await table["lorebooks:update settings"]()
+		expect((await bookRow(adminKitId)).name).toBe("Renamed")
+		await table["entries:update"]()
+		expect((await entriesOf(adminKitId))[0].content).toBe("changed")
 		expect(await primerRowEditProblem(db(), 987_654_321)).toBeNull()
+	}, 60_000)
+
+	test("a plain core-provided lorebook of kind book refuses every door with the core sentence and changes nothing", async () => {
+		const entry = (await entriesOf(plainProvidedId))[0]
+		const table = await doors(
+			plainProvidedId,
+			entry.id,
+			entry.typeId,
+			socket(adminId, true)
+		)
+		const before = await stateOf(plainProvidedId)
+		for (const [name, run] of Object.entries(table)) {
+			if (name === "starterKits:saveFromBook") continue // a pure copy: allowed, tested apart
+			await expect(run(), name).rejects.toThrow(REFUSAL_CORE())
+		}
+		expect(await stateOf(plainProvidedId)).toEqual(before)
+	}, 60_000)
+})
+
+describe("a plugin's provided lorebook of kind book", () => {
+	test("refuses every door, the enabling administrator's included, with the plugin's sentence and changes nothing", async () => {
+		const entry = (await entriesOf(worldBookId))[0]
+		const asker = socket(adminId, true)
+		const table = await doors(worldBookId, entry.id, entry.typeId, asker)
+		const before = await stateOf(worldBookId)
+		for (const [name, run] of Object.entries(table)) {
+			if (name === "starterKits:saveFromBook") continue // a pure copy: allowed, tested apart
+			await expect(run(), name).rejects.toThrow(
+				primerRowEditRefusalOf(WORLD_PLUGIN_NAME)
+			)
+		}
+		expect(await stateOf(worldBookId)).toEqual(before)
+	}, 60_000)
+
+	test("Save as starter lorebook copies it: a new kit of the administrator's own, the source untouched", async () => {
+		const entry = (await entriesOf(worldBookId))[0]
+		const table = await doors(
+			worldBookId,
+			entry.id,
+			entry.typeId,
+			socket(adminId, true)
+		)
+		const before = await stateOf(worldBookId)
+		const res: any = await table["starterKits:saveFromBook"]()
+		expect(res.kit).toBeTruthy()
+		expect(await stateOf(worldBookId)).toEqual(before)
+	}, 60_000)
+
+	test("refuses a knowledge tie, an import overwrite, a cast edit and a delete, each with its sentence", async () => {
+		const { PROVIDED_BOOK_DELETE_REFUSAL } = await import("./providedMarks")
+		const K = await import("$lib/server/sockets/entryKnowledge")
+		const L = await import("$lib/server/sockets/lorebooks")
+		const { buildLorebookExportData } = await import(
+			"$lib/server/utils/lorebookExportBuilder"
+		)
+		const asker = socket(adminId, true)
+		const sentence = primerRowEditRefusalOf(WORLD_PLUGIN_NAME)
+		const entry = (await entriesOf(worldBookId))[0]
+		const before = await stateOf(worldBookId)
+
+		await expect(
+			K.entryKnowledgeSetTie.handler(
+				asker,
+				{
+					lorebookId: worldBookId,
+					castMemberId: worldMemberId,
+					entryId: entry.id,
+					hand: "knows"
+				} as any,
+				quiet
+			)
+		).rejects.toThrow(sentence)
+		await expect(
+			K.entryKnowledgeSetCommonKnowledge.handler(
+				asker,
+				{ lorebookId: worldBookId, entryIds: [entry.id] } as any,
+				quiet
+			)
+		).rejects.toThrow(sentence)
+
+		await expect(
+			L.updateLorebookBindingHandler.handler(
+				asker,
+				{ lorebookBinding: { id: worldMemberId, summary: "Changed." } } as any,
+				quiet
+			)
+		).rejects.toThrow(sentence)
+
+		// A re-imported file that names this lorebook conflicts with it; choosing
+		// Overwrite is a write like any other.
+		const { specBookWithGraph } = await buildLorebookExportData(
+			worldBookId,
+			adminId
+		)
+		const edited = JSON.parse(JSON.stringify(specBookWithGraph))
+		edited.entries[0].content = "Edited elsewhere"
+		const held: any = await L.lorebookImportHandler.handler(
+			asker,
+			{ lorebookJson: JSON.stringify(edited) } as any,
+			quiet
+		)
+		expect(held.status).toBe("conflict")
+		expect(held.conflict.existingLorebook.id).toBe(worldBookId)
+		await expect(
+			L.lorebookImportResolveHandler.handler(
+				asker,
+				{
+					heldImportId: held.conflict.heldImportId,
+					action: "overwrite",
+					existingId: worldBookId
+				} as any,
+				quiet
+			)
+		).rejects.toThrow(sentence)
+
+		await expect(
+			L.lorebooksDeleteHandler.handler(asker, { id: worldBookId } as any, quiet)
+		).rejects.toThrow(PROVIDED_BOOK_DELETE_REFUSAL)
+
+		expect(await stateOf(worldBookId)).toEqual(before)
+	}, 60_000)
+
+	test("its copy is the person's own: no refusal, and an update lands", async () => {
+		const { primerRowEditProblem } = await import("./providedMarks")
+		const { lorebooksDuplicateHandler, lorebooksUpdateHandler } = await import(
+			"$lib/server/sockets/lorebooks"
+		)
+		const asker = socket(adminId, true)
+		const dup: any = await lorebooksDuplicateHandler.handler(
+			asker,
+			{ lorebookId: worldBookId } as any,
+			quiet
+		)
+		const copyId = dup?.lorebook?.id ?? dup?.id
+		expect(copyId).toBeTruthy()
+		expect(copyId).not.toBe(worldBookId)
+		expect(await primerRowEditProblem(db(), copyId)).toBeNull()
+		await lorebooksUpdateHandler.handler(
+			asker,
+			{ lorebook: { id: copyId, description: "mine now" } } as any,
+			quiet
+		)
+		expect((await bookRow(copyId)).description).toBe("mine now")
+	}, 60_000)
+
+	test("the admin disable and enable pair toggles its mark, and the book stays read-only while disabled", async () => {
+		const { setProvidedBookDisabled } = await import("./providedBooks")
+		const { markedBook, primerRowEditProblem } = await import(
+			"./providedMarks"
+		)
+		const slug = `${WORLD_PLUGIN_ID}:slug`
+		const mark = async () => {
+			const r = await bookRow(worldBookId)
+			return markedBook(r.extraJson, r.uuid)!
+		}
+		await setProvidedBookDisabled(db(), WORLD_PLUGIN_ID, slug, true, adminId)
+		expect((await mark()).disabled).toBe(true)
+		expect(await primerRowEditProblem(db(), worldBookId)).toBe(
+			primerRowEditRefusalOf(WORLD_PLUGIN_NAME)
+		)
+		await setProvidedBookDisabled(db(), WORLD_PLUGIN_ID, slug, false, adminId)
+		expect((await mark()).disabled).toBeUndefined()
+	}, 60_000)
+
+	test("removing the plugin deletes a provided lorebook no session plays on", async () => {
+		const { deleteProvidedBooks } = await import("./providedBooks")
+		const removalId = "acme/removal"
+		await testDb.insert(schema.plugins).values({
+			pluginId: removalId,
+			name: "Acme Removal",
+			version: "0.1.0",
+			bundleSource: "",
+			bundleHash: "z",
+			enabled: true,
+			manifest: {},
+			adminDenied: []
+		} as any)
+		const id = await insertBook({ name: "Goes with it", kind: "book" }, removalId)
+		const out = await deleteProvidedBooks(db(), removalId)
+		expect(out.books).toBe(1)
+		expect(await bookRow(id)).toBeUndefined()
+	}, 60_000)
+
+	test("kept at uninstall (its plugin row gone) it is the administrator's ordinary lorebook: editable and deletable", async () => {
+		const { primerRowEditProblem } = await import("./providedMarks")
+		const { lorebooksUpdateHandler, lorebooksDeleteHandler } = await import(
+			"$lib/server/sockets/lorebooks"
+		)
+		const keptId = await insertBook(
+			{ name: "Kept book", kind: "book" },
+			"gone/world-book"
+		)
+		const asker = socket(adminId, true)
+		expect(await primerRowEditProblem(db(), keptId)).toBeNull()
+		await lorebooksUpdateHandler.handler(
+			asker,
+			{ lorebook: { id: keptId, name: "Kept and renamed" } } as any,
+			quiet
+		)
+		expect((await bookRow(keptId)).name).toBe("Kept and renamed")
+		await lorebooksDeleteHandler.handler(asker, { id: keptId } as any, quiet)
+		expect(await bookRow(keptId)).toBeUndefined()
 	}, 60_000)
 })
 
 describe("the wire field", () => {
-	test("lorebooks:list and lorebooks:get carry readOnly for the primer row only", async () => {
+	test("lorebooks:list and lorebooks:get carry readOnly for every live provided lorebook, naming its owner, and not for an admin kit", async () => {
 		const { buildLorebooksList, lorebooksGetHandler } = await import(
 			"$lib/server/sockets/lorebooks"
 		)
@@ -448,8 +675,11 @@ describe("the wire field", () => {
 		const of = (id: number) =>
 			list.lorebookList.find((b: any) => b.id === id)
 		expect(of(primerId).readOnly).toEqual({ pluginName: null })
+		expect(of(plainProvidedId).readOnly).toEqual({ pluginName: null })
+		expect(of(worldBookId).readOnly).toEqual({
+			pluginName: WORLD_PLUGIN_NAME
+		})
 		expect(of(adminKitId)?.readOnly).toBeUndefined()
-		expect(of(plainProvidedId)?.readOnly).toBeUndefined()
 		const get = async (id: number) =>
 			(
 				(await lorebooksGetHandler.handler(
@@ -459,8 +689,13 @@ describe("the wire field", () => {
 				)) as any
 			).lorebook
 		expect((await get(primerId)).readOnly).toEqual({ pluginName: null })
+		expect((await get(plainProvidedId)).readOnly).toEqual({
+			pluginName: null
+		})
+		expect((await get(worldBookId)).readOnly).toEqual({
+			pluginName: WORLD_PLUGIN_NAME
+		})
 		expect((await get(adminKitId)).readOnly).toBeUndefined()
-		expect((await get(plainProvidedId)).readOnly).toBeUndefined()
 		expect((await get(plainProvidedId)).provided).toEqual({
 			disabled: false
 		})

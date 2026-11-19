@@ -1,8 +1,9 @@
 /**
- * A provided book keeps its cast's faces (§0-D), the two holes beside the
- * member form: a picture added to its list (`lorebooks:uploadMemberFace`) and
- * a dated face change (`amendments:create` / `amendments:update`). Its clone,
- * and a book whose plugin was uninstalled, are the person's.
+ * A live provided lorebook is read-only, so its cast's faces are too, at the
+ * two doors beside the member form: a picture added to its list
+ * (`lorebooks:uploadMemberFace`) and a dated change (`amendments:create` /
+ * `amendments:update`). Its clone, and a book whose plugin was uninstalled,
+ * are the person's.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -12,7 +13,7 @@ import { count, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
-import { PROVIDED_BOOK_CAST_REFUSAL } from "$lib/server/plugins/providedMarks"
+import { primerRowEditRefusal } from "$lib/server/plugins/providedMarks"
 import { insertCastMember } from "$lib/server/characters/versions"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -92,8 +93,8 @@ async function providedBook(plugin: string, installed: boolean) {
 	return { user, book, member }
 }
 
-describe("uploadMemberFace on a provided book", () => {
-	test("is refused and writes no file; the clone and an uninstalled plugin's book accept", async () => {
+describe("uploadMemberFace on a live provided lorebook", () => {
+	test("is refused with the general sentence and writes no file; the clone and an uninstalled plugin's book accept", async () => {
 		const { uploadMemberFaceHandler } = await import(
 			"$lib/server/sockets/lorebooks"
 		)
@@ -109,7 +110,7 @@ describe("uploadMemberFace on a provided book", () => {
 				},
 				noop
 			)
-		).rejects.toThrow(PROVIDED_BOOK_CAST_REFUSAL)
+		).rejects.toThrow(primerRowEditRefusal("acme-l2"))
 		expect(await filesCount()).toBe(before)
 
 		const { duplicateLorebookRows } = await import(
@@ -148,8 +149,8 @@ describe("uploadMemberFace on a provided book", () => {
 	})
 })
 
-describe("a dated face change on a provided book", () => {
-	test("is refused; a dated summary is not; a re-save changing neither is not", async () => {
+describe("a dated change on a live provided lorebook", () => {
+	test("is refused with the general sentence, a dated summary and a re-save included, and writes nothing", async () => {
 		const { amendmentsCreateHandler, amendmentsUpdateHandler } =
 			await import("$lib/server/sockets/amendments")
 		const { user, book, member: bare } = await providedBook("acme-l2", true)
@@ -171,6 +172,11 @@ describe("a dated face change on a provided book", () => {
 			binding: "{{char:carded}}",
 			characterId: card.id
 		})
+		const versionsOf = async () =>
+			testDb
+				.select()
+				.from(schema.characterVersions)
+				.where(eq(schema.characterVersions.castMemberId, member.id))
 		const create = (fields: Record<string, unknown>) =>
 			amendmentsCreateHandler.handler(
 				fakeSocket(user.id),
@@ -182,26 +188,21 @@ describe("a dated face change on a provided book", () => {
 				} as any,
 				noop
 			)
+		const before = await versionsOf()
 		for (const fields of [
 			{ faceMediaId: 999999 },
 			{ retold: { face: true } },
-			{ faceMediaId: 999999, retold: { face: true } }
+			{ faceMediaId: 999999, retold: { face: true } },
+			{ summary: "Keeper of the marrow." }
 		])
 			await expect(create(fields)).rejects.toThrow(
-				PROVIDED_BOOK_CAST_REFUSAL
+				primerRowEditRefusal("acme-l2")
 			)
-		const listed = await create({ summary: "Keeper of the marrow." })
-		expect(listed.cast).toHaveLength(1)
-		expect(listed.cast[0].fields).toEqual({
-			summary: "Keeper of the marrow."
-		})
-		// Nothing is written to the frozen dated-change table any more.
+		expect(await versionsOf()).toEqual(before)
 		expect(await testDb.select().from(schema.castAmendments)).toEqual([])
 
-		// An existing dated version that already wears its own face: re-saving
-		// it with the flag unchanged is not refused, changing it is. (Made
-		// through the versions writer, past the provided-book check, as a
-		// lifted 0.5 change would be.)
+		// An existing dated version (made through the versions writer, as a
+		// lifted 0.5 change would be): a re-save is refused whatever it sends.
 		const { writeCastVersion } = await import(
 			"$lib/server/characters/versions"
 		)
@@ -217,19 +218,24 @@ describe("a dated face change on a provided book", () => {
 				}
 			})
 		)
+		const withOwn = await versionsOf()
 		const update = (fields: Record<string, unknown>) =>
 			amendmentsUpdateHandler.handler(
 				fakeSocket(user.id),
 				{ id: own.id, lorebookId: book.id, subject: "cast", fields } as any,
 				noop
 			)
-		await update({ retold: { face: true }, summary: "Same flag." })
-		await expect(update({ retold: { face: false } })).rejects.toThrow(
-			PROVIDED_BOOK_CAST_REFUSAL
-		)
+		for (const fields of [
+			{ retold: { face: true }, summary: "Same flag." },
+			{ retold: { face: false } }
+		])
+			await expect(update(fields)).rejects.toThrow(
+				primerRowEditRefusal("acme-l2")
+			)
+		expect(await versionsOf()).toEqual(withOwn)
 	})
 
-	test("an uninstalled plugin's book is not refused on the cast sentence", async () => {
+	test("an uninstalled plugin's book is not refused", async () => {
 		const { amendmentsCreateHandler } = await import(
 			"$lib/server/sockets/amendments"
 		)

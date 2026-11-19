@@ -70,6 +70,7 @@ import {
 } from "./zones"
 import type { EngineInput, ZoneEntry } from "./types"
 import type { ImprintAnchor } from "$lib/server/lorebooks/imprints"
+import { castMemberLockedAgainstRuns, entryLockedAgainstRuns } from "$lib/shared/lorebooks/runLocks"
 
 type Db = any
 
@@ -726,12 +727,16 @@ async function writeColumn(
 			.select({
 				fields: schema.lorebookEntries.fields,
 				lorebookId: schema.lorebookEntries.lorebookId,
-				typeId: schema.lorebookEntries.typeId
+				typeId: schema.lorebookEntries.typeId,
+				title: schema.lorebookEntries.title,
+				entryLock: schema.lorebookEntries.entryLock
 			})
 			.from(schema.lorebookEntries)
 			.where(eq(schema.lorebookEntries.id, at.entryId))
 			.limit(1)
 		if (!row) return "its entry is gone"
+		// A locked entry is left as it is: no field is written.
+		if (entryLockedAgainstRuns(row)) return `its entry '${row.title ?? `entry ${at.entryId}`}' is locked`
 		const fields = isRecord(row.fields) ? row.fields : {}
 		await db
 			.update(schema.lorebookEntries)
@@ -934,12 +939,19 @@ export async function writeLandings(
 		// 🚧 ★5: else, for the attached book, the notes' rule-fed overlay.
 		const entryId = l.entry.entryId!
 		const [entry] = await db
-			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.select({
+				lorebookId: schema.lorebookEntries.lorebookId,
+				title: schema.lorebookEntries.title,
+				entryLock: schema.lorebookEntries.entryLock
+			})
 			.from(schema.lorebookEntries)
 			.where(eq(schema.lorebookEntries.id, entryId))
 			.limit(1)
 		fact.entryId = entryId
 		if (!entry) fact.skipped = "its entry is gone"
+		// A locked entry takes nothing from a run: neither in place nor on the notes' overlay.
+		else if (entryLockedAgainstRuns(entry))
+			fact.skipped = `its entry '${entry.title ?? `entry ${entryId}`}' is locked`
 		else if (
 			entry.lorebookId !== r.target.lorebookId &&
 			r.target.route === "own-book" &&
@@ -1054,7 +1066,9 @@ export async function writeAttributeLandings(
 		) {
 			const cols = {
 				id: schema.lorebookBindings.id,
-				lorebookId: schema.lorebookBindings.lorebookId
+				lorebookId: schema.lorebookBindings.lorebookId,
+				name: schema.lorebookBindings.name,
+				castMemberLock: schema.lorebookBindings.castMemberLock
 			}
 			// The member in the book written to, else 🚧 (★5) in the attached book the notes overlay.
 			const [b] =
@@ -1088,7 +1102,10 @@ export async function writeAttributeLandings(
 				b.lorebookId !== r.target.lorebookId &&
 				r.target.route === "own-book" &&
 				b.lorebookId === r.attachedId
-			if (overlaid) {
+			// A locked member's state is left as it is, in the book and in the notes overlay alike.
+			if (b && castMemberLockedAgainstRuns(b))
+				fact.skipped = `its cast member '${b.name ?? `cast member ${b.id}`}' is locked`
+			else if (overlaid) {
 				if (typeof value !== "string" || !NODE_STATES.has(value))
 					fact.skipped = `'${String(value)}' is no state a cast member is in`
 				else {

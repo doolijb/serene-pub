@@ -18,12 +18,15 @@
 		type EntryTypeId
 	} from "$lib/shared/entries/types"
 	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
+	import { getBookKnowledge } from "./knowledge/bookKnowledge.svelte"
+	import KnowledgeMarkConfirm from "./knowledge/KnowledgeMarkConfirm.svelte"
 	import { bookTimeline, getBookData } from "./bookData.svelte"
 	import {
 		BULK_LABELS,
 		bulkDeleteCopy,
 		bulkMoveCount,
 		bulkMoveProblem,
+		bulkNotCommonCopy,
 		bulkReport,
 		filedUnderCount,
 		planBulk,
@@ -77,8 +80,16 @@
 	const uid = `bulkBar${Math.random().toString(36).slice(2, 8)}`
 
 	const lineName = (id: number | null) => openBookTime.lineName(id)
-	const toggles = $derived(toggleActions(selected))
 	const none = $derived(selected.length === 0)
+	const knowledge = getBookKnowledge()
+	/** The rows with their common-knowledge mark: for the knowledge action only. */
+	const markedRows = $derived(
+		selected.map((r) => ({
+			...r,
+			notCommon: knowledge?.isMarked(r.id) ?? false
+		}))
+	)
+	const toggles = $derived(toggleActions(markedRows))
 	const ids = $derived(selected.map((r) => r.id))
 
 	let busy = $state(false)
@@ -89,6 +100,7 @@
 		plan: BulkPlan
 	} | null>(null)
 	let deleteAsk = $state.raw<{ plan: BulkPlan } | null>(null)
+	let markAsk = $state.raw<{ plan: BulkPlan } | null>(null)
 	let moveAsk = $state.raw<{ count: number } | null>(null)
 
 	const words = $derived({
@@ -188,7 +200,10 @@
 	}
 
 	async function toggle(
-		action: Exclude<BulkAction, "beginning" | "decay" | "delete">
+		action: Exclude<
+			BulkAction,
+			"beginning" | "decay" | "delete" | "notCommon" | "common"
+		>
 	) {
 		const plan = planBulk(action, selected, { lineName })
 		const patch =
@@ -228,6 +243,60 @@
 		}
 		deleteAsk = { plan }
 	}
+
+	/** One request for the whole selection; the server's write is all or nothing. */
+	async function sendMark(plan: BulkPlan, notCommonKnowledge: boolean) {
+		if (!knowledge) return
+		busy = true
+		progress = { done: 0, total: plan.send.length }
+		report = null
+		try {
+			await knowledge.setMark(
+				plan.send.map((r) => r.id),
+				notCommonKnowledge
+			)
+			progress = { done: plan.send.length, total: plan.send.length }
+			say(plan.send.length, plan.skip, [], [])
+		} catch (err) {
+			const reason =
+				err instanceof Error && err.message
+					? err.message
+					: "The entries could not be marked."
+			say(
+				0,
+				plan.skip,
+				plan.send.map((r) => ({ id: r.id, name: r.name, reason })),
+				[]
+			)
+		} finally {
+			busy = false
+		}
+	}
+
+	function knowledgeAction() {
+		const action = toggles.knowledge
+		const plan = planBulk(action, markedRows, { lineName })
+		if (plan.send.length === 0) {
+			report = null
+			say(0, plan.skip, [], [])
+			return
+		}
+		if (action === "common") void sendMark(plan, false)
+		else markAsk = { plan }
+	}
+
+	function confirmMark() {
+		if (!markAsk) return
+		const { plan } = markAsk
+		markAsk = null
+		void sendMark(plan, true)
+	}
+
+	const markCopy = $derived(
+		markAsk
+			? bulkNotCommonCopy(markAsk.plan.send.length)
+			: { title: "", message: "" }
+	)
 
 	const parents = $derived.by(() => {
 		const map = new Map<number, number | null>()
@@ -449,6 +518,16 @@
 		>
 			{BULK_LABELS[toggles.archive]}
 		</button>
+		{#if knowledge?.loaded}
+			<button
+				type="button"
+				class={btn}
+				disabled={none || busy}
+				onclick={knowledgeAction}
+			>
+				{BULK_LABELS[toggles.knowledge]}
+			</button>
+		{/if}
 		<button
 			type="button"
 			class="btn btn-sm preset-tonal-error pointer-coarse:min-h-11"
@@ -492,6 +571,19 @@
 		}}
 		onConfirm={() => void confirmDelete()}
 		onCancel={() => (deleteAsk = null)}
+	/>
+{/if}
+
+{#if markAsk}
+	<KnowledgeMarkConfirm
+		open={true}
+		title={markCopy.title}
+		message={markCopy.message}
+		onOpenChange={(e) => {
+			if (!e.open) markAsk = null
+		}}
+		onConfirm={confirmMark}
+		onCancel={() => (markAsk = null)}
 	/>
 {/if}
 

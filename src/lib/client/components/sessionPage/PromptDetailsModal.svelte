@@ -109,11 +109,15 @@
 							<div
 								class="text-surface-700-300 flex flex-wrap gap-4 text-xs"
 							>
-								<span>
-									Format: <span class="text-surface-300-700">
-										{promptDetails.meta.promptFormat || "—"}
+								<!-- The format comes from the connection: model plumbing,
+								     an administrator's. -->
+								{#if isAdmin}
+									<span>
+										Format: <span class="text-surface-300-700">
+											{promptDetails.meta.promptFormat || "—"}
+										</span>
 									</span>
-								</span>
+								{/if}
 								{#if promptDetails.meta.templateName}
 									<span>
 										Template: <span

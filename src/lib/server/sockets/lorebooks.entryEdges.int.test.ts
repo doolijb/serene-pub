@@ -438,17 +438,19 @@ describe("a place's relationships: name, reverse, one of each (plan B1)", () => 
 		const { entryInsert } = await import("$lib/server/utils/lorebookEntries")
 		const { LOCATION_TYPE_ID, HISTORY_TYPE_ID } = await import("$lib/shared/entries/types")
 		let position = 0
-		const entry = async (typeId: string, name: string) =>
+		const entry = async (typeId: string, name: string, year?: number) =>
 			(
 				await testDb
 					.insert(schema.lorebookEntries)
 					.values(
-						entryInsert({ typeId, lorebookId: lorebook.id, name, content: `${name}.`, position: position++ } as any)
+						entryInsert({ typeId, lorebookId: lorebook.id, name, content: `${name}.`, position: position++, year } as any)
 					)
 					.returning()
 			)[0]!
 		const place = (name: string) => entry(LOCATION_TYPE_ID, name)
-		const chapter = () => entry(HISTORY_TYPE_ID, "")
+		// A history entry with no year is not carried by an export, so a test that
+		// exports its chapters gives each one.
+		const chapter = (year?: number) => entry(HISTORY_TYPE_ID, "", year)
 		// One member per tag per book: two names of one length shared a tag.
 		let tagN = 0
 		const member = async (name: string) =>
@@ -840,7 +842,7 @@ describe("a place's relationships: name, reverse, one of each (plan B1)", () => 
 		const b = await placesBook()
 		const guardroom = await b.place("The Guardroom")
 		const hall = await b.place("The Drowned Hall")
-		const [one, two] = [await b.chapter(), await b.chapter()]
+		const [one, two] = [await b.chapter(1), await b.chapter(2)]
 		await draw(b, at(guardroom.id), at(hall.id))
 		await draw(b, at(guardroom.id), at(hall.id), { historyEntryId: one.id })
 		await draw(b, at(guardroom.id), at(hall.id), { historyEntryId: two.id })

@@ -106,6 +106,8 @@
  */
 
 import { and, asc, desc, eq, getTableColumns, inArray, isNotNull, isNull, sql } from "drizzle-orm"
+import { canWriteLorebook } from "$lib/server/utils/ownedBook"
+import { liveProvidedBookSql, primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
@@ -197,6 +199,10 @@ import {
 import { unseenSentence, whyUnseen } from "$lib/shared/lorebooks/placeSight"
 import { tieSentence } from "$lib/shared/lorebooks/describingRow"
 import { declaresPrivateLore } from "$lib/server/utils/lorebookEntries"
+import {
+	castMemberLockedAgainstRuns,
+	RUN_LOCK_SENTENCES
+} from "$lib/shared/lorebooks/runLocks"
 
 /** `user` · `run:<id>` · `script:<id>` · `session:<id>` — free text, and the ledger reads it. */
 export type StateWriter = string
@@ -887,7 +893,7 @@ export async function retractStateAnchoredTo(
 		 */
 		above?: number
 	} = {}
-): Promise<{ clockMoved: boolean; changed: boolean; taken: RetractedState; seatChanges: SeatChange[] }> {
+): Promise<{ clockMoved: boolean; changed: boolean; taken: RetractedState; seatChanges: SeatChange[]; stayed: string[] }> {
 	// 🚧 The settle line (pr-6 B4): nothing at or before it is taken back —
 	// throws `SettledRefusal` with the sentence, before anything is written.
 	const { assertRetractable } = await import("$lib/server/sessions/settle")
@@ -1001,7 +1007,8 @@ export async function retractStateAnchoredTo(
 				sessionImprints,
 				imprintMark
 			},
-			seatChanges: imprintSeatChanges
+			seatChanges: imprintSeatChanges,
+			stayed: libraryBack.stayed
 		}
 	})
 	return out
@@ -1869,6 +1876,19 @@ export async function assertSessionOwner(
 	/** The person writing, when one is. Only the durable kinds read it. */
 	userId?: number | null
 ): Promise<void> {
+	await ownerChecked(db, sessionId, owner, userId)
+}
+
+/**
+ * `assertSessionOwner`, answering what a value writer needs of the row it
+ * read: for a cast member, its quoted name when the cast member lock is on.
+ */
+async function ownerChecked(
+	db: Db,
+	sessionId: number,
+	owner: StateOwner,
+	userId?: number | null
+): Promise<{ runLocked: string | null } | void> {
 	if (!isOwnerKind(owner.kind))
 		throw new StateRefusal(`'${String(owner.kind)}' is not an owner kind.`)
 	if (owner.kind === "lorebook") {
@@ -1884,7 +1904,11 @@ export async function assertSessionOwner(
 	if (owner.kind === "cast_member") {
 		const books = (await lorebooksReadBy(db, sessionId)).ids
 		const [member] = await db
-			.select({ lorebookId: schema.lorebookBindings.lorebookId })
+			.select({
+				lorebookId: schema.lorebookBindings.lorebookId,
+				name: schema.lorebookBindings.name,
+				castMemberLock: schema.lorebookBindings.castMemberLock
+			})
 			.from(schema.lorebookBindings)
 			.where(eq(schema.lorebookBindings.id, owner.id))
 			.limit(1)
@@ -1893,7 +1917,12 @@ export async function assertSessionOwner(
 				"that is not a cast member of this session's lorebook."
 			)
 		await assertBookWriter(db, sessionId, member.lorebookId, userId)
-		return
+		// What a run is told when the member is locked; the validating callers ignore it.
+		return {
+			runLocked: castMemberLockedAgainstRuns(member)
+				? `'${member.name ?? `cast member ${owner.id}`}'`
+				: null
+		}
 	}
 	if (owner.kind === "card") {
 		const [card] = await db
@@ -2154,11 +2183,20 @@ async function ownsBook(
 	writer: number | null
 ): Promise<boolean> {
 	const [book] = await db
-		.select({ userId: schema.lorebooks.userId })
+		.select({
+			userId: schema.lorebooks.userId,
+			provided: liveProvidedBookSql()
+		})
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId))
 		.limit(1)
-	return !!book && writer != null && book.userId === writer
+	if (!book) return false
+	// A live provided lorebook belongs to its source: nobody writes its values, in the one sentence.
+	if (book.provided) {
+		const problem = await primerRowEditProblem(db, lorebookId)
+		throw new StateRefusal(problem ?? `${NOT_YOUR_BOOK}.`)
+	}
+	return canWriteLorebook(writer, { userId: book.userId, provided: false })
 }
 
 // ── Writes ──────────────────────────────────────────────────────────────────
@@ -2576,7 +2614,15 @@ export async function setValue(
 ): Promise<number> {
 	if (await overlaidPlace(db, ctx.sessionId, change.owner, change.slotId))
 		return await setOverlaidPlaceValue(db, ctx, change, messages)
-	await assertSessionOwner(db, ctx.sessionId, change.owner, ctx.userId)
+	const owned = await ownerChecked(
+		db,
+		ctx.sessionId,
+		change.owner,
+		ctx.userId
+	)
+	// A run (no person behind the write) leaves a locked cast member's sheet as it is.
+	if (owned && owned.runLocked !== null && ctx.userId == null)
+		throw new StateRefusal(RUN_LOCK_SENTENCES.castMember(owned.runLocked))
 	await assertBookWritesOn(db, ctx.sessionId, change.owner)
 	const config = await configFor(db, {
 		sessionId: ctx.sessionId,
@@ -2835,7 +2881,15 @@ export async function proposeChange(
 		throw new StateRefusal(
 			"that change names no slot. An item moving is an add or remove on the inventory stat."
 		)
-	await assertSessionOwner(db, ctx.sessionId, change.owner, ctx.userId)
+	const owned = await ownerChecked(
+		db,
+		ctx.sessionId,
+		change.owner,
+		ctx.userId
+	)
+	// A run's proposal to a locked cast member's sheet is not made; a person's Accept of an earlier one still lands.
+	if (owned && owned.runLocked !== null && ctx.userId == null)
+		throw new StateRefusal(RUN_LOCK_SENTENCES.castMember(owned.runLocked))
 	// Under Off a proposal to change the book is one nothing could accept.
 	await assertBookWritesOn(db, ctx.sessionId, change.owner)
 	await assertTracked(db, ctx.sessionId, change.slotId)
@@ -3218,10 +3272,10 @@ async function decideClockProposal(
 }
 
 /**
- * 🚧 Who decides a held change on a player's seat (card-less, or a carded live seat): the
+ * 🚧 Who decides a held change on a seat (a player's, a carded live character seat, a card-less character seat): the
  * session's owner or its own player — never a watcher or another player (lane ed,
  * 2026-11-05: the same people who may accept may reject). Not judged by sheet latitude: deciding the model's change is not
- * a hand edit. No person (`userId` null) and every other owner: nothing to ask here.
+ * a hand edit; whose the seat is follows the sheet rule (`seatSheetHolder`). No person (`userId` null) and every other owner: nothing to ask here.
  */
 async function assertSeatDecider(
 	db: Db,
@@ -3229,7 +3283,24 @@ async function assertSeatDecider(
 	owner: StateOwner,
 	userId: number | null | undefined
 ): Promise<void> {
-	if (userId == null || (owner.kind !== "player_seat" && owner.kind !== "session_cast")) return
+	if (
+		userId == null ||
+		(owner.kind !== "player_seat" && owner.kind !== "session_cast" && owner.kind !== "seated_member")
+	)
+		return
+	if (owner.kind === "seated_member") {
+		const [seat] = await db
+			.select({ id: schema.sessionCharacters.id })
+			.from(schema.sessionCharacters)
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, sessionId),
+					eq(schema.sessionCharacters.castMemberId, owner.id)
+				)
+			)
+			.limit(1)
+		if (!seat) return
+	}
 	if (owner.kind === "session_cast") {
 		const [seat] = await db
 			.select({ id: schema.sessionPersonas.id })

@@ -37,13 +37,12 @@ let n = 0
 const turnEnded = vi.hoisted(() => [] as Array<Record<string, any>>)
 const genre = vi.hoisted(() => ({ turnSeatChanges: false }))
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
 	return {
-		...actual,
-		db,
+		...testDbModule(await createTestDb()),
 		getCryptoSecretKey: () => "seat-changes-turn-secret"
 	}
 })

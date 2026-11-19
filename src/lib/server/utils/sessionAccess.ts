@@ -77,6 +77,15 @@ export async function canViewCharacter(
 ): Promise<boolean> {
 	if (await isSharedWith(handle, "character", characterId, userId))
 		return true
+	return canViewCharacterThroughSessions(characterId, userId, handle)
+}
+
+/** `canViewCharacter` without the share probe: only a seat in a session the person can open counts. */
+export async function canViewCharacterThroughSessions(
+	characterId: number,
+	userId: number,
+	handle: Db = db as unknown as Db
+): Promise<boolean> {
 	const [asCast, asVoice, memberCast, memberVoice, drawing] = await Promise.all([
 		handle.query.sessionCharacters.findMany({
 			where: eq(schema.sessionCharacters.characterId, characterId),

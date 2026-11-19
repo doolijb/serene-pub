@@ -28,7 +28,7 @@
 	 */
 	interface Props {
 		lorebookId: number
-		/** A date of this book to spell the example with; absent → Year 1. */
+		/** A date of this book to spell the example with; absent → today's date in the browser. */
 		sample: StoryDate | null
 		hasUnsavedChanges?: boolean
 	}
@@ -64,7 +64,15 @@
 	let exampleDate = $derived<StoryDate>(
 		sample && sample.month != null && sample.day != null
 			? sample
-			: { year: sample?.year ?? 1, month: 1, day: 1 }
+			: sample?.year != null
+				? { year: sample.year, month: 1, day: 1 }
+				: openBookTime.start?.date
+					? {
+							year: openBookTime.start.date.year,
+							month: openBookTime.start.date.month ?? 1,
+							day: openBookTime.start.date.day ?? 1
+						}
+					: todayOnBrowserClock()
 	)
 	/** The calendar the example is spelled through: the draft when editing. */
 	let shown = $derived(draft ?? stored)
@@ -78,6 +86,12 @@
 			year: formatDate({ year: exampleDate.year }, cal)
 		}
 	})
+
+	/** Today from the browser's clock: the example date when the book offers none. Never year 1. */
+	function todayOnBrowserClock(): StoryDate {
+		const now = new Date()
+		return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() }
+	}
 
 	function copy(cal: StoryCalendar): StoryCalendar {
 		return JSON.parse(JSON.stringify(cal))

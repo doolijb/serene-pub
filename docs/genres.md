@@ -21,7 +21,7 @@ You pick a genre on the start screen, and it stays with the session for its whol
 
 More genres come from [plugins](#genres-from-plugins).
 
-🚧 **A genre expects a timeline, or doesn't.** A genre that keeps story time (Story, the Lair, Dungeon Crawler) starts a new session's own notes with a [timeline](./lorebook-time.md#a-lorebooks-timeline); Chat and Guide keep real time and start them without. A preset may override that default: Story's **Minimal** starts without one. A genre may also insist: the Lair and Dungeon Crawler always start their sessions' notes with a timeline, and none of their presets can change that. This only picks the start. Afterwards the lorebook decides whether story time moves, and the lorebook's owner can switch its timeline on or off (see [A timeline for a new session](./sessions.md#a-timeline-for-a-new-session)).
+🚧 **A genre expects a timeline, or doesn't.** A new session's own notes start without a [timeline](./lorebook-time.md#a-lorebooks-timeline) (Story, Chat and Guide alike), so messages show their real time. A preset may override that default. A genre may also insist: the Lair and Dungeon Crawler always start their sessions' notes with a timeline, and none of their presets can change that. This only picks the start. Afterwards the lorebook decides whether story time moves, and the lorebook's owner can switch its timeline on or off (see [A timeline for a new session](./sessions.md#a-timeline-for-a-new-session)).
 
 Alongside a genre you pick a **preset**: a starting recipe for that genre, which decides what runs on each turn, what runs on its own between turns, and which actions come along. Each genre has its own defaults, and a preset is a set of changes on them (see [Pipelines › What runs, and when](./pipelines.md#what-runs-and-when)). Story, Chat and the Lair show a choice; the other genres have one preset, picked for you. Star a genre on its card to make it your usual start, and star a preset to have it chosen for you; see [Start a session](./sessions.md#start-a-session).
 
@@ -32,11 +32,11 @@ Chat is the model as itself: a plain assistant with no characters, no persona an
 - **Basic**: the raw model, one call per turn, no tools. Works with any model.
 - **Agentic**: the model may call **tools** mid-reply: search the web and read a page, search and read your lorebooks, **write to a lorebook** (file an entry, keep or take back a note), **make a picture** (posted in the conversation, when an image model is set up), read the clock, do arithmetic, look back through this session. Each tool call is one more model call, up to a few per turn, and every call shows as a line in the session. Pick which tools are on under **Edit session › Settings › Tools**.
 
-Attach a lorebook and Chat reads it (**Read the lorebook**, in the reply's card under **Edit session › Settings**; off, nothing from it reaches the reply). **Remember things** is a routine, Off until you turn it on under **Edit session › Settings › Routines**: then every five turns Chat notes what you told it, and on Agentic it can keep and take back notes when you ask. The notes go into the lorebook you attached when it is yours and its lorebook writes are **Full** (your living memory bank), otherwise into this session's own notes, made the first time. A note about something already kept updates that note instead of adding a second (see [When a session writes about something that already has an entry](./lorebooks.md#when-a-session-writes-about-something-that-already-has-an-entry)). **Full** files them at once; **Review** holds each note for you (a tool's note waits in the session's own notes for you to add to your lorebook). Chat is yours alone: it can't be shared with guests.
+Start a Chat session with a lorebook and Chat reads it (**Read the lorebook**, in the reply's card under **Edit session › Settings**; off, nothing from it reaches the reply). **Remember things** is a routine, Off until you turn it on under **Edit session › Settings › Routines**: then every five turns Chat notes what you told it, and on Agentic it can keep and take back notes when you ask. The notes go into the session's lorebook when it is yours and its lorebook writes are **Full** (your living memory bank), otherwise into this session's own notes, made the first time. A note about something already kept updates that note instead of adding a second (see [When a session writes about something that already has an entry](./lorebooks.md#when-a-session-writes-about-something-that-already-has-an-entry)). **Full** files them at once; **Review** holds each note for you (a tool's note waits in the session's own notes for you to add to your lorebook). Chat is yours alone: it can't be shared with guests.
 
 ## Story
 
-Story is the genre for playing with characters, and the one a new install starts you in: see [Story](./genre-story.md). What used to be the **Chat** genre is Story's **Minimal** preset; sessions from earlier versions moved there by themselves.
+Story is the genre for playing with characters, and the one a new pub starts you in: see [Story](./genre-story.md). What used to be the **Chat** genre is Story's **Minimal** preset; sessions from earlier versions moved there by themselves.
 
 ## Guide
 
@@ -60,7 +60,7 @@ Every genre beyond the five above comes from a plugin. Once an administrator has
 
 ## Making a genre of your own
 
-**Admin › Session genres › Add genre** makes a genre in the app. You pick an owner slug once (`acme.lab`): every id the genre and its pipelines get lives under it, and it never changes. Then a name, a label, and what to start from: a copy of Chat, Story, Guide or the Lair, either everything that genre runs or just its create pipeline. The copy publishes the pipelines under your slug with the genre rewritten, registers them in the new genre's defaults with a default preset, carries the genre's layout across, and the genre is playable at once.
+**Admin › Genres › Add genre** makes a genre in the app. You pick an owner slug once (`acme.lab`): every id the genre and its pipelines get lives under it, and it never changes. Then a name, a label, and what to start from: a copy of Chat, Story, Guide or the Lair, either everything that genre runs or just its create pipeline. The copy publishes the pipelines under your slug with the genre rewritten, registers them in the new genre's defaults with a default preset, carries the genre's layout across, and the genre is playable at once.
 
 The genre's page then shows a **readiness** list in the order that works: name, session fields, create pipeline, reply pipeline, default preset, state, layout, other events, export. Gold until set, green when done; only the next line carries a button. The same page edits the genre's name and family, its **session fields** (what a session asks for when it starts, with a live preview of the form), and **events**: which pipeline runs on each. What else its sessions run, and the presets people pick from, are edited in **Admin › Presets**. Pipelines themselves are edited on their own pages' Canvas tab.
 
@@ -90,6 +90,6 @@ An envoy's words are its pipeline's settings: the **System prompt** and **Post-h
 ## Related
 
 - [Sessions](./sessions.md): starting and playing any session.
-- [Group sessions](./group-sessions.md): turn order in Chat.
+- [Group sessions](./group-sessions.md): turn order in Story.
 - [Story](./genre-story.md), [The Lair](./genre-lair.md) and [Dungeon Crawler](./genre-dungeon-crawler.md): the genres with a world in them.
 - [Pipelines](./pipelines.md): what a preset runs, and routines, for administrators.

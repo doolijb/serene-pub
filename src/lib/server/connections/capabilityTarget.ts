@@ -347,11 +347,14 @@ export interface CapabilityTargetRequest {
  *
  * One sentence for both, because to the person they are one state with one
  * fix, and it names that fix by the control that makes it — **Use in Reply**
- * beside a model in Connections (plan §E, 2026-10-06; it said "Choose one in
- * Admin → Defaults", which a member cannot open and an admin reaches faster
- * through Connections). "An admin", because the member who reads it in a
- * session cannot set it. It names no genre, so an adventure or a guide
+ * beside a model in Connections. It names no genre, so an adventure or a guide
  * session reads it as truly as a chat one.
+ *
+ * It names model plumbing, so it is for administrators: the failed row keeps it
+ * in `connection.detail` (administrators only), and a member reads the plain
+ * reply-failure sentence there. The member's own line about the same state is
+ * the readiness strip's ("No model is set up to reply. Ask your
+ * administrator.").
  *
  * ⚠ Chat only. Every other capability keeps its own sentence below: its fix
  * is not **Use in Reply**.

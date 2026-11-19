@@ -259,4 +259,27 @@ describe("dossierFor keeps its reference while its inputs hold", () => {
 			(m.seen as never as { settledThrough: number }).settledThrough
 		).toBe(7)
 	})
+	test("a Turn line is told whether a Composer on its Messages copy shows Send", () => {
+		const sendShown = (layout: PanelLayoutV2) =>
+			(mount(layout, page(), "turn-line").seen?.composer as { sendShown?: boolean })
+				.sendShown
+		expect(sendShown(WITHOUT_BOX)).toBe(true)
+		setWidgetSettingValues({ composer: { showSend: false } })
+		expect(sendShown(WITHOUT_BOX)).toBe(false)
+		setWidgetSettingValues({ composer: { showSend: true } })
+		expect(sendShown(WITHOUT_BOX)).toBe(true)
+		// No Composer beside the Messages copy: nothing shows Send there.
+		setWidgetSettingValues({})
+		expect(
+			sendShown({
+				version: 2,
+				left: [],
+				middle: [
+					{ key: "p1", tabs: ["messages"] },
+					{ key: "p2", tabs: ["turn-line"] }
+				],
+				right: []
+			})
+		).toBe(false)
+	})
 })

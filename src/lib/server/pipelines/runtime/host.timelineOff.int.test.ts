@@ -15,6 +15,7 @@ import { HISTORY_TYPE_ID, LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
 import { TIMELINE_OFF_SENTENCES } from "$lib/server/lorebooks/timeline"
+import { DATE_NOT_CHANGED_SENTENCE } from "./host"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -322,12 +323,14 @@ describe("host writes on a book whose timeline is off", () => {
 		const w = await world()
 		const day = async () =>
 			(await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, w.day.id)))[0]!
-		await (
+		const dated: any = await (
 			await w.host(`run-e-${w.suffix}`)
 		).commit!({ entry: w.day.id, content: "The gate stood.", fields: { year: 9, month: 2, day: 7 } }, UPDATE)
+		expect(dated.notes).toEqual([DATE_NOT_CHANGED_SENTENCE])
 		expect((await day()).content).toBe("The gate stood.")
 		expect((await day()).fields).toMatchObject({ year: 3, month: 1, day: 4 })
-		await (await w.host(`run-f-${w.suffix}`)).commit!({ entry: w.day.id, fields: { year: 8 } }, UPDATE)
+		const alone: any = await (await w.host(`run-f-${w.suffix}`)).commit!({ entry: w.day.id, fields: { year: 8 } }, UPDATE)
+		expect(alone.notes).toEqual([DATE_NOT_CHANGED_SENTENCE])
 		expect((await day()).fields).toMatchObject({ year: 3, month: 1, day: 4 })
 		expect((await day()).content).toBe("The gate stood.")
 	})

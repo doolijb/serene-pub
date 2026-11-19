@@ -24,6 +24,7 @@ import { resolveConfigSources, SLOT_VALUE } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { STORY_RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { STORY_GENRE_ID } from "@serene-pub/core-catalog"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 
@@ -140,7 +141,7 @@ beforeAll(async () => {
 	userId = user.id
 	const [session] = await db
 		.insert(schema.sessions)
-		.values({ userId, isGroup: false })
+		.values({ userId, isGroup: false, genreId: STORY_GENRE_ID } as any)
 		.returning()
 	sessionId = session.id
 })
@@ -160,6 +161,20 @@ const sessionRows = () =>
 				eq(schema.pipelineNodeOverrides.scopeId, sessionId)
 			)
 		)
+
+/** The session's own registration rows' values — where a session-scope write lands. */
+const sessionValues = async () =>
+	(
+		await db
+			.select()
+			.from(schema.registrations)
+			.where(
+				and(
+					eq(schema.registrations.scopeKind, "session"),
+					eq(schema.registrations.scopeRef, String(sessionId))
+				)
+			)
+	).map((r) => r.values as Record<string, Record<string, unknown>> | null)
 
 const leaveSessionConnection = () =>
 	db.insert(schema.pipelineNodeOverrides).values({
@@ -221,10 +236,15 @@ describe("writing a connection at session scope", () => {
 			),
 			sampling.id
 		)
-		const row = (await sessionRows()).find(
-			(r) => r.slot === samplingDecl.slot
+		// Lands in the session's registration values — the one store.
+		const held = (await sessionValues()).map(
+			(v) => v?.[samplingDecl.nodeKey]?.[samplingDecl.slot]
 		)
-		expect(row?.value).toBe(sampling.id)
+		expect(held.length).toBeGreaterThan(0)
+		for (const v of held) expect(v).toBe(sampling.id)
+		expect(
+			(await sessionRows()).some((r) => r.slot === samplingDecl.slot)
+		).toBe(false)
 	})
 })
 
@@ -295,8 +315,12 @@ describe("a leftover session connection row", () => {
 
 		const left = await sessionRows()
 		expect(left.filter((r) => r.slot === connectionDecl.slot)).toEqual([])
-		// Sampling is the session's own and stays.
-		expect(left.some((r) => r.slot === samplingDecl.slot)).toBe(true)
+		// Sampling is the session's own and stays, in its registration values.
+		expect(
+			(await sessionValues()).some(
+				(v) => v?.[samplingDecl.nodeKey]?.[samplingDecl.slot] != null
+			)
+		).toBe(true)
 
 		const selected = await resolveSelectedConfig(
 			db,

@@ -119,7 +119,8 @@ describe("section descriptors", () => {
 		expect(places?.newLabel).toBe("New place")
 		expect(places?.inspector.map((t) => t.id)).toEqual([
 			"fires",
-			"references"
+			"references",
+			"known-by"
 		])
 		expect(descriptorForKind("core:entry/location")?.id).toBe("places")
 		// A chip says the declared name, the rail's spelling.

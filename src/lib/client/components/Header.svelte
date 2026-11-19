@@ -53,13 +53,16 @@
 	 * 100-turn walk #26: Honour mode, How strict and the Rules options lived
 	 * behind Sessions → ⋮ → Edit → Settings, and nobody found them). The
 	 * Sessions view opens on this session's edit form, at its Settings tab
-	 * — the one place they are kept.
+	 * — the one place they are kept. A guest has no settings to open: the
+	 * same entry reads **Participants** and opens the form on that view
+	 * (the only one a guest has; owner ruling G1, 2026-11-16).
 	 */
+	const isOwner = $derived(openSessionCtx?.isOwner === true)
 	function openSessionSettings() {
 		const id = openSessionCtx?.sessionId
 		if (!panelsCtx || id == null) return
 		panelsCtx.digest.sessionId = id
-		panelsCtx.digest.sessionTab = "settings"
+		panelsCtx.digest.sessionTab = isOwner ? "settings" : "participants"
 		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
@@ -161,8 +164,8 @@
 		rewind && { separator: true },
 		openSessionCtx?.sessionId != null &&
 			!!panelsCtx && {
-				label: "Session settings",
-				icon: Icons.Settings,
+				label: isOwner ? "Session settings" : "Participants",
+				icon: isOwner ? Icons.Settings : Icons.UsersRound,
 				onSelect: openSessionSettings
 			},
 		{
@@ -377,18 +380,23 @@
 				</div>
 
 				<!-- 🚧 The session's settings, at every width (2026-10-18):
-				     the Sessions view's edit form on its Settings tab. -->
+				     the Sessions view's edit form on its Settings tab; a guest's
+				     reads Participants and opens that view (G1). -->
 				{#if openSessionCtx?.sessionId != null && panelsCtx}
 					<button
 						type="button"
 						class="sp-head-wide sp-head-quiet btn hover:preset-tonal focus-visible:preset-tonal text-foreground sp-head-labelled flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 px-0 [&>svg]:size-5"
-						aria-label="Session settings"
-						title="Session settings"
+						aria-label={isOwner ? "Session settings" : "Participants"}
+						title={isOwner ? "Session settings" : "Participants"}
 						onclick={openSessionSettings}
 					>
-						<Icons.Settings aria-hidden="true" />
+						{#if isOwner}
+							<Icons.Settings aria-hidden="true" />
+						{:else}
+							<Icons.UsersRound aria-hidden="true" />
+						{/if}
 						<span class="sp-head-label text-sm font-medium">
-							Settings
+							{isOwner ? "Settings" : "Participants"}
 						</span>
 					</button>
 				{/if}

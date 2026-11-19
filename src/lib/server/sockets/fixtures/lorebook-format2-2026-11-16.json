@@ -1,0 +1,508 @@
+{
+	"name": "Round Trip Book",
+	"description": "A book that has everything.",
+	"scan_depth": 4,
+	"extensions": {
+		"serenepub": {
+			"formatVersion": 2,
+			"uuid": "119b60f9-2659-49e5-ad53-fd8a1514299a",
+			"characters": [
+				{
+					"localId": 1,
+					"card": {
+						"spec": "chara_card_v3",
+						"spec_version": "3.0",
+						"data": {
+							"name": "Maren",
+							"description": "A smith.",
+							"personality": "",
+							"scenario": "",
+							"first_mes": "",
+							"mes_example": "",
+							"creator_notes": "",
+							"system_prompt": "",
+							"post_history_instructions": "",
+							"alternate_greetings": [],
+							"tags": [],
+							"creator": "",
+							"character_version": "1.0",
+							"extensions": {
+								"depth_prompt": {
+									"prompt": "",
+									"depth": 4,
+									"role": "system"
+								},
+								"serenepub": {
+									"uuid": "749260c9-aa99-4603-9799-957a88a2742d"
+								}
+							}
+						}
+					}
+				}
+			],
+			"personas": [],
+			"bindings": [
+				{
+					"localId": 2,
+					"bindingText": "{{char:1}}",
+					"kind": "character",
+					"characterLocalId": 1,
+					"personaLocalId": null
+				},
+				{
+					"localId": 3,
+					"bindingText": "{{char:2}}",
+					"kind": "character",
+					"characterLocalId": null,
+					"personaLocalId": null
+				}
+			],
+			"narrativeGraph": {
+				"version": 1,
+				"nodes": [
+					{
+						"localId": 6,
+						"name": "Maren",
+						"nodeState": "active",
+						"nodeVisibility": "normal",
+						"aliases": ["the smith"],
+						"absorbedAliases": [],
+						"summary": "Keeps the forge.",
+						"bindingLocalId": 2,
+						"parentLocalId": null,
+						"historyEntryLocalId": null,
+						"sceneLocalId": null,
+						"characterUuids": []
+					},
+					{
+						"localId": 7,
+						"name": "Hooded figure",
+						"nodeState": "active",
+						"nodeVisibility": "normal",
+						"aliases": [],
+						"absorbedAliases": [],
+						"summary": "Nobody knows who.",
+						"bindingLocalId": 3,
+						"parentLocalId": null,
+						"historyEntryLocalId": null,
+						"sceneLocalId": null,
+						"characterUuids": []
+					}
+				],
+				"relationships": [
+					{
+						"from": {
+							"kind": "cast",
+							"node": 6
+						},
+						"to": {
+							"kind": "cast",
+							"node": 7
+						},
+						"fromLocalId": 6,
+						"toLocalId": 7,
+						"relationshipType": "distrusts",
+						"description": "on main",
+						"visibility": "acknowledged",
+						"status": "active",
+						"reason": null,
+						"historyEntryLocalId": 1,
+						"sceneLocalId": null
+					},
+					{
+						"from": {
+							"kind": "entry",
+							"entry": 4
+						},
+						"to": {
+							"kind": "entry",
+							"entry": 5
+						},
+						"relationshipType": "leads to",
+						"reverseRelationshipType": "leads up to",
+						"name": "the trapdoor",
+						"description": "a way",
+						"visibility": "acknowledged",
+						"status": "active",
+						"reason": null,
+						"historyEntryLocalId": null,
+						"sceneLocalId": null
+					},
+					{
+						"from": {
+							"kind": "cast",
+							"node": 6
+						},
+						"to": {
+							"kind": "entry",
+							"entry": 3
+						},
+						"fromLocalId": 6,
+						"relationshipType": "knows",
+						"knowledgeKind": "knows",
+						"description": "",
+						"visibility": "acknowledged",
+						"status": "active",
+						"reason": null,
+						"historyEntryLocalId": null,
+						"sceneLocalId": null
+					},
+					{
+						"from": {
+							"kind": "cast",
+							"node": 6
+						},
+						"to": {
+							"kind": "entry",
+							"entry": 5
+						},
+						"fromLocalId": 6,
+						"relationshipType": "has_been_there",
+						"knowledgeKind": "has_been_there",
+						"description": "",
+						"visibility": "acknowledged",
+						"status": "active",
+						"reason": null,
+						"historyEntryLocalId": null,
+						"sceneLocalId": null
+					},
+					{
+						"from": {
+							"kind": "cast",
+							"node": 7
+						},
+						"to": {
+							"kind": "entry",
+							"entry": 3
+						},
+						"fromLocalId": 7,
+						"relationshipType": "was_told",
+						"knowledgeKind": "was_told",
+						"description": "",
+						"visibility": "acknowledged",
+						"status": "active",
+						"reason": null,
+						"historyEntryLocalId": 1,
+						"sceneLocalId": null
+					},
+					{
+						"from": {
+							"kind": "cast",
+							"node": 7
+						},
+						"to": {
+							"kind": "entry",
+							"entry": 2
+						},
+						"fromLocalId": 7,
+						"relationshipType": "kept_from",
+						"knowledgeKind": "kept_from",
+						"description": "",
+						"visibility": "acknowledged",
+						"status": "active",
+						"reason": null,
+						"historyEntryLocalId": null,
+						"sceneLocalId": null
+					}
+				]
+			},
+			"stats": {
+				"configs": [
+					{
+						"ownerKind": "cast_member",
+						"bindingLocalId": 2,
+						"slotId": "core:slot/hp@1",
+						"config": {
+							"max": 20
+						},
+						"historyEntryLocalId": null,
+						"sceneLocalId": null,
+						"updatedBy": "user",
+						"note": null
+					}
+				],
+				"values": [
+					{
+						"ownerKind": "lorebook",
+						"slotId": "core:slot/weather@1",
+						"value": {
+							"v": "rain"
+						},
+						"historyEntryLocalId": null,
+						"sceneLocalId": null,
+						"updatedBy": "user",
+						"note": null
+					},
+					{
+						"ownerKind": "cast_member",
+						"bindingLocalId": 2,
+						"slotId": "core:slot/hp@1",
+						"value": {
+							"v": 12
+						},
+						"historyEntryLocalId": null,
+						"sceneLocalId": null,
+						"updatedBy": "user",
+						"note": null
+					},
+					{
+						"ownerKind": "location",
+						"entryLocalId": 4,
+						"slotId": "core:slot/stock@1",
+						"value": {
+							"v": 3
+						},
+						"historyEntryLocalId": null,
+						"sceneLocalId": null,
+						"updatedBy": "user",
+						"note": null
+					}
+				]
+			},
+			"storyTime": {
+				"calendar": {
+					"months": [
+						{
+							"name": "Frost",
+							"days": 30
+						},
+						{
+							"name": "Thaw",
+							"days": 30
+						}
+					]
+				},
+				"clock": {
+					"year": 1201,
+					"month": 2,
+					"day": 3,
+					"hour": 14,
+					"minute": 30
+				}
+			},
+			"primaryRuleset": "core:ruleset/vis-itineris@1"
+		}
+	},
+	"entries": [
+		{
+			"keys": ["city", "river"],
+			"content": "A city on a river.",
+			"enabled": true,
+			"insertion_order": 0,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 2,
+			"name": "City of Ash",
+			"comment": "City of Ash",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "world",
+					"entryLocalId": 1,
+					"year": 1100,
+					"month": 1,
+					"day": 5
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "Where the forges are.",
+			"enabled": true,
+			"insertion_order": 1,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 3,
+			"name": "Smiths' district",
+			"comment": "Smiths' district",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "world",
+					"anchorEntryLocalId": 1
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "Forgotten.",
+			"enabled": false,
+			"insertion_order": 2,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 4,
+			"name": "Old rumour",
+			"comment": "Old rumour",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "world",
+					"entryLocalId": 2,
+					"archived": true,
+					"enabled": false
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "The vault is empty.",
+			"enabled": true,
+			"insertion_order": 3,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 5,
+			"name": "Secret of the vault",
+			"comment": "Secret of the vault",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "world",
+					"entryLocalId": 3,
+					"notCommonKnowledge": true
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "She forged the king's sword.",
+			"enabled": true,
+			"insertion_order": 4,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 7,
+			"name": "Maren's past",
+			"comment": "Maren's past",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "character",
+					"bindingLocalId": 2
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "The city was founded on the river.",
+			"enabled": true,
+			"insertion_order": 5,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 11,
+			"extensions": {
+				"serenepub": {
+					"entryType": "history",
+					"localId": 1,
+					"year": 1200,
+					"month": 1,
+					"day": 2,
+					"isCompleted": false,
+					"graphed": false,
+					"scenes": [
+						{
+							"localId": 4,
+							"name": "The meeting",
+							"summary": "They meet at the tavern.",
+							"participantCharacters": [2],
+							"mentionedCharacters": [3]
+						}
+					]
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "",
+			"enabled": true,
+			"insertion_order": 6,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": -1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "history",
+					"localId": 2,
+					"year": 1201,
+					"month": 2,
+					"day": 3,
+					"isCompleted": false,
+					"graphed": false,
+					"scenes": [
+						{
+							"localId": 5,
+							"name": "The open scene",
+							"summary": "",
+							"participantCharacters": [2],
+							"mentionedCharacters": []
+						}
+					]
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "A noisy tavern.",
+			"enabled": true,
+			"insertion_order": 7,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 9,
+			"name": "The Tavern",
+			"comment": "The Tavern",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "location",
+					"entryLocalId": 4
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "Cold and damp.",
+			"enabled": true,
+			"insertion_order": 8,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 10,
+			"name": "The Cellar",
+			"comment": "The Cellar",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "location",
+					"entryLocalId": 5
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "A sword.",
+			"enabled": true,
+			"insertion_order": 9,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 8,
+			"name": "Kingsblade",
+			"comment": "Kingsblade",
+			"priority": 1,
+			"extensions": {
+				"serenepub": {
+					"entryType": "item",
+					"provenance": "model",
+					"supply": "limited",
+					"supplyLimit": 1
+				}
+			}
+		}
+	]
+}

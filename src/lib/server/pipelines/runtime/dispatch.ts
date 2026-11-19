@@ -91,6 +91,7 @@ import {
 	connectionIdentity
 } from "$lib/server/connections/visibility"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import { sendsAttachmentsOn } from "$lib/shared/connectionAdapters/manifest"
 import { continueWireRefusal } from "$lib/shared/connectionAdapters/continueReply"
 import { endOnUserTurn } from "$lib/server/pipelines/prompt/endOnUserTurn"
@@ -127,6 +128,15 @@ import {
  * everyone who is not an administrator.
  */
 export class DispatchError extends ComposedError {}
+
+/**
+ * What the sender reads when the connection's adapter cannot send the files
+ * their message carries (DG5, 2026-11-17: "Tell the sender in plain words that
+ * attachments can't be sent here"): they can act on it, and it names no adapter,
+ * connection or model. The composed words stay the administrator's detail.
+ */
+export const ATTACHMENTS_NOT_SENT_SENTENCE =
+	"This session can't send attached files. Remove them and try again."
 
 export interface DispatchRequest {
 	/** The payload an adapter would otherwise have built for itself. */
@@ -1332,12 +1342,15 @@ export async function dispatchGeneration(
 			// The connection TYPE is identity too (it names the administrator's
 			// compute), so it rides in the field rather than in the sentence —
 			// same rule, same key, one place that removes it.
-			throw new DispatchError(
-				`this request carries ${fileCount} file${fileCount === 1 ? "" : "s"}, and the ` +
-					`configured adapter has no code that sends them. It would go out as text alone, and a reply ` +
-					`about files the model never received is indistinguishable from a model ignoring them — so it is ` +
-					`refused instead. Bind a connection whose adapter sends attachments.`,
-				connectionIdentity(connection)
+			throw forPeople(
+				new DispatchError(
+					`this request carries ${fileCount} file${fileCount === 1 ? "" : "s"}, and the ` +
+						`configured adapter has no code that sends them. It would go out as text alone, and a reply ` +
+						`about files the model never received is indistinguishable from a model ignoring them — so it is ` +
+						`refused instead. Bind a connection whose adapter sends attachments.`,
+					connectionIdentity(connection)
+				),
+				ATTACHMENTS_NOT_SENT_SENTENCE
 			)
 		// 🚧 The wire the request goes out on must be one the type sends files
 		// on (`sendsAttachments`, the manifest twin the reading rule judges

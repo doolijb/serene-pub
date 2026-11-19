@@ -640,6 +640,23 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 			.map((w) => w[0].toUpperCase() + w.slice(1))
 			.join(" ")
 	/**
+	 * 🚧 Whether a Composer in the layout follows the same Messages copy as the Turn
+	 * line `turnLineId` and shows Send (`showSend` not off). False when none does:
+	 * the Turn line then carries the reply's Stop.
+	 */
+	function composerShowsSendFor(turnLineId: string, target: string): boolean {
+		for (const zone of [zones.left, zones.middle, zones.right])
+			for (const panel of zone)
+				for (const tab of panel.tabs) {
+					const cid = tab.instanceId
+					if (cid === turnLineId || conversationKindOf(cid) !== "composer")
+						continue
+					if (targetPick(cid)?.target !== target) continue
+					if (widgetSettingValues(cid).showSend !== false) return true
+				}
+		return false
+	}
+	/**
 	 * The dossier one conversation part is handed. A Messages copy: the page's,
 	 * narrowed to its channels. A Composer / Turn line: its target's, told the
 	 * channel that copy shows, its label, and its line width and presentation
@@ -678,7 +695,10 @@ export function createSessionLayoutModel(input: SessionLayoutModelInput) {
 						? { presentation }
 						: {})
 				},
-				...(pick.writingTo ? { writingTo: { channel, label } } : {})
+				...(pick.writingTo ? { writingTo: { channel, label } } : {}),
+				...(conversationKindOf(id) === "turn-line"
+					? { sendShown: composerShowsSendFor(id, pick.target) }
+					: {})
 			}
 		}
 	}

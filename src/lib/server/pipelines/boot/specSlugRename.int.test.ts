@@ -559,14 +559,29 @@ describe("an install an earlier build left", () => {
 					)
 				)
 		).toEqual([{ configId: staged.tuned }])
+		// The session's own tuning moves into its registration values, and the
+		// old row goes with it.
 		expect(
-			(
-				await db
-					.select()
-					.from(schema.pipelineNodeOverrides)
-					.where(eq(schema.pipelineNodeOverrides.scopeId, sessionId))
-			).map((o) => [o.specId, o.nodeKey, o.value])
-		).toEqual([[respond, param.nodeKey, param.value + 1]])
+			await db
+				.select()
+				.from(schema.pipelineNodeOverrides)
+				.where(eq(schema.pipelineNodeOverrides.scopeId, sessionId))
+		).toEqual([])
+		const sessionRegistrations = await db
+			.select()
+			.from(schema.registrations)
+			.where(
+				and(
+					eq(schema.registrations.scopeKind, "session"),
+					eq(schema.registrations.sessionId, sessionId)
+				)
+			)
+		expect(
+			sessionRegistrations.map((r) => [
+				r.specSlug,
+				(r.values as any)?.[param.nodeKey]?.[param.slot]?.[param.path]
+			])
+		).toEqual([[null, param.value + 1]])
 		expect(
 			(
 				await db

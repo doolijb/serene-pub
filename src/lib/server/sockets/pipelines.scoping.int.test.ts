@@ -117,6 +117,20 @@ async function firstWritableOptionId(userId: number) {
 	return option.id
 }
 
+/** The registration rows of a session that hold step values — the one store a session's own values live in. */
+const sessionValueRows = async (sessionId: number) =>
+	(
+		await testDb
+			.select()
+			.from(schema.registrations)
+			.where(
+				and(
+					eq(schema.registrations.scopeKind, "session"),
+					eq(schema.registrations.scopeRef, String(sessionId))
+				)
+			)
+	).filter((r) => r.values != null)
+
 describe("a session id from the client is not a capability", () => {
 	test("a stranger's edit with someone else's session id writes nowhere", async () => {
 		const { pipelinesSetOption } = await import("./pipelines")
@@ -175,17 +189,22 @@ describe("a session id from the client is not a capability", () => {
 			noopEmit
 		)
 
-		const rows = await testDb
-			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(
-				and(
-					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
-					eq(schema.pipelineNodeOverrides.scopeId, ownersSessionId)
+		// Written to the session's registration values, not an override row.
+		const rows = await sessionValueRows(ownersSessionId)
+		expect(rows.length).toBeGreaterThan(0)
+		for (const r of rows)
+			expect(JSON.stringify(r.values)).toContain("only in my session")
+		expect(
+			await testDb
+				.select()
+				.from(schema.pipelineNodeOverrides)
+				.where(
+					and(
+						eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+						eq(schema.pipelineNodeOverrides.scopeId, ownersSessionId)
+					)
 				)
-			)
-		expect(rows).toHaveLength(1)
-		expect(rows[0].value).toBe("only in my session")
+		).toHaveLength(0)
 	})
 })
 
@@ -263,16 +282,7 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 		return option
 	}
 
-	const sessionRows = () =>
-		testDb
-			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(
-				and(
-					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
-					eq(schema.pipelineNodeOverrides.scopeId, adventureSessionId)
-				)
-			)
+	const sessionRows = () => sessionValueRows(adventureSessionId)
 
 	test("is listed last, marked as the creation pipeline, and says whether creation is over", async () => {
 		const { sessionPipelines } = await import(
@@ -378,7 +388,10 @@ describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
 		} finally {
 			markCreated(adventureSessionId)
 		}
-		expect(await sessionRows()).toHaveLength(1)
+		const rows = await sessionRows()
+		expect(rows.length).toBeGreaterThan(0)
+		for (const r of rows)
+			expect(JSON.stringify(r.values)).toContain(JSON.stringify(value))
 	})
 
 	test("after creation the card names the create spec that ran, not what the binding resolves to now", async () => {

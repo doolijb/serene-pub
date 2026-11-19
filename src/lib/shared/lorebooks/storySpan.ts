@@ -17,13 +17,22 @@
  * calendar a day borrows the length of the month before the later date's month
  * (right year, leap day included; month 1 reads the previous year's last
  * month), and the one before that while it is still negative; a month borrows
- * the calendar's month count. Free-form has no
- * lengths: a part that would borrow from a coarser one takes one from it and
- * every part finer than that coarser part becomes `null` (known to be at least
- * that much, no more exactly). A cascade follows the same rule.
+ * the calendar's month count, again while it is still negative.
+ *
+ * **Free-form** has no lengths: a part that would borrow from a coarser one
+ * takes one from it and every part finer than that coarser part becomes `null`
+ * (known to be at least that much, no more exactly). A cascade follows the same
+ * rule. The free-form rule also applies to the whole delta when a calendar is
+ * given and either date does not land in it (`storyTimeProblem`): the month
+ * lengths of a date the calendar cannot place are not known. No part is ever
+ * negative.
  */
 
-import { storyDaysInMonth, type StoryDateDelta } from "@serene-pub/sdk"
+import {
+	storyDaysInMonth,
+	storyTimeProblem,
+	type StoryDateDelta
+} from "@serene-pub/sdk"
 import { compareDates, type StoryCalendar, type StoryClock } from "./storyDate"
 
 const hasYear = (date: StoryClock | null | undefined): date is StoryClock =>
@@ -42,6 +51,14 @@ export function storyDateDeltaOf(
 	calendar: StoryCalendar | null
 ): StoryDateDelta | null {
 	if (!hasYear(date) || !hasYear(now)) return null
+	// A calendar that cannot place both dates has no month lengths to borrow
+	// from them: the whole delta follows the free-form rule.
+	if (
+		calendar &&
+		(storyTimeProblem(date, calendar) !== null ||
+			storyTimeProblem(now, calendar) !== null)
+	)
+		calendar = null
 	const monthed = date.month != null && now.month != null
 	const dayed = monthed && date.day != null && now.day != null
 	const timed = dayed && date.hour != null && now.hour != null
@@ -87,8 +104,14 @@ export function storyDateDeltaOf(
 				if (v >= 0) break
 				vals[parent] = (vals[parent] ?? 0) - 1
 			}
-		} else if (calendar && level === MONTH) v += calendar.months.length
-		else {
+		} else if (calendar && level === MONTH) {
+			// One year borrowed (below), repaid in months; more while still negative.
+			v += calendar.months.length
+			while (v < 0) {
+				v += calendar.months.length
+				vals[parent] = (vals[parent] ?? 0) - 1
+			}
+		} else {
 			// Free-form: nothing finer than the coarser part can be known.
 			for (let finer = level; finer <= depth; finer++) vals[finer] = null
 			vals[parent] = (vals[parent] ?? 0) - 1

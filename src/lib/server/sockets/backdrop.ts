@@ -44,9 +44,9 @@ export const sessionsSetBackdrop: Handler<
 			if (typeof sessionId !== "number" || !Number.isInteger(sessionId))
 				return refuse("Which session's backdrop? None was named.")
 			const access = await checkSessionAccess(sessionId, userId)
-			if (!access.hasAccess && !socket.user!.isAdmin)
+			if (!access.hasAccess)
 				return refuse("Session not found.")
-			if (!access.isOwner && !socket.user!.isAdmin)
+			if (!access.isOwner)
 				return refuse("Only the session's owner can change its backdrop.")
 
 			let mediaId: number | null = null

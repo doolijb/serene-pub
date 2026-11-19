@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	import InlineError from "$lib/client/components/InlineError.svelte"
 	import { realDateTime } from "$lib/client/utils/realTime.svelte"
@@ -312,8 +313,11 @@
 
 	async function copyLink() {
 		if (!publicUrl) return
-		await navigator.clipboard.writeText(publicUrl)
-		notify.success({ title: "Link copied" })
+		if (await copyText(publicUrl)) notify.success({ title: "Link copied" })
+		else
+			notify.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
 	}
 </script>
 

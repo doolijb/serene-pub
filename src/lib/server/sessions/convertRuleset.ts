@@ -14,6 +14,7 @@
  *
  * ★ Held: Back past the anchor takes the re-keys back, not `ruleset_version`.
  */
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import { and, eq, inArray } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import { getAttributeSlot, getRuleset, compareRulesetVersions, i18nText, type I18n } from "@serene-pub/sdk"
@@ -99,20 +100,26 @@ export async function convertSessionRuleset(
 		.limit(1)
 	if (!session || session.userId !== args.userId) throw new StateRefusal("Only the session's owner can change its rules.")
 	const cur = session.rulesetVersion
-	if (!cur) throw new StateRefusal("This session has not pinned a version of its rules yet, so there is nothing to convert from.")
+	if (!cur) throw forPeople(new StateRefusal("This session has not pinned a version of its rules yet, so there is nothing to convert from."), "This session has not pinned a version of its rules yet, so there is nothing to convert from.")
 	const rulesetId = session.rulesetId
 	if (!getRuleset(rulesetId) && (await rulesetOrigin(db, rulesetId)) === "plugin")
-		throw new StateRefusal("These rules came with a plugin that is no longer installed.")
+		throw forPeople(new StateRefusal("These rules came with a plugin that is no longer installed."), "These rules came with a plugin that is no longer installed.")
 	const [row] = await db
 		.select({ published: schema.rulesets.published, version: schema.rulesets.publishedVersion })
 		.from(schema.rulesets)
 		.where(eq(schema.rulesets.rulesetId, rulesetId))
 		.limit(1)
-	if (!row?.version || !row.published) throw new StateRefusal("These rules have no published version to convert to.")
-	if (args.to !== row.version) throw new StateRefusal(`Only version ${row.version} of these rules is installed.`)
+	if (!row?.version || !row.published) throw forPeople(new StateRefusal("These rules have no published version to convert to."), "These rules have no published version to convert to.")
+	if (args.to !== row.version) {
+		const sentence = `Only version ${row.version} of these rules is installed.`
+		throw forPeople(new StateRefusal(sentence), sentence)
+	}
 	const upgrades = ((row.published as { upgrades?: Step[] }).upgrades ?? []) as Step[]
 	const steps = chainFrom(upgrades, cur, args.to)
-	if (!steps) throw new StateRefusal(`There is no upgrade from ${cur} towards ${args.to} in these rules.`)
+	if (!steps) {
+		const sentence = `There is no upgrade from ${cur} towards ${args.to} in these rules.`
+		throw forPeople(new StateRefusal(sentence), sentence)
+	}
 	const slots = compose(steps)
 	const links = await sessionLinks(db, args.sessionId)
 

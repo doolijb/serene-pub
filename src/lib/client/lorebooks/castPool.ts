@@ -52,6 +52,8 @@ export interface CastRow {
 	 * to that card's default and is kept as written.
 	 */
 	spriteSet?: string | null
+	/** Sessions and their routines leave this member as it is. */
+	castMemberLock?: boolean | null
 	/**
 	 * The member's own words for the card's fields (retold fields, PLAN
 	 * cast-retold-fields). Kept whether or not `retold` says they are read:
@@ -172,6 +174,7 @@ export function toCastMember(row: CastRow): CastMember {
 export type CastPoolItem = PoolItem & {
 	castKind: CastKind
 	summary: string
+	castMemberLock: boolean
 	avatar?: string
 }
 
@@ -225,6 +228,7 @@ export function castPoolItem(
 		updatedAt: timeOf(row.updatedAt),
 		castKind: member.kind,
 		summary: member.summary,
+		castMemberLock: row.castMemberLock === true,
 		avatar
 	}
 }

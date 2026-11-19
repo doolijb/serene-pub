@@ -22,8 +22,13 @@
  *
  * What remains is ordering, and `listPrompts` does it the way
  * `listContextTemplates` does: `created_for_spec_id` floats the rows written
- * here to the top and **never refuses**. The entire reason this is not spec
- * scoped is that a row written elsewhere works here.
+ * here to the top, and it narrows what a call OFFERS (`promptsOffered`):
+ * another pipeline's prompt is not offered unless it is in force or the call's
+ * default, and a prompt that records no pipeline is offered only to an
+ * administrator (or where it is in force or the call's default). The
+ * Pipelines panel's write refuses a prompt the call does not offer
+ * (`writeOption`), and so does the session form's; the run reads whatever is
+ * stored. `assertSelectable` itself checks only the step, never the pipeline.
  *
  * ## Two refusals, and why both are hard
  *
@@ -41,6 +46,7 @@
 import { and, asc, eq, inArray, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { declarations } from "$lib/server/pipelines/config/panel"
+import { type Decl } from "$lib/server/pipelines/config/panel/types"
 import { poolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 
 export { poolKeyFor }
@@ -57,8 +63,10 @@ export interface PromptRecord {
 	nodeDefinitionId: string
 	/** The pool's second half. See `promptPool.ts` for why both are needed. */
 	slot: string
-	/** Where it was authored. Grouping only, never a permission. */
+	/** Where it was authored. Sorts the picker and narrows what a call offers (`promptsOffered`); `assertSelectable` does not check it. */
 	createdForSpecId: number | null
+	/** The plugin that provides it; `promptsOffered` offers a disabled plugin's prompt to nobody unless it is in force (R67). */
+	ownerPluginId?: number | null
 	name: string
 	isImmutable: boolean
 	/** 🚧 Hidden from session owners' prompt choice (R54) — an administrator's switch. */
@@ -86,6 +94,7 @@ const toRecord = (r: any): PromptRecord => ({
 	nodeDefinitionId: r.nodeDefinitionId,
 	slot: r.slot,
 	createdForSpecId: r.createdForSpecId ?? null,
+	ownerPluginId: r.ownerPluginId ?? null,
 	name: r.name,
 	isImmutable: !!r.isImmutable,
 	hidden: r.hidden === true,
@@ -276,7 +285,7 @@ export interface CreatePromptInput {
 	slot: string
 	name: string
 	fields: Record<string, string>
-	/** Where it was written. Grouping only; it stays selectable everywhere. */
+	/** Where it was written. Sorts the picker and narrows what a call offers (`promptsOffered`); `assertSelectable` does not check it. */
 	createdForSpecId?: number | null
 	/** Spec slugs whose shipped config starts on this row. See the schema. */
 	defaultForSpecs?: string[]
@@ -550,4 +559,85 @@ export async function deletePrompt(
 	await db
 		.delete(schema.pipelinePrompts)
 		.where(eq(schema.pipelinePrompts.id, promptId))
+}
+
+/**
+ * Each prompts slot's shipped default in one pipeline, by address
+ * (`nodeKey\u0000slot\u0000path`) — `prompts-ref` declarations only, so a
+ * sampling id that equals a prompt id can never count as a prompt default.
+ * `defaults` is the shipped Default config's values; a declaration the map
+ * does not hold falls back to its `authorDefault`.
+ */
+export function promptDefaultsOf(
+	decls: ReadonlyArray<Pick<Decl, "control" | "nodeKey" | "slot" | "path" | "authorDefault">>,
+	defaults: ReadonlyMap<string, unknown>
+): Map<string, number> {
+	const out = new Map<string, number>()
+	for (const d of decls) {
+		if (d.control !== "prompts-ref") continue
+		const address = `${d.nodeKey}\u0000${d.slot}\u0000${d.path}`
+		const id = promptIdOf(defaults.has(address) ? defaults.get(address) : d.authorDefault)
+		if (id != null) out.set(address, id)
+	}
+	return out
+}
+
+const promptIdOf = (v: unknown): number | null =>
+	typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null
+
+/**
+ * The prompts one model call offers (owner note 37, 2026-10-02: "Prompts need
+ * to be properly filtered by pipeline across the app"; owner D59, 2026-11-16:
+ * "A call offers only the prompts made for its own pipeline, plus its
+ * default"). The one decision for the Pipelines panel and the session form.
+ * Rules, in order:
+ *
+ * 1. A prompt made for another pipeline (`createdForSpecId` set, not `specId`) is dropped.
+ * 2. A prompt made for this pipeline is dropped when another call of the same
+ *    pipeline has it as its default (`defaults` at another address).
+ * 3. A prompt that records no pipeline (`createdForSpecId == null`) is offered
+ *    only to an administrator — to anyone else only where rule 4 keeps it.
+ * 4. Kept whatever 1–3 say: the prompt in force (`inForce`) and this call's own default.
+ * 5. A hidden prompt (R54) is dropped unless `administrator` or it is the one
+ *    in force.
+ * 6. A switched-off plugin's prompt (R67, `pluginsOff`) is dropped for everyone,
+ *    administrators included, unless it is the one in force. The run still reads a stored one.
+ * 7. Pool order is kept; nothing is added.
+ *
+ * Ids may be numbers or digit strings.
+ */
+export function promptsOffered<
+	T extends {
+		id: number
+		createdForSpecId: number | null
+		hidden?: boolean
+		ownerPluginId?: number | null
+	}
+>(
+	pool: readonly T[],
+	call: {
+		specId: number
+		address: string
+		defaults: ReadonlyMap<string, number>
+		inForce: unknown
+		/** The viewer is an administrator. */
+		administrator: boolean
+		/** The plugins switched off; absent means none. */
+		pluginsOff?: { owns(ownerId: number | null | undefined): boolean }
+	}
+): T[] {
+	const held = promptIdOf(call.inForce)
+	const own = call.defaults.get(call.address) ?? null
+	const others = new Set<number>()
+	for (const [address, id] of call.defaults) if (address !== call.address) others.add(id)
+	return pool.filter((p) => {
+		const id = promptIdOf(p.id)
+		if (id === held) return true
+		if (call.pluginsOff?.owns(p.ownerPluginId)) return false
+		if (!call.administrator && p.hidden === true) return false
+		if (id === own) return true
+		if (p.createdForSpecId == null) return call.administrator
+		if (p.createdForSpecId !== call.specId) return false
+		return !others.has(id as number)
+	})
 }

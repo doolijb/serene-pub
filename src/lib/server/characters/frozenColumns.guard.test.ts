@@ -129,8 +129,12 @@ const SESSION_DIRS = [
 const SESSION_FILES = ["sessions", "state", "pipelines", "jump"].map(
 	(s) => `src/lib/server/sockets/${s}.ts`
 )
+/** A socket file's modules split by area (`sessions.messages.ts`) are that file. */
 const isSessionPath = (file: string) =>
-	SESSION_DIRS.some((d) => file.startsWith(d)) || SESSION_FILES.includes(file)
+	SESSION_DIRS.some((d) => file.startsWith(d)) ||
+	SESSION_FILES.some(
+		(f) => file === f || (file.startsWith(f.slice(0, -3) + ".") && !file.includes(".test."))
+	)
 
 interface Finding {
 	file: string

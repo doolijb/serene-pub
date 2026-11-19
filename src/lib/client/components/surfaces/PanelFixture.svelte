@@ -19,13 +19,15 @@
 		instance,
 		session,
 		supplies,
-		requests
+		requests,
+		storyDates = true
 	}: {
 		instance: PanelInstance
 		session: { id: number; name?: string | null; sessionMessages: unknown[] }
 		supplies: { state?: unknown; dossier?: unknown; characters?: unknown }
 		/** The page's answer to a widget's request (`WIDGET_REQUESTS_KEY`), when a test gives one. */
 		requests?: unknown
+		storyDates?: boolean
 	} = $props()
 
 	// svelte-ignore state_referenced_locally
@@ -54,4 +56,4 @@
 	}
 </script>
 
-<Panel {instance} manager={manager as never} sessionId={session.id} {session} chrome="zone" />
+<Panel {instance} manager={manager as never} sessionId={session.id} {session} {storyDates} chrome="zone" />

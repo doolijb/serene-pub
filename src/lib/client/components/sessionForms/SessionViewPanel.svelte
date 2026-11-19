@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
 	import Avatar from "$lib/client/components/Avatar.svelte"
-	import { seatCardsAsShown } from "$lib/client/components/sessionPage/projections/characters"
+	import { cardlessSeatsAsShown, seatCardsAsShown } from "$lib/client/components/sessionPage/projections/characters"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
@@ -20,12 +20,8 @@
 		SESSION_ARCHIVE_CONFIRM,
 		SESSION_ARCHIVE_LABELS
 	} from "$lib/shared/sessions/archive"
-	import {
-		FOLD_CONFIRM,
-		FOLD_LABEL,
-		SHARE_CONFIRMS,
-		SHARE_LABELS
-	} from "$lib/shared/lorebooks/sessionNotes"
+	import { RUN_LOCK_SENTENCES } from "$lib/shared/lorebooks/runLocks"
+	import { FOLD_CONFIRM, FOLD_LABEL, SHARE_CONFIRMS, SHARE_LABELS } from "$lib/shared/lorebooks/sessionNotes"
 	import { getContext } from "svelte"
 	import { SvelteMap, SvelteSet } from "svelte/reactivity"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
@@ -83,9 +79,7 @@
 
 	// Receipts are an administrator's (R55): the Runs tab, and the strip that
 	// carries it, exist only for one. Tolerates no context (a bare mount).
-	const userCtx = getContext<
-		{ user?: { id: number; isAdmin?: boolean } } | undefined
-	>("userCtx")
+	const userCtx = getContext<{ user?: { id: number; isAdmin?: boolean } } | undefined>("userCtx")
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 	let activeTab = $state("details")
 	/** Stays true once Runs has been opened: a curious admin only pays for the read. */
@@ -129,10 +123,7 @@
 	 */
 	$effect(() => {
 		const id = sessionId
-		const release = declareInterest<"sessions:get">(
-			interestKey("sessions:get", id),
-			handleSessionsGet
-		)
+		const release = declareInterest<"sessions:get">(interestKey("sessions:get", id), handleSessionsGet)
 		const releaseRefresh = declareInterest<"sessions:refresh">(
 			interestKey("sessions:refresh", id),
 			handleSessionsGet
@@ -154,19 +145,25 @@
 	let overlayItems = $state<Sockets.Sessions.OverlayItems.Item[]>([])
 	/** Why a history day stayed with the session at the last Apply, by its notes entry. */
 	const heldDayReasons = new SvelteMap<number, string>()
-	/** The reader may Apply and Take back (the lorebook's owner), not "owns the session". */
+	/** The reader is the session's owner and may write its lorebook (the server decides). */
 	let mayApply = $state(false)
+	/** The server has answered `sessions:overlayItems` for this session, so `mayApply` is its word. */
+	let accessAnswered = $state(false)
+	// The reader is the session's owner and may write its lorebook (the server's canWriteLorebook, via mayApply).
+	let mayWrite = $derived(isOwner && mayApply)
 	/** The lorebook takes this session's changes by itself as scenes close. */
 	let appliesItself = $state(false)
 	$effect(() => {
 		const id = sessionId
 		overlayItems = []
 		mayApply = false
+		accessAnswered = false
 		appliesItself = false
 		const onItems = (res: Sockets.Sessions.OverlayItems.Response) => {
 			if (res.sessionId !== id) return
 			overlayItems = res.items ?? []
 			mayApply = !!res.mayApply
+			accessAnswered = true
 			appliesItself = !!res.appliesItself
 		}
 		const releaseItems = declareInterest<"sessions:overlayItems">("sessions:overlayItems", onItems)
@@ -211,14 +208,8 @@
 			pendingBatches.delete(res.batch)
 			if (res.refused) refusals.set(res.batch, res.refused)
 		}
-		const releaseBatches = declareInterest<"sessions:appliedBatches">(
-			"sessions:appliedBatches",
-			onBatches
-		)
-		const releaseTakeBack = declareInterest<"sessions:takeBackApply">(
-			"sessions:takeBackApply",
-			onTakeBack
-		)
+		const releaseBatches = declareInterest<"sessions:appliedBatches">("sessions:appliedBatches", onBatches)
+		const releaseTakeBack = declareInterest<"sessions:takeBackApply">("sessions:takeBackApply", onTakeBack)
 		// A failure that is not a refusal answers on `:error`: free the buttons again.
 		const releaseTakeBackError = declareInterest<"sessions:takeBackApply:error">(
 			"sessions:takeBackApply:error",
@@ -252,13 +243,7 @@
 	} as const
 	function batchSummary(b: Sockets.Sessions.AppliedBatches.Batch): string {
 		const cause = b.by ? `by ${b.by.name}` : b.automatic ? CAUSES[b.automatic] : ""
-		return [
-			b.count === 1 ? "1 change" : `${b.count} changes`,
-			cause,
-			timeAgo(b.at)
-		]
-			.filter(Boolean)
-			.join(" · ")
+		return [b.count === 1 ? "1 change" : `${b.count} changes`, cause, timeAgo(b.at)].filter(Boolean).join(" · ")
 	}
 	const panelsCtx = getContext<PanelsCtx | undefined>("panelsCtx")
 	function openWriteSetting() {
@@ -266,12 +251,13 @@
 		panelsCtx.digest.lore = { lorebookId, scope: "all", settings: true }
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
-	function applyOverlay(entryIds?: number[], amendmentIds?: number[], linkIds?: number[]) {
+	function applyOverlay(entryIds?: number[], amendmentIds?: number[], linkIds?: number[], tieIds?: number[]) {
 		socket.emit("sessions:applyOverlay", {
 			sessionId,
 			...(entryIds ? { entryIds } : {}),
 			...(amendmentIds ? { amendmentIds } : {}),
-			...(linkIds ? { linkIds } : {})
+			...(linkIds ? { linkIds } : {}),
+			...(tieIds ? { tieIds } : {})
 		} satisfies Sockets.Sessions.ApplyOverlay.Params)
 	}
 	/** A changed value as short text: a string trimmed to one line, a list joined with commas, nothing as "empty". */
@@ -284,11 +270,25 @@
 	}
 
 	// Each seated card as its cast member shows it: its name and face.
-	let characters = $derived(seatCardsAsShown(session))
+	// A card-less seat is listed after the carded ones, by its member's name.
+	let seatCards = $derived(seatCardsAsShown(session))
+	let characters = $derived([
+		...seatCards,
+		...(cardlessSeatsAsShown(session as any) as unknown as typeof seatCards)
+	])
+	/** The viewer's own live player seats: a seat's person is its `userId`, else its card's owner. A card-less seat is shown by its seat name. */
 	let personas = $derived(
-		(session as any)?.sessionPersonas
-			?.map((cp: any) => cp.persona)
-			.filter(Boolean) ?? []
+		((session as any)?.sessionPersonas ?? [])
+			.filter(
+				(cp: any) =>
+					!cp.removedAt &&
+					(cp.userId ?? cp.persona?.userId) === userCtx?.user?.id
+			)
+			.map((cp: any) => ({
+				...(cp.persona ?? { id: -cp.id }),
+				name: cp.seatName?.trim() || cp.persona?.name
+			}))
+			.filter((p: any) => p.name)
 	)
 	let tags = $derived((session as any)?.tags ?? [])
 	let lorebookId = $derived((session as any)?.lorebookId ?? null)
@@ -327,13 +327,8 @@
 		})
 	})
 	let shareBookName = $derived(attachedName ?? lorebookName ?? "its lorebook")
-	let archived = $derived(
-		!!(session as { archivedAt?: unknown } | null)?.archivedAt
-	)
-	let closeOutRegistered = $derived(
-		(session as { closeOutRegistered?: boolean } | null)
-			?.closeOutRegistered === true
-	)
+	let archived = $derived(!!(session as { archivedAt?: unknown } | null)?.archivedAt)
+	let closeOutRegistered = $derived((session as { closeOutRegistered?: boolean } | null)?.closeOutRegistered === true)
 	/** The question before a verb; Confirm runs `go`. */
 	let asking = $state<{
 		asking: { question: string; description?: string; confirmLabel: string }
@@ -342,18 +337,12 @@
 	function ask(sentence: string, label: string, go: () => void) {
 		asking = { asking: askingOf(sentence, label), go }
 	}
-	let guests = $derived(
-		((session as any)?.sessionGuests ?? [])
-			.map((g: any) => g?.user)
-			.filter(Boolean)
-	)
+	let guests = $derived(((session as any)?.sessionGuests ?? []).map((g: any) => g?.user).filter(Boolean))
 
 	/** The session's cover, and the second cast member badged onto it. */
 	let coverSrc = $derived(avatarSrc(characters[0], { full: true }))
 	let isGroup = $derived(characters.length > 1)
-	let badgeSrc = $derived(
-		isGroup ? avatarSrc(characters[1], { full: true }) : undefined
-	)
+	let badgeSrc = $derived(isGroup ? avatarSrc(characters[1], { full: true }) : undefined)
 
 	/**
 	 * The quiet line under the name: what kind of session, how much of it
@@ -368,9 +357,7 @@
 		const branchMark = branchOfLabel(branchOfSession(session as any))
 		if (branchMark) parts.push(branchMark)
 		if (messageCount != null) {
-			parts.push(
-				`${messageCount} ${messageCount === 1 ? "message" : "messages"}`
-			)
+			parts.push(`${messageCount} ${messageCount === 1 ? "message" : "messages"}`)
 		}
 		const at = session
 			? lastActivityAt({
@@ -394,7 +381,8 @@
 		backLabel="Back to sessions"
 		actionsLabel="Session"
 		menuItems={[
-			lorebookId != null &&
+			isOwner &&
+				lorebookId != null &&
 				onViewLorebook && {
 					label: "View lorebook",
 					icon: Icons.BookMarked,
@@ -415,17 +403,23 @@
 					onSelect: () =>
 						ask(SHARE_CONFIRMS.asLorebook, SHARE_LABELS.asLorebook, () => {
 							openCreatedBook = true
-							socket.emit("sessions:shareAsLorebook", { sessionId })
+							socket.emit("sessions:shareAsLorebook", {
+								sessionId
+							})
 						})
 				},
 			isOwner &&
+				mayWrite &&
 				lorebookId != null && {
 					label: SHARE_LABELS.toAttached(shareBookName),
 					icon: Icons.BookUp,
 					onSelect: () => {
 						const book = shareBookName
 						ask(SHARE_CONFIRMS.toAttached(book), SHARE_LABELS.toAttached(book), () =>
-							socket.emit("sessions:applyOverlay", { sessionId, entryIds: null })
+							socket.emit("sessions:applyOverlay", {
+								sessionId,
+								entryIds: null
+							})
 						)
 					}
 				},
@@ -445,9 +439,7 @@
 					label: CLOSE_OUT_LABEL,
 					icon: Icons.ScrollText,
 					onSelect: () =>
-						ask(CLOSE_OUT_CONFIRM, CLOSE_OUT_LABEL, () =>
-							socket.emit("sessions:closeOut", { sessionId })
-						)
+						ask(CLOSE_OUT_CONFIRM, CLOSE_OUT_LABEL, () => socket.emit("sessions:closeOut", { sessionId }))
 				},
 			isOwner &&
 				!archived && {
@@ -455,9 +447,7 @@
 					icon: Icons.Archive,
 					onSelect: () =>
 						ask(
-							closeOutRegistered
-								? SESSION_ARCHIVE_CONFIRM.withCloseOut
-								: SESSION_ARCHIVE_CONFIRM.plain,
+							closeOutRegistered ? SESSION_ARCHIVE_CONFIRM.withCloseOut : SESSION_ARCHIVE_CONFIRM.plain,
 							SESSION_ARCHIVE_LABELS.archive,
 							() => socket.emit("sessions:archive", { sessionId })
 						)
@@ -517,10 +507,7 @@
 			{@render details()}
 		{/if}
 	{:else}
-		<EmptyState
-			icon={Icons.MessageSquareOff}
-			message="Session not found."
-		/>
+		<EmptyState icon={Icons.MessageSquareOff} message="Session not found." />
 	{/if}
 </div>
 
@@ -561,21 +548,12 @@
 							{/each}
 						</div>
 						{#if personas.length > 0}
-							<p class="text-surface-600-400 mt-3 mb-1.5 text-xs">
-								You
-							</p>
+							<p class="text-surface-600-400 mt-3 mb-1.5 text-xs">You</p>
 							<div class="flex flex-col gap-2">
 								{#each personas as p}
 									<div class="flex items-center gap-2">
-										<Avatar
-											char={p}
-											size="sm"
-											kind="persona"
-											decorative
-										/>
-										<span
-											class="truncate text-sm font-medium"
-										>
+										<Avatar char={p} size="sm" kind="persona" decorative />
+										<span class="truncate text-sm font-medium">
 											{p.name}
 										</span>
 									</div>
@@ -587,9 +565,7 @@
 
 				{#if lastMessage}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">
-							Last line
-						</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Last line</p>
 						<p class="text-sm leading-relaxed">
 							{#if lastMessage.speakerName}
 								<span class="text-surface-700-300">
@@ -605,9 +581,7 @@
 
 				{#if session.scenario}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">
-							Scenario
-						</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Scenario</p>
 						<p class="text-sm leading-relaxed whitespace-pre-wrap">
 							{session.scenario}
 						</p>
@@ -616,21 +590,15 @@
 
 				{#if lorebookId != null}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">
-							Lorebook
-						</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Lorebook</p>
 						<div class="flex min-w-0 items-center gap-2">
-							<Icons.BookMarked
-								size={16}
-								class="text-surface-600-400 shrink-0"
-								aria-hidden="true"
-							/>
+							<Icons.BookMarked size={16} class="text-surface-600-400 shrink-0" aria-hidden="true" />
 							{#if lorebookName}
 								<span class="min-w-0 flex-1 truncate text-sm">
 									{lorebookName}
 								</span>
 							{/if}
-							{#if onViewLorebook}
+							{#if isOwner && onViewLorebook}
 								<button
 									class="btn btn-sm preset-tonal-surface ml-auto shrink-0"
 									onclick={() => onViewLorebook?.(lorebookId)}
@@ -643,13 +611,31 @@
 					</section>
 				{/if}
 
-				{#if lorebookId != null && (overlayItems.length > 0 || batches.length > 0)}
+				{#if isOwner && lorebookId != null && (overlayItems.length > 0 || batches.length > 0)}
 					<section class="panel-card" aria-label="This session only">
+						{#if accessAnswered && !mayWrite}
+							<p class="text-surface-600-400 mb-1.5 text-xs" data-apply-closed>
+								<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
+								{shareBookName} isn't yours to change, so what waits here stays in this session.
+								<button
+									class="text-primary-ink hover:underline"
+									onclick={() => {
+										const book = shareBookName
+										ask(FOLD_CONFIRM(book), FOLD_LABEL(book), () =>
+											socket.emit("sessions:foldInParent", { sessionId })
+										)
+									}}
+									type="button"
+								>
+									{FOLD_LABEL(shareBookName)}
+								</button>
+							</p>
+						{/if}
 						{#if appliesItself}
 							<p class="text-surface-600-400 mb-1.5 text-xs">
 								<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
 								The lorebook takes what waits here by itself as each scene closes.
-								{#if mayApply && panelsCtx}
+								{#if mayWrite && panelsCtx}
 									<button
 										class="text-primary-ink hover:underline"
 										onclick={openWriteSetting}
@@ -663,7 +649,7 @@
 						{#if overlayItems.length > 0}
 							<div class="mb-1.5 flex items-center gap-2">
 								<p class="text-surface-600-400 text-xs">This session only</p>
-								{#if mayApply && overlayItems.length > 1}
+								{#if mayWrite && overlayItems.length > 1}
 									<button
 										class="btn btn-sm preset-tonal-surface ml-auto"
 										onclick={() => applyOverlay()}
@@ -674,16 +660,19 @@
 								{/if}
 							</div>
 							<ul class="flex flex-col gap-1.5">
-								{#each overlayItems as item (item.amendmentId != null ? `a${item.amendmentId}` : item.linkId != null ? `l${item.linkId}` : item.notesEntryId != null ? `d${item.notesEntryId}` : `e${item.entryId}`)}
+								{#each overlayItems as item (item.amendmentId != null ? `a${item.amendmentId}` : item.tieId != null ? `t${item.tieId}` : item.linkId != null ? `l${item.linkId}` : item.notesEntryId != null ? `d${item.notesEntryId}` : `e${item.entryId}`)}
 									<li class="flex min-w-0 items-center gap-2">
 										<div class="min-w-0 flex-1">
 											<span class="block truncate text-sm">
-												{item.title || (item.kind === "link" ? "Untitled link" : "Untitled entry")}
+												{item.title ||
+													(item.kind === "link" ? "Untitled link" : "Untitled entry")}
 											</span>
 											{#if item.kind === "entry-change"}
 												{#each item.changes ?? [] as change (change.field)}
 													<span class="text-surface-600-400 block truncate text-xs">
-														{change.label}: {shortValue(change.before)} → {shortValue(change.after)}
+														{change.label}: {shortValue(change.before)} → {shortValue(
+															change.after
+														)}
 													</span>
 												{/each}
 												{#if item.notesEntryId != null && heldDayReasons.has(item.notesEntryId)}
@@ -692,21 +681,31 @@
 													</span>
 												{/if}
 												{#if item.conflict}
-													<span class="text-surface-600-400 block text-xs">{item.conflict}</span>
+													<span class="text-surface-600-400 block text-xs">
+														{item.conflict}
+													</span>
 												{/if}
 											{/if}
+											{#if item.entryLocked && (item.kind === "entry-change" || item.kind == null || item.kind === "entry")}
+												<span class="text-surface-600-400 block text-xs">
+													{RUN_LOCK_SENTENCES.held(item.title)}
+												</span>
+											{/if}
 										</div>
-										{#if mayApply && !item.conflict}
+										{#if mayWrite && !item.conflict}
 											<button
 												class="btn btn-sm preset-tonal-surface shrink-0"
 												onclick={() =>
-													item.kind === "link" && item.linkId != null
-														? applyOverlay(undefined, undefined, [item.linkId])
-														: item.kind === "entry-change" && item.amendmentId != null
-															? applyOverlay(undefined, [item.amendmentId])
-															: item.kind === "entry-change" && item.notesEntryId != null
-																? applyOverlay([item.notesEntryId])
-																: applyOverlay([item.entryId])}
+													item.kind === "knowledge-tie" && item.tieId != null
+														? applyOverlay(undefined, undefined, undefined, [item.tieId])
+														: item.kind === "link" && item.linkId != null
+															? applyOverlay(undefined, undefined, [item.linkId])
+															: item.kind === "entry-change" && item.amendmentId != null
+																? applyOverlay(undefined, [item.amendmentId])
+																: item.kind === "entry-change" &&
+																	  item.notesEntryId != null
+																	? applyOverlay([item.notesEntryId])
+																	: applyOverlay([item.entryId])}
 												type="button"
 											>
 												Apply to the lorebook
@@ -736,9 +735,11 @@
 													class="shrink-0 transition-transform {open ? 'rotate-90' : ''}"
 													aria-hidden="true"
 												/>
-												<span class="min-w-0 truncate">{batchSummary(b)}</span>
+												<span class="min-w-0 truncate">
+													{batchSummary(b)}
+												</span>
 											</button>
-											{#if mayTakeBack}
+											{#if isOwner && mayTakeBack}
 												<button
 													class="text-primary-ink shrink-0 text-xs hover:underline disabled:opacity-40"
 													type="button"
@@ -753,22 +754,35 @@
 											{/if}
 										</div>
 										{#if refusals.has(b.batch)}
-											<p class="text-surface-600-400 text-xs" role="status">{refusals.get(b.batch)}</p>
+											<p class="text-surface-600-400 text-xs" role="status">
+												{refusals.get(b.batch)}
+											</p>
 										{/if}
 										{#if open}
 											<ul class="mt-1 flex flex-col gap-1 pl-4">
 												{#each b.items as item, itemIndex (itemIndex)}
 													<li class="min-w-0">
 														{#if item.kind === "entry-change"}
-															<span class="block truncate text-sm">{item.title || "Untitled entry"}</span>
+															<span class="block truncate text-sm">
+																{item.title || "Untitled entry"}
+															</span>
 															{#each item.changes ?? [] as change (change.field)}
-																<span class="text-surface-600-400 block truncate text-xs">
-																	{change.label}: {shortValue(change.before)} → {shortValue(change.after)}
+																<span
+																	class="text-surface-600-400 block truncate text-xs"
+																>
+																	{change.label}: {shortValue(change.before)} → {shortValue(
+																		change.after
+																	)}
 																</span>
 															{/each}
 														{:else if item.kind === "link"}
 															<span class="block truncate text-sm">
 																{item.title || "Untitled link"} · link
+															</span>
+														{:else if item.kind === "knowledge-tie"}
+															<!-- 🚧 Provisional copy: the owner has not seen this label. -->
+															<span class="block truncate text-sm">
+																{item.title || "Untitled entry"} · knowledge
 															</span>
 														{:else}
 															<span class="block truncate text-sm">
@@ -788,17 +802,11 @@
 
 				{#if guests.length > 0}
 					<section class="panel-card">
-						<p class="text-surface-600-400 mb-1.5 text-xs">
-							Shared with
-						</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Shared with</p>
 						<div class="flex flex-col gap-2">
 							{#each guests as guest}
 								<div class="flex items-center gap-2">
-									<Icons.Users
-										size={16}
-										class="text-surface-600-400 shrink-0"
-										aria-hidden="true"
-									/>
+									<Icons.Users size={16} class="text-surface-600-400 shrink-0" aria-hidden="true" />
 									<span class="truncate text-sm">
 										{guest.displayName || guest.username}
 									</span>
@@ -817,17 +825,11 @@
 		<img
 			src={badgeSrc}
 			alt=""
-			class="ring-surface-100-900 block size-9 rounded-base object-cover object-top ring-2"
+			class="ring-surface-100-900 rounded-base block size-9 object-cover object-top ring-2"
 		/>
 	{:else}
-		<span
-			class="bg-surface-300-700 ring-surface-100-900 grid size-9 place-items-center rounded-base ring-2"
-		>
-			<Icons.UsersRound
-				size={18}
-				class="text-surface-600-400"
-				aria-hidden="true"
-			/>
+		<span class="bg-surface-300-700 ring-surface-100-900 rounded-base grid size-9 place-items-center ring-2">
+			<Icons.UsersRound size={18} class="text-surface-600-400" aria-hidden="true" />
 		</span>
 	{/if}
 {/snippet}
@@ -837,24 +839,19 @@
      secondary rather than a ⋯ away. The rest — the lorebook, the star, Delete —
      stays in the header's ⋯. -->
 {#snippet heroActions()}
-	<button
-		type="button"
-		class="btn btn-sm preset-filled-primary-500"
-		onclick={onOpen}
-		data-session-open
-	>
+	<button type="button" class="btn btn-sm preset-filled-primary-500" onclick={onOpen} data-session-open>
 		<Icons.ArrowRight size={16} aria-hidden="true" />
 		Open session
 	</button>
 	{#if canEdit}
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-surface"
-			onclick={onEdit}
-			data-session-edit
-		>
-			<Icons.Pencil size={16} aria-hidden="true" />
-			Edit
+		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={onEdit} data-session-edit>
+			{#if isOwner}
+				<Icons.Pencil size={16} aria-hidden="true" />
+				Edit
+			{:else}
+				<Icons.UsersRound size={16} aria-hidden="true" />
+				Participants
+			{/if}
 		</button>
 	{/if}
 {/snippet}

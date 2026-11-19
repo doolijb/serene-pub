@@ -1,4 +1,4 @@
-/** `prompt-details` opens a line's recorded prompt — for admins, with context debugging on. */
+/** `prompt-details` opens a line's recorded prompt — an administrator's, with context debugging on. */
 import { describe, expect, test } from "vitest"
 import { WIDGET_REQUEST_ASKERS } from "@serene-pub/sdk"
 import { answerPromptDetails, type PromptLine, type PromptReport } from "./promptDetails"
@@ -10,12 +10,12 @@ const lines: PromptLine[] = [
 	{ id: 2 }
 ]
 
-function page(over: { isAdmin?: boolean; contextDebugging?: boolean } = {}) {
+function page(over: { mayRead?: boolean; contextDebugging?: boolean } = {}) {
 	const shown: PromptReport[] = []
 	return {
 		shown,
 		deps: {
-			isAdmin: over.isAdmin ?? true,
+			mayRead: over.mayRead ?? true,
 			contextDebugging: over.contextDebugging ?? true,
 			findMessage: (id: number) => lines.find((m) => m.id === id),
 			showReport: (r: PromptReport) => shown.push(r)
@@ -32,10 +32,10 @@ describe("answerPromptDetails", () => {
 		])
 	})
 
-	test.each([{ isAdmin: false }, { contextDebugging: false }])("refuses when %j, in words", (over) => {
+	test.each([{ mayRead: false }, { contextDebugging: false }])("refuses when %j, in words", (over) => {
 		const { shown, deps } = page(over)
 		expect(() => answerPromptDetails({ messageId: 1 }, deps)).toThrow(
-			"prompt details are for admins, with context debugging on"
+			"prompt details are administrators', with context debugging on"
 		)
 		expect(shown).toEqual([])
 	})
@@ -46,12 +46,12 @@ describe("answerPromptDetails", () => {
 		expect(shown).toEqual([])
 	})
 
-	test("anyone may ask: the guard passes a plugin's widget on; the admin rule is the answer's", async () => {
+	test("anyone may ask: the guard passes a plugin's widget on; the administrator rule is the answer's", async () => {
 		expect(WIDGET_REQUEST_ASKERS["prompt-details"]).toBe("any")
-		const { deps } = page({ isAdmin: false })
+		const { deps } = page({ mayRead: false })
 		const ask = guardWidgetRequests((async (_k: string, p: unknown) => answerPromptDetails(p, deps)) as WidgetRequestHandler)
 		await expect(ask("prompt-details", { messageId: 1 }, { widgetId: "acme:x", owner: "acme" })).rejects.toThrow(
-			"prompt details are for admins"
+			"prompt details are administrators'"
 		)
 	})
 })

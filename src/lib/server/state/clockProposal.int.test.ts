@@ -152,17 +152,21 @@ describe("resolve-state-changes@1 — the clock port", () => {
 		])
 		expect(nowhere.clock).toBeNull()
 		expect(nowhere.refused[0]).toMatch(/no date .*run past midnight/)
-		// A story with no clock and nothing dated starts on its first day: an ordinary line.
+		// A story with no clock and nothing dated has no date to move from: the clock's own sentence.
+		const noDate =
+			"This story has no date yet, so its clock can't move. Set the story clock in the lorebook's Book settings first."
+		// The skipped line goes through `clockSkipReason`: the ledger's existing sentence.
+		const noClock = "This story has no clock yet: set one in the lorebook to track time."
 		const unset = await world({ clock: false })
-		const fromDayOne = await resolveWith(unset.session.id, { clock: [{ by: 2, unit: "hours" }] })
-		expect(fromDayOne.changes).toEqual([{ kind: "clock", by: 2, unit: "hours" }])
-		expect(fromDayOne.clock).toEqual({ by: 2, unit: "hours" })
-		expect(fromDayOne.refused).toEqual([])
+		const undatedMove = await resolveWith(unset.session.id, { clock: [{ by: 2, unit: "hours" }] })
+		expect(undatedMove.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: noClock }])
+		expect(undatedMove.clock).toBeNull()
+		expect(undatedMove.refused).toEqual([noDate])
 		const bookless = await world({ book: false, clock: false })
 		const noBook = await resolveWith(bookless.session.id, { clock: [{ by: 2, unit: "hours" }] })
-		// 🚧 pr-6 (§B-3a): no shared book is the session's own book, clock unset: the same start.
-		expect(noBook.changes).toEqual([{ kind: "clock", by: 2, unit: "hours" }])
-		expect(noBook.refused).toEqual([])
+		// 🚧 pr-6 (§B-3a): no shared book is the session's own book, clock unset: the same refusal.
+		expect(noBook.changes).toEqual([{ kind: "clock", by: 2, unit: "hours", skipped: noClock }])
+		expect(noBook.refused).toEqual([noDate])
 		// A malformed ask is the keeper's mistake: a sentence, and no line at all.
 		expect(back.clock).toBeNull()
 	}, 60_000)

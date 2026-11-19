@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import { realDateTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Admin › Users: the add and change form for one account (Django admin's
@@ -193,10 +194,9 @@
 		passphraseError = null
 	}
 	async function copy() {
-		try {
-			await navigator.clipboard.writeText(draft.passphrase)
+		if (await copyText(draft.passphrase)) {
 			notify.success({ title: "Passphrase copied" })
-		} catch {
+		} else {
 			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})

@@ -165,7 +165,7 @@ Sessions with 10 messages or fewer show no notice. Search by meaning still searc
 
 ### The status icon
 
-Lorebook entry rows and character rows carry a small icon for their own index state: a lightning bolt (*Indexed for Search by meaning*) when they're indexed with the current model, a refresh icon (*Needs re-indexing*) when they were indexed with a different one, and nothing when embeddings are off or they haven't been indexed yet.
+Lorebook entry rows and character rows carry a small icon for their own index state: a lightning bolt (*Indexed for Search by meaning*) when they're indexed with the current model, a refresh icon (*Needs re-indexing*) when they were indexed with a different one, and nothing when embeddings are off or they haven't been indexed yet. On a session's lines, a person who isn't an administrator sees the same mark: the server works out its state and sends only that, never the model's name.
 
 ## Named entities
 

@@ -25,6 +25,9 @@ describe("sessions:applyOverlay linkIds", () => {
 			appliedChanges: [],
 			stillHeld: [],
 			appliedLinks: [7],
+			appliedTies: [11],
+			droppedTies: [12],
+			supersededTies: [13],
 			mergedDays: [9],
 			droppedLinks: [8],
 			heldDays: [{ notesEntryId: 4, reason: "held" }],
@@ -36,7 +39,7 @@ describe("sessions:applyOverlay linkIds", () => {
 		)
 		const res = await apply.handler(
 			{ user: { id: 1 }, io: {} } as any,
-			{ sessionId: 3, linkIds: [7, "x" as unknown as number, 1.5] },
+			{ sessionId: 3, linkIds: [7, "x" as unknown as number, 1.5], tieIds: [11, 2.5] },
 			vi.fn()
 		)
 		expect(applyOverlayItems.mock.calls[0]![1]).toMatchObject({
@@ -44,10 +47,14 @@ describe("sessions:applyOverlay linkIds", () => {
 			userId: 1,
 			entryIds: null,
 			amendmentIds: null,
-			linkIds: [7]
+			linkIds: [7],
+			tieIds: [11]
 		})
 		expect(res).toMatchObject({
 			appliedLinks: [7],
+			appliedTies: [11],
+			droppedTies: [12],
+			supersededTies: [13],
 			mergedDays: [9],
 			droppedLinks: [8],
 			heldDays: [{ notesEntryId: 4, reason: "held" }]

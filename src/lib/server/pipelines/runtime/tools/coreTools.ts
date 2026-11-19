@@ -29,6 +29,7 @@ import { WEB_TOOLS } from "$lib/server/pipelines/runtime/tools/webTools"
 import { ASSISTANT_TOOLS } from "$lib/server/pipelines/runtime/tools/assistantTools"
 import { WRITE_TOOLS } from "$lib/server/pipelines/runtime/tools/writeTools"
 import { keysText } from "$lib/server/pipelines/ranking/signals"
+import { TIMELINE_OFF_SENTENCES } from "$lib/server/lorebooks/timeline"
 
 /** How much of a hit's surroundings comes back, in characters, either side. */
 const EXCERPT_PAD = 90
@@ -98,7 +99,7 @@ const asEntry = (e: any) => ({
 export const searchEntries: CoreTool = {
 	name: "search_entries",
 	description:
-		"Search this session's lorebook — world lore, character lore and history — for entries whose title, keys or text contain a phrase. Returns matching entries with a short excerpt and the id to read in full.",
+		"Search this session's lorebook — world lore, character lore and, when the lorebook keeps a timeline, history — for entries whose title, keys or text contain a phrase. Returns matching entries with a short excerpt and the id to read in full.",
 	parameters: {
 		type: "object",
 		properties: {
@@ -337,7 +338,17 @@ export const readSummary: CoreTool = {
 				`read_summary does not know the kind '${kind}'. Ask for scene, world, character or history.`
 			)
 
-		const entries = (await entriesFor(ctx))
+		const read = await entriesFor(ctx)
+		// 🚧 A lorebook with no timeline keeps no history: the read left some out,
+		// so the kind cannot be served, as an unknown kind cannot.
+		if (source === "history") {
+			const { historyLeftOutReceipt } = await import(
+				"../host.read.lorebookEntries"
+			)
+			if (historyLeftOutReceipt(read))
+				throw new ToolError(TIMELINE_OFF_SENTENCES.history)
+		}
+		const entries = read
 			.filter((e: any) => e.source === source && named(e.name))
 			.map(asEntry)
 		return {
@@ -358,6 +369,9 @@ export const readSummary: CoreTool = {
  * Not cached across calls: a tool loop can run for a minute and a run that
  * answered from a stale copy of a lorebook the person is editing beside it
  * would be answering about a world that no longer exists.
+ *
+ * Judged like the run's other lore reads: entries the speaking card does not
+ * know are not found, read or summarized (no speaker: all of them).
  */
 async function entriesFor(ctx: ToolContext): Promise<any[]> {
 	/**
@@ -369,6 +383,9 @@ async function entriesFor(ctx: ToolContext): Promise<any[]> {
 	const rows = await ctx.read("lorebook_entries", {
 		sessionId: ctx.sessionId,
 		currentCharacterId: ctx.currentCharacterId ?? null,
+		// Like every lore read in a run: the host drops what the speaking card
+		// does not know; with no speaker it reads everything.
+		knownToSpeaker: true,
 		enabled: true,
 		archived: false
 	})

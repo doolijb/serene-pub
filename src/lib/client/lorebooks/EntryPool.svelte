@@ -528,6 +528,22 @@
 	/>
 {/snippet}
 
+{#snippet lockMark(source: PoolSource)}
+	<!-- 🚧 The lock, on an entry, a scene or a cast member: sessions and their
+	     routines leave the row as it is. -->
+	{#if source.entryLock === true || source.sceneLock === true || source.castMemberLock === true}
+		<span
+			class="text-surface-600-400 inline-flex shrink-0 items-center self-center"
+			data-lock-mark
+			role="img"
+			aria-label="Locked"
+			title="Locked"
+		>
+			<Icons.Lock size={14} aria-hidden="true" />
+		</span>
+	{/if}
+{/snippet}
+
 {#snippet retrievalMark(item: PoolItem)}
 	{@const mark = markerOf(item)}
 	{#if mark}
@@ -678,6 +694,7 @@
 			</div>
 			<div class="flex shrink-0 items-start gap-2 py-3 pr-3">
 				{@render readFromButton(item)}
+				{@render lockMark(source)}
 				{@render retrievalMark(item)}
 				{#if !item.fromLibrary}
 					{@render rowMenu(item, source)}
@@ -768,6 +785,7 @@
 			</div>
 			<div class="shrink-0 pt-3 pr-3 empty:hidden">
 				{@render readFromButton(item)}
+				{@render lockMark(source)}
 				{@render retrievalMark(item)}
 			</div>
 		</div>

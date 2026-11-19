@@ -159,4 +159,29 @@ describe("NodePanel — a place's links", () => {
 		flushSync()
 		expect(props.onLinkTo).toHaveBeenCalledWith(well)
 	})
+
+	test("shows Raise it only when a way to raise the ceiling is passed", async () => {
+		const raise = vi.fn()
+		await render(hall, {
+			ceiling: "4 of 5 sent to the model last turn",
+			onRaiseCeiling: raise
+		})
+		const link = [
+			...document.querySelectorAll("[data-node-ceiling] button")
+		].find((b) => b.textContent?.trim() === "Raise it") as HTMLButtonElement
+		expect(link).toBeTruthy()
+		link.click()
+		expect(raise).toHaveBeenCalledOnce()
+		unmount(app!)
+		app = null
+		document.body.replaceChildren()
+		await render(hall, {
+			ceiling: "4 of 5 sent to the model last turn",
+			onRaiseCeiling: undefined
+		})
+		const line = document.querySelector("[data-node-ceiling]")!
+		expect(line.textContent).toContain("4 of 5 sent to the model last turn")
+		expect(line.textContent).not.toContain("Raise it")
+		expect(line.textContent?.trim().endsWith("·")).toBe(false)
+	})
 })

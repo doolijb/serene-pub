@@ -5,6 +5,7 @@
  * delete takes with it.
  */
 import { defaultLoadoutName } from "$lib/shared/loadouts/defaultLoadoutName"
+import { managedConnectionIds } from "$lib/client/components/connections/managedConnectionView"
 import type { AdminDeletion } from "$lib/client/components/admin/changelist"
 
 type ListRow = Pick<Sockets.Connections.List.Row, "id" | "name" | "type"> & {
@@ -107,8 +108,11 @@ export function connectionDeletion(
 /**
  * The manager switches a delete also turns off, so no half-removed install
  * is left: each manager only with the LAST of its rows — KoboldCPP with the
- * last managed KoboldCPP row, Ollama with the last Ollama connection (every
- * Ollama is managed against its own host).
+ * last row of its install (managed text and, until the boot fold retires it,
+ * managed image), audio.cpp with the last `audiocpp_managed` row, Ollama
+ * with the last Ollama connection (every Ollama is managed against its own
+ * host). Which rows are one install is `managedConnectionIds`, the same list
+ * the Connections view's Remove uses.
  *
  * ⚠ The last one, not any one: a pub can hold more than one managed KoboldCPP
  * row (an image row not yet folded, an import); switching the manager off
@@ -118,26 +122,27 @@ export function connectionDeletion(
  * Computed when the delete is ASKED (the list broadcast that follows drops
  * the row), and emitted by the caller only once the delete is acknowledged —
  * a refused delete must not leave a live connection with its manager off.
+ * Every event returned takes `{ enabled: false }`.
  */
+export type ManagerRelease =
+	| "systemSettings:updateKoboldCppManagerEnabled"
+	| "systemSettings:updateOllamaManagerEnabled"
+	| "audiocpp:updateSettings"
+
 export function managerFlagsReleased(
 	deletingIds: readonly number[],
 	rows: readonly { id?: number | null; type?: string | null }[]
-): (
-	| "systemSettings:updateKoboldCppManagerEnabled"
-	| "systemSettings:updateOllamaManagerEnabled"
-)[] {
+): ManagerRelease[] {
 	const going = new Set(deletingIds)
-	const out: (
-		| "systemSettings:updateKoboldCppManagerEnabled"
-		| "systemSettings:updateOllamaManagerEnabled"
-	)[] = []
-	const lastOfType = (type: string) => {
-		const of = rows.filter((r) => r.id != null && r.type === type)
-		return of.length > 0 && of.every((r) => going.has(r.id!))
+	const out: ManagerRelease[] = []
+	const lastOf = (kind: "koboldcpp" | "audiocpp" | "ollama") => {
+		const ids = managedConnectionIds(kind, rows)
+		return ids.length > 0 && ids.every((id) => going.has(id))
 	}
-	if (lastOfType("koboldcpp_managed"))
+	if (lastOf("koboldcpp"))
 		out.push("systemSettings:updateKoboldCppManagerEnabled")
-	if (lastOfType("ollama")) out.push("systemSettings:updateOllamaManagerEnabled")
+	if (lastOf("audiocpp")) out.push("audiocpp:updateSettings")
+	if (lastOf("ollama")) out.push("systemSettings:updateOllamaManagerEnabled")
 	return out
 }
 

@@ -3,7 +3,8 @@
  * lines. Lines already in a scene are dropped from the selection; an empty
  * selection, a scene in a session that does not open scenes, and a selection
  * with a gap (the modal's own check, said with a toast) are refused — and
- * the widget keeps its selection.
+ * the widget keeps its selection. A viewer who is not the session's owner is
+ * refused when the lines would go to the session's own notes.
  *
  * 🚧 With no `messageIds` at all (W3): the conversation's own selection
  * starts instead, and the person picks the lines — what Chronicle's
@@ -16,6 +17,8 @@
  * still runs or waits in review opens that run's window (§15 G8: a divider's
  * or Chronicle's *Ready to review*), never a second run.
  */
+
+import { NOTES_ARE_THE_OWNERS } from "./openLore"
 
 export type SummaryKind = "scene" | "world" | "character"
 
@@ -37,10 +40,16 @@ export interface SummarizeDeps {
 	hasScene(sceneId: number): boolean
 	/** Summarize an existing scene in the Process scene window. */
 	processScene(sceneId: number): void
+	/** The viewer owns this session. */
+	isSessionOwner(): boolean
+	/** Whether the lines would be summarized into the session's own notes (no attached lorebook). */
+	onNotes(): boolean
 }
 
 /** Answer one `summarize`. */
 export function answerSummarize(params: unknown, deps: SummarizeDeps): void {
+	// A guest neither opens nor edits the session's notes (G2): refused before any selection.
+	if (!deps.isSessionOwner() && deps.onNotes()) throw new Error(NOTES_ARE_THE_OWNERS)
 	const p = params as Record<string, unknown>
 	const kind = p.kind === "scene" || p.kind === "character" ? p.kind : "world"
 	if (kind === "scene" && !deps.opensScenes()) throw new Error("this session does not open scenes")

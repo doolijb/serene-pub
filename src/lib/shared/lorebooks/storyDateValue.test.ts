@@ -63,11 +63,22 @@ describe("storyDateValueOf", () => {
 		expect("name" in storyDateValueOf({ year: 3 }, null).year).toBe(false)
 	})
 
-	it("a date that does not land gets no names", () => {
+	it("a date that does not land gets the year's fallback spelling and no other name", () => {
 		const v = storyDateValueOf({ year: 412, month: 9, day: 5 }, THAW)
-		expect(v.year).toEqual({ number: 412 })
+		expect(v.year).toEqual({ number: 412, name: "Year 412" })
 		expect(v.month).toEqual({ number: 9 })
 		expect(v.day).toEqual({ number: 5 })
+		expect(v.time).toBeNull()
+		expect(
+			storyDateValueOf({ year: 412.9, month: 9, day: 5, hour: 22, minute: 30 }, THAW)
+		).toEqual({
+			year: { number: 412.9, name: "Year 412" },
+			month: { number: 9 },
+			day: { number: 5 },
+			time: { hour: 22, minute: 30 }
+		})
+		// A free-form book is unchanged: numbers alone.
+		expect("name" in storyDateValueOf({ year: 412, month: 9, day: 5 }, null).year).toBe(false)
 	})
 
 	it("no weekday without weekdays", () => {
@@ -98,6 +109,24 @@ describe("storyDateText", () => {
 				expect(storyDateText(storyDateValueOf(d, cal))).toBe(formatStoryTime(d, cal))
 			}
 		}
+	})
+
+	it("prints formatStoryTime's free-form fallback for a date the calendar cannot place", () => {
+		expect(storyDateText(storyDateValueOf({ year: 412, month: 13, day: 5 }, THAW))).toBe(
+			"Year 412, Mo. 13, Day 5"
+		)
+		expect(
+			storyDateText(
+				storyDateValueOf({ year: 412, month: 13, day: 5, hour: 22, minute: 30 }, THAW)
+			)
+		).toBe("Year 412, Mo. 13, Day 5, 22:30")
+		for (const d of [
+			{ year: 412, month: 13 },
+			{ year: 412, month: 0, day: 3 },
+			{ year: 412, month: 2, day: 99, hour: 4 },
+			{ year: 412, month: 1, day: 0, hour: 4, minute: 9 }
+		])
+			expect(storyDateText(storyDateValueOf(d, THAW))).toBe(formatStoryTime(d, THAW))
 	})
 
 	it("numeric when there are no names", () => {

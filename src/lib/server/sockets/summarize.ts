@@ -12,23 +12,8 @@ import {
 } from "$lib/server/messages/writes"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { loreSourceIdsOf } from "$lib/server/pipelines/runtime/loreSources"
-
-/**
- * 🚧 pr-6 (B §B-7, A11): the summarize actions' identities, built once — the
- * spec builders are not free. The host resolves the pipeline through the
- * session's registration on the action, never by a spec id.
- */
-let summarizeIdentities: { world: string; character: string } | undefined
-async function summarizeActionIdentities(): Promise<{ world: string; character: string }> {
-	if (!summarizeIdentities) {
-		const { summarizeWorldSpec, summarizeCharacterSpec } = await import("@serene-pub/core-catalog")
-		summarizeIdentities = {
-			world: summarizeWorldSpec().actions["summarize-world"].identity,
-			character: summarizeCharacterSpec().actions["summarize-character"].identity
-		}
-	}
-	return summarizeIdentities
-}
+import { haltExplanationFor } from "$lib/server/pipelines/runtime/haltExplanation"
+import { summaryRegistrationOf } from "$lib/server/pipelines/registrations/summaryRegistration"
 
 export const sessionsSummarizeHandler: Handler<
 	Sockets.Sessions.Summarize.Params,
@@ -200,25 +185,16 @@ export const sessionsSummarizeHandler: Handler<
 					"$lib/server/pipelines/runtime/runTurn"
 				)
 				// The pipeline is the session's registration on the summarize
-				// action (A11) — resolved like deletion is, never by a spec id.
-				const { resolveSubjectVerdict, STANDARD_GENRE_ID } = await import(
-					"$lib/server/pipelines/entities/sessionGenres"
-				)
-				const identities = await summarizeActionIdentities()
-				const routed = await resolveSubjectVerdict(
-					db,
-					session.genreId ?? STANDARD_GENRE_ID,
-					loreType === "world" ? identities.world : identities.character,
-					{ sessionId }
-				)
-				if (!routed.spec) {
+				// action (A11) — found by registration, never by a spec id.
+				const found = await summaryRegistrationOf(db, sessionId, loreType)
+				if (!found) {
 					return failRun(
 						loreType === "world"
 							? "This session's genre registers no world summary."
 							: "This session's genre registers no character summary."
 					)
 				}
-				const specId = routed.spec
+				const specId = found.spec
 
 				// Coarse progress from step labels. The pipeline owns batching,
 				// so the total is not known up front; the count ticking upward
@@ -248,8 +224,8 @@ export const sessionsSummarizeHandler: Handler<
 					specId,
 					registration: {
 						family: "action",
-						key: routed.registrationKey!,
-						minAge: routed.registrationMinAge ?? 0
+						key: found.key,
+						minAge: found.minAge
 					},
 					// So the status relay pushes `sessions:runStatus` beside
 					// the modal's own progress frame (R-19) — a summarize run
@@ -341,10 +317,16 @@ export const sessionsSummarizeHandler: Handler<
 					const why =
 						receipt.haltReason ??
 						"the pipeline stopped without producing a summary"
+					// Only an administrator reads the reason; summarize needs
+					// the owner, so a guest never reaches a run.
 					return failRun(
-						receipt.haltNodeKey
-							? `${why} (at '${receipt.haltNodeKey}')`
-							: why
+						haltExplanationFor(
+							socket.user,
+							"summary",
+							receipt.haltNodeKey
+								? `${why} (at '${receipt.haltNodeKey}')`
+								: why
+						)
 					)
 				}
 

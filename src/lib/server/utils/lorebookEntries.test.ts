@@ -8,6 +8,7 @@ import {
 	assertDeclaredFields,
 	assertNoRunawayPatterns,
 	entryInsert,
+	historyDateOf,
 	splitUpdate,
 	toEntryRow
 } from "$lib/server/utils/lorebookEntries"
@@ -174,5 +175,33 @@ describe("a derived entry type's piece half (checkPiece)", () => {
 		expect(columns.title).toBe("Stiletto")
 		expect(fields).not.toHaveProperty("name")
 		expect(fields).toHaveProperty("damage")
+	})
+})
+
+describe("a history entry's date", () => {
+	it("a row with no year reads year null, never Year 1", () => {
+		const row = toEntryRow({
+			...entryInsert({
+				typeId: "core:entry/history",
+				lorebookId: 1,
+				keys: [],
+				content: "",
+				position: 0
+			} as any),
+			id: 1,
+			createdAt: new Date(0),
+			updatedAt: new Date(0)
+		} as any)
+		expect(row).toMatchObject({ year: null, month: null, day: null })
+		expect(historyDateOf({ fields: {} })).toEqual({ year: null, month: null, day: null })
+		expect(historyDateOf({ fields: null })).toEqual({ year: null, month: null, day: null })
+	})
+
+	it("a dated row is unchanged", () => {
+		expect(historyDateOf({ fields: { year: 5, month: 1, day: 2 } })).toEqual({
+			year: 5,
+			month: 1,
+			day: 2
+		})
 	})
 })

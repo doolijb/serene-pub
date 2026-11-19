@@ -575,7 +575,7 @@ const REDACTING_EMITTERS: Deliberate[] = [
 	},
 	{
 		subject:
-			"src/lib/server/sockets/index.ts :: answerAsker.send → socket.io.to(…).emit(<computed>)",
+			"src/lib/server/sockets/runHandler.ts :: answerAsker.send → socket.io.to(…).emit(<computed>)",
 		reason:
 			"A request's refusal, sent to the socket that asked (A24) — or, " +
 			"when that tab has gone, to its user's room. Either way the " +

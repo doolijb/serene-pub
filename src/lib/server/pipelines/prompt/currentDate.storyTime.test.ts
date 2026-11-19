@@ -112,3 +112,55 @@ describe("currentDate — the story's present", () => {
 		)
 	})
 })
+
+describe("a lorebook that keeps no timeline", () => {
+	// What the cast read delivers now: no now, no calendar, and no history allocated.
+	const OFF = { now: null, calendar: null, timeline: false }
+	const noHistory = allocate([], { budgetTotal: 100 })
+	const asJson = (key: string, variableId: string) => ({
+		[key]: { variableId, engine: CORE_TEMPLATE_ENGINE, source: `{{{json ${key} 0}}}` }
+	})
+	const scenes = [
+		{
+			name: "The Ford",
+			summary: "They crossed.",
+			openedStoryClock: null
+		}
+	]
+
+	it("has no current date", async () => {
+		const r = await render({ ...base, allocation: noHistory, templateContext: { storyTime: OFF } })
+		expect(r.rendered).toBe("[]")
+		expect(r.rendered).not.toMatch(/current date/i)
+	})
+
+	it("has dateless history rows, dateless scenes and no calendar", async () => {
+		const run = async (key: string, variableId: string, over: object = {}) => {
+			const r = await render({
+				...base,
+				allocation: noHistory,
+				template: `[{{{${key}}}}]`,
+				variables: asJson(key, variableId) as never,
+				templateContext: { storyTime: OFF },
+				...over
+			})
+			const json = (r.rendered as string).slice(1, -1)
+			return json ? JSON.parse(json) : undefined
+		}
+		expect(await run("history", "core:var/history@1")).toBeFalsy()
+		const earlier = await run("earlierScenes", "core:var/earlier-scenes@1", {
+			earlierScenes: scenes
+		})
+		expect(earlier[0].date).toBeNull()
+		expect(earlier[0].dateDelta).toBeNull()
+		expect(await run("storyCalendar", "core:var/story-calendar@1")).toBeUndefined()
+	})
+
+	it("an undatable shape (no timeline key) is as it always was", async () => {
+		const r = await render({
+			...base,
+			templateContext: { storyTime: { now: null, calendar: THAW } }
+		})
+		expect(r.rendered).toBe("[The current date in the story is 7 Bloom, Year 3.]")
+	})
+})

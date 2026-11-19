@@ -5,6 +5,9 @@
 	import { containedBy } from "../editor/partOf"
 	import { entryRefs, type RefLink } from "../editor/refs"
 	import { inspectorTabsFor } from "../editor/inspectorTabs"
+	import { getBookKnowledge } from "../knowledge/bookKnowledge.svelte"
+	import KnownByList from "../knowledge/KnownByList.svelte"
+	import { formatDate } from "./historyDates"
 	import RefsList from "../editor/RefsList.svelte"
 	import { SCENE_KIND, type PoolItem } from "../poolFilter"
 	import HistorySceneList from "./HistorySceneList.svelte"
@@ -76,11 +79,40 @@
 	let children = $derived(containedBy(item.key, pool))
 	// 🚧 No timeline: the Scenes tab holds compiling, which is refused, so it
 	// is not offered.
+	const knowledge = getBookKnowledge()
+	// 🚧 Known by: the owner's, on a stored entry, once the store holds this
+	// entry's rows. Everyone else, a scene, and a mount with no store get no tab.
+	let knownByShown = $derived(
+		!!knowledge &&
+			knowledge.loaded &&
+			item.kind !== SCENE_KIND &&
+			knowledge.entryId === source.id
+	)
+	// A common-knowledge entry (not marked) has no count: ties change nothing
+	// until it is marked, so "0" would only contradict its rows.
+	let knownByCount = $derived(
+		knowledge &&
+			knownByShown &&
+			knowledge.rowsLoaded &&
+			knowledge.isMarked(source.id)
+			? knowledge.rows.filter(
+					(r) =>
+						r.known &&
+						r.winner !== null &&
+						r.winner.kind !== "kept_from"
+				).length
+			: undefined
+	)
 	let tabs = $derived(
 		inspectorTabsFor(door.inspector, {
 			references: refs.length,
-			contains: children.length
-		}).filter((t) => timeline.value || t.id !== "scenes")
+			contains: children.length,
+			knownBy: knownByCount
+		}).filter(
+			(t) =>
+				(timeline.value || t.id !== "scenes") &&
+				(knownByShown || t.id !== "known-by")
+		)
 	)
 	/** The route's tab when the door has it, and the door's first otherwise. */
 	let selected = $derived(
@@ -193,6 +225,16 @@
 					/>
 				{:else if selected === "contains"}
 					{@render contains()}
+				{:else if selected === "known-by" && knowledge}
+					<KnownByList
+						marked={knowledge.isMarked(source.id)}
+						rows={knowledge.rows}
+						loaded={knowledge.rowsLoaded}
+						error={knowledge.rowsError}
+						{formatDate}
+						onSet={(memberId, hand) =>
+							knowledge.setTie(memberId, source.id, hand)}
+					/>
 				{:else if selected === "scenes"}
 					{#if item.kind === SCENE_KIND}
 						<p class="text-surface-600-400 text-xs">

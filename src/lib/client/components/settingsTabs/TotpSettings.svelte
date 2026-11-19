@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
 	/**
 	 * Two-factor enrolment and management for the signed-in account (26 §10).
@@ -94,8 +95,12 @@
 
 	async function copyCodes() {
 		if (!recoveryCodes) return
-		await navigator.clipboard.writeText(recoveryCodes.join("\n"))
-		notify.success({ title: "Recovery codes copied" })
+		if (await copyText(recoveryCodes.join("\n")))
+			notify.success({ title: "Recovery codes copied" })
+		else
+			notify.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
 	}
 
 	function downloadCodes() {

@@ -310,7 +310,9 @@ describe("a stopped run is not a failed one", () => {
 
 		expect(returned.cancelled).toBeUndefined()
 		expect(returned.cancelledBy).toBeUndefined()
-		expect(returned.error).toContain("the model returned nothing")
+		// An unmarked halt is detail: the presser, not an administrator, reads
+		// the plain words.
+		expect(returned.error).toBe("The action could not finish. An administrator can see the details.")
 		expect(pushed).toEqual([returned])
 	})
 })

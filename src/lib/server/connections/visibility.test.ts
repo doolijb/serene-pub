@@ -242,9 +242,43 @@ describe("the key list", () => {
 			"connectionName",
 			"connectionScripts",
 			"activeConnection",
-			"activeEmbeddingConnectionId"
+			"activeEmbeddingConnectionId",
+			"activeEmbeddingModel",
+			"ollamaSettings",
+			"koboldCppSettings"
 		])
 			expect(CONNECTION_IDENTITY_KEYS.has(key)).toBe(true)
+	})
+})
+
+describe("the system settings payload (owner ruling DG6, 2026-11-17)", () => {
+	const payload = {
+		systemSettings: { scriptsEnabled: true },
+		ollamaSettings: { ollamaManagerBaseUrl: "http://gpu-box:11434/" },
+		koboldCppSettings: { koboldCppManagerModelsDir: "/srv/models" },
+		localOnnxAvailability: { available: true, reason: null },
+		activeEmbeddingModel: "api::http://gpu-box:5001::embed-m",
+		capabilityDefaults: {
+			"text->embedding": { connectionId: 3, connectionModelId: 9 }
+		},
+		capabilitiesReady: ["text->embedding"]
+	}
+
+	it("carries no embedding model id and no manager settings for a non-administrator", () => {
+		const wire = JSON.stringify(redactConnections(payload, { isAdmin: false }))
+		expect(wire).not.toContain("embed-m")
+		expect(wire).not.toContain("gpu-box")
+		expect(wire).not.toContain("/srv/models")
+		expect(JSON.parse(wire).capabilitiesReady).toEqual(["text->embedding"])
+		expect(JSON.parse(wire).systemSettings).toEqual({ scriptsEnabled: true })
+	})
+	it("carries all of it for an administrator", () => {
+		const wire = JSON.parse(
+			JSON.stringify(redactConnections(payload, { isAdmin: true }))
+		)
+		expect(wire.activeEmbeddingModel).toBe(payload.activeEmbeddingModel)
+		expect(wire.ollamaSettings).toEqual(payload.ollamaSettings)
+		expect(wire.koboldCppSettings).toEqual(payload.koboldCppSettings)
 	})
 })
 

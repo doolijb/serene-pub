@@ -31,11 +31,13 @@ import {
 	published
 } from "$lib/server/pipelines/config/panel/declarations"
 import { optionId } from "$lib/server/pipelines/config/panel/ids"
+import { GANGED_PARAMS, GANGED_PSEUDO_NODE, gangedMembersOf } from "$lib/server/pipelines/config/panel/ganged"
 import {
 	layers,
 	namespaceView,
 	withUnplacedChains
 } from "$lib/server/pipelines/config/panel/read"
+import { sessionRegistrationKeys } from "$lib/server/pipelines/registrations/values"
 import { resolveWriteScope } from "$lib/server/pipelines/config/panel/scopes"
 import {
 	type Decl,
@@ -44,6 +46,54 @@ import {
 	type Viewer,
 	type WriteScope
 } from "$lib/server/pipelines/config/panel/types"
+
+/**
+ * A session-scope write lands in the session's registration values, through the
+ * settings form's own writer, on every registration of the pipeline (A9). A
+ * leftover override row at the address goes in the same write, so nothing
+ * lingers under the new value. `null` clears.
+ */
+async function writeSessionValue(
+	db: Db,
+	at: Published,
+	decl: Decl,
+	sessionId: number,
+	origin: string,
+	value: unknown | null
+): Promise<void> {
+	const keys = await sessionRegistrationKeys(db, sessionId, at.slug)
+	// A clear still removes a leftover row when no registration runs the pipeline.
+	// ★ wording awaits the owner
+	if (!keys.length && value !== null)
+		throw new OptionNotWritableError(
+			"This session does not run this pipeline through any of its registrations, so it has no setting of its own here. Nothing was saved."
+		)
+	const { patchSessionRow, valuesWith } = await import(
+		"$lib/server/sessions/settingsForm"
+	)
+	await db.transaction(async (tx) => {
+		for (const key of keys)
+			await patchSessionRow(
+				tx as unknown as Db,
+				sessionId,
+				key,
+				(row) => ({ values: valuesWith(row.values, decl, value) as never }),
+				origin
+			)
+		await tx
+			.delete(schema.pipelineNodeOverrides)
+			.where(
+				and(
+					eq(schema.pipelineNodeOverrides.specId, at.specId),
+					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+					eq(schema.pipelineNodeOverrides.scopeId, sessionId),
+					eq(schema.pipelineNodeOverrides.nodeKey, decl.nodeKey),
+					eq(schema.pipelineNodeOverrides.slot, decl.slot),
+					eq(schema.pipelineNodeOverrides.path, decl.path)
+				)
+			)
+	})
+}
 
 /**
  * Resolve a handle back to its address.
@@ -57,15 +107,25 @@ async function locate(
 	secret: string,
 	slug: string,
 	id: string
-): Promise<{ at: Published; decl: Decl }> {
+): Promise<{ at: Published; decl: Decl; members?: Decl[] }> {
 	const at = await published(db, slug)
 	if (!at)
 		throw new OptionNotFoundError(
 			`There is no published pipeline called '${slug}'.`
 		)
 	const decls = await declarations(db, at.specVersionId)
+	const found = decls.find((d) => optionId(secret, d.nodeKey, d.slot, d.path) === id)
+	if (found) return { at, decl: found }
+	// 🚧 The ganged control's handle (`ganged.ts`): no declaration spells it, so
+	// it resolves over the members the panel gangs — `decl` is its home read.
+	const { loadDocument } = await import("$lib/server/pipelines/boot/store")
+	const nodes = (await loadDocument(db, at.specVersionId)).nodes
+	for (const path of Object.keys(GANGED_PARAMS)) {
+		const gang = gangedMembersOf(decls, nodes, path)
+		if (gang && optionId(secret, GANGED_PSEUDO_NODE, gang.home.slot, gang.home.path) === id)
+			return { at, decl: gang.home, members: gang.members }
+	}
 	const decl =
-		decls.find((d) => optionId(secret, d.nodeKey, d.slot, d.path) === id) ??
 		// An unplaced chain (D4) is no declaration, but its row is shown so it
 		// can be cleared — so its handle resolves too, over the addresses this
 		// spec actually stores.
@@ -368,6 +428,102 @@ async function declaredDefaultAt(db: Db, at: Published, decl: { nodeKey: string;
 	)
 }
 
+/**
+ * Where one address's write lands, resolved but not yet made: every input a
+ * write needs is read here (scope, the genre targets, the declared default), so
+ * `applyWritePlan` only writes — which is what lets a ganged write resolve all
+ * its members first and then make every write on one transaction handle.
+ */
+type WritePlan =
+	| {
+			kind: "genre"
+			targets: import("$lib/server/pipelines/registrations/genreValues").GenreValueTarget[]
+			address: { nodeKey: string; slot: string; path: string }
+			stored: unknown
+	  }
+	| { kind: "instance"; address: { nodeKey: string; slot: string; path: string }; stored: unknown }
+	| { kind: "session"; decl: Decl; sessionId: number; origin: string; value: unknown | null }
+
+/** `value` undefined plans a reset (a delete); anything else a write (which lands on a delete when it equals the default). */
+async function planWrite(
+	db: Db,
+	at: Published,
+	viewer: Viewer,
+	decl: Decl,
+	value: unknown,
+	configId: number | undefined,
+	reset = false
+): Promise<WritePlan> {
+	const target = resolveWriteScope(
+		viewer,
+		configId != null ? "config" : undefined,
+		decl.matrixSlot
+	)
+	if (target.scope === "config") {
+		// Authoring a configuration is a structural act — it changes what
+		// everyone resolving that configuration gets — and since the
+		// simplification (2026-08-24) it is the *only* global write: the
+		// former instance override layer folded into the config itself.
+		// 🚧 Since R38: the genre's defaults, where a genre registers it.
+		const global = await globalTarget(db, at, configId)
+		// ── setting it back to the default is a reset (ruled 2026-09-10) ──
+		// A layer stores deviations: a value equal to what it would otherwise
+		// inherit (the declared defaults) is no value, so "I put it back"
+		// clears the address rather than pinning today's default forever.
+		const stored = reset
+			? undefined
+			: holdsRow(decl, value, await declaredDefaultAt(db, at, decl))
+				? value
+				: undefined
+		const address = { nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path }
+		return global.kind === "genre"
+			? { kind: "genre", targets: global.targets, address, stored }
+			: { kind: "instance", address, stored }
+	}
+	return {
+		kind: "session",
+		decl,
+		sessionId: target.scopeId,
+		origin: viewer.isAdmin ? "admin" : "owner",
+		value: reset ? null : value
+	}
+}
+
+/** Make a planned write on `h` — the database, or the transaction handle a ganged write holds. */
+async function applyWritePlan(h: Db, at: Published, plan: WritePlan): Promise<void> {
+	if (plan.kind === "genre") {
+		const { setGenreValue } = await import("$lib/server/pipelines/registrations/genreValues")
+		await setGenreValue(h, plan.targets, plan.address, plan.stored)
+	} else if (plan.kind === "instance") {
+		// 🚧 R50: a pipeline no genre registers — its instance values.
+		const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
+		await setInstanceValue(h, at.slug, plan.address, plan.stored)
+	} else await writeSessionValue(h, at, plan.decl, plan.sessionId, plan.origin, plan.value)
+}
+
+/**
+ * 🚧 A write or reset through the ganged control (`ganged.ts`): each member read's
+ * own stored address, exactly as its own control would write it, on one
+ * transaction. Every input is resolved first; inside, only `tx` is used.
+ */
+async function gangedWrite(
+	db: Db,
+	at: Published,
+	viewer: Viewer,
+	members: Decl[],
+	value: unknown,
+	configId: number | undefined,
+	reset = false
+): Promise<void> {
+	const plans: WritePlan[] = []
+	for (const m of members) plans.push(await planWrite(db, at, viewer, m, value, configId, reset))
+	await db.transaction(async (tx) => {
+		for (const plan of plans) await applyWritePlan(tx as unknown as Db, at, plan)
+	})
+	const { invalidateRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	invalidateRegistrations()
+}
+
 export async function writeOption(
 	db: Db,
 	secret: string,
@@ -378,8 +534,8 @@ export async function writeOption(
 	/** Edit this configuration itself, rather than the resolved target. */
 	configId?: number
 ): Promise<void> {
-	const { at, decl } = await locate(db, secret, slug, id)
-	const now = new Date()
+	const { at, decl, members } = await locate(db, secret, slug, id)
+	if (members) return await gangedWrite(db, at, viewer, members, value, configId)
 
 	if (decl.control === "scripts-chain")
 		value = decl.unplaced
@@ -417,6 +573,37 @@ export async function writeOption(
 			throw new OptionNotWritableError(
 				`'${chosen.name}' is not one of the prompts offered here — an administrator hid it. Nothing was saved.`
 			)
+		// What this call offers the writer (`promptsOffered`, through the panel's
+		// own `choicesFor`) is what it may store; a value already in force stays.
+		const { layers } = await import("$lib/server/pipelines/config/panel/read")
+		const { choiceSets, choicesFor } = await import("$lib/server/pipelines/config/panel/choices")
+		const { promptDefaultsOf } = await import("$lib/server/pipelines/entities/prompts")
+		const { shippedConfigValuesOf } = await import("$lib/server/pipelines/config/named")
+		const decls = await declarations(db, at.specVersionId)
+		const key = `${decl.nodeKey}\u0000${decl.slot}\u0000${decl.path}`
+		const chain = await layers(db, at, viewer)
+		const inForce = chain.session?.has(key)
+			? chain.session.get(key)
+			: chain.preset.has(key)
+				? chain.preset.get(key)
+				: decl.authorDefault
+		const offered = choicesFor(
+			decl,
+			await choiceSets(db, at.specId),
+			{
+				address: key,
+				defaults: promptDefaultsOf(
+					decls,
+					await shippedConfigValuesOf(db, at.specId, at.slug, at.specVersionId, decls)
+				),
+				inForce,
+				administrator: viewer.isAdmin
+			}
+		)
+		if (!offered?.some((c) => c.id === value))
+			throw new OptionNotWritableError(
+				`'${chosen.name}' is not one of the prompts this step offers. Nothing was saved.`
+			)
 	}
 
 	// A context template is checked the same way, and one step further: against
@@ -446,61 +633,7 @@ export async function writeOption(
 		)
 	}
 
-	const target = resolveWriteScope(
-		viewer,
-		configId != null ? "config" : undefined,
-		decl.matrixSlot
-	)
-
-	if (target.scope === "config") {
-		// Authoring a configuration is a structural act — it changes what
-		// everyone resolving that configuration gets — and since the
-		// simplification (2026-08-24) it is the *only* global write: the
-		// former instance override layer folded into the config itself.
-		// 🚧 Since R38: the genre's defaults, where a genre registers it.
-		const global = await globalTarget(db, at, configId)
-		// ── setting it back to the default is a reset (ruled 2026-09-10) ──
-		// A layer stores deviations: a value equal to what it would otherwise
-		// inherit (the declared defaults) is no value, so "I put it back"
-		// clears the address rather than pinning today's default forever.
-		const inherited = await declaredDefaultAt(db, at, decl)
-		const stored = holdsRow(decl, value, inherited) ? value : undefined
-		const address = { nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path }
-		if (global.kind === "genre") {
-			const { setGenreValue } = await import("$lib/server/pipelines/registrations/genreValues")
-			await setGenreValue(db, global.targets, address, stored)
-			return
-		}
-		// 🚧 R50: a pipeline no genre registers — its instance values.
-		const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
-		await setInstanceValue(db, at.slug, address, stored)
-		return
-	}
-
-	await db
-		.insert(schema.pipelineNodeOverrides)
-		.values({
-			specId: at.specId,
-			scopeKind: target.scope,
-			scopeId: target.scopeId,
-			nodeKey: decl.nodeKey,
-			slot: decl.slot,
-			path: decl.path,
-			value,
-			updatedBy: viewer.userId,
-			updatedAt: now
-		})
-		.onConflictDoUpdate({
-			target: [
-				schema.pipelineNodeOverrides.specId,
-				schema.pipelineNodeOverrides.scopeKind,
-				schema.pipelineNodeOverrides.scopeId,
-				schema.pipelineNodeOverrides.nodeKey,
-				schema.pipelineNodeOverrides.slot,
-				schema.pipelineNodeOverrides.path
-			],
-			set: { value, updatedBy: viewer.userId, updatedAt: now }
-		})
+	await applyWritePlan(db, at, await planWrite(db, at, viewer, decl, value, configId))
 }
 
 /**
@@ -519,44 +652,10 @@ export async function clearOption(
 	/** Reset this configuration's own value, rather than the resolved target. */
 	configId?: number
 ): Promise<void> {
-	const { at, decl } = await locate(db, secret, slug, id)
+	const { at, decl, members } = await locate(db, secret, slug, id)
+	if (members) return await gangedWrite(db, at, viewer, members, undefined, configId, true)
 
-	const target = resolveWriteScope(
-		viewer,
-		configId != null ? "config" : undefined,
-		decl.matrixSlot
-	)
-
-	if (target.scope === "config") {
-		const global = await globalTarget(db, at, configId)
-		if (global.kind === "genre") {
-			const { setGenreValue } = await import("$lib/server/pipelines/registrations/genreValues")
-			await setGenreValue(
-				db,
-				global.targets,
-				{ nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path },
-				undefined
-			)
-			return
-		}
-		// 🚧 R50: a pipeline no genre registers — its instance values.
-		const { setInstanceValue } = await import("$lib/server/pipelines/registrations/instanceValues")
-		await setInstanceValue(db, at.slug, { nodeKey: decl.nodeKey, slot: decl.slot, path: decl.path }, undefined)
-		return
-	}
-
-	await db
-		.delete(schema.pipelineNodeOverrides)
-		.where(
-			and(
-				eq(schema.pipelineNodeOverrides.specId, at.specId),
-				eq(schema.pipelineNodeOverrides.scopeKind, target.scope),
-				eq(schema.pipelineNodeOverrides.scopeId, target.scopeId),
-				eq(schema.pipelineNodeOverrides.nodeKey, decl.nodeKey),
-				eq(schema.pipelineNodeOverrides.slot, decl.slot),
-				eq(schema.pipelineNodeOverrides.path, decl.path)
-			)
-		)
+	await applyWritePlan(db, at, await planWrite(db, at, viewer, decl, undefined, configId, true))
 }
 
 /**

@@ -36,6 +36,10 @@ vi.mock("$lib/server/sockets/utils/userPush", () => ({
 
 import { clearReplyFailed, persistGenerationErrorRow } from "./generationStatus"
 import { ComposedError } from "$lib/server/connections/visibility"
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
+
+/** A failure whose words are marked for people, so the row stores them as written. */
+const forPeopleError = (words: string) => forPeople(new ComposedError(words), words)
 import {
 	REPLY_FAILED,
 	regardingFor,
@@ -97,7 +101,7 @@ describe("reply-failed", () => {
 			null,
 			session.id,
 			message.id,
-			new ComposedError("The model returned nothing."),
+			forPeopleError("The model returned nothing."),
 			{ userId: user.id }
 		)
 
@@ -123,7 +127,7 @@ describe("reply-failed", () => {
 			null,
 			session.id,
 			message.id,
-			new ComposedError("A second, late failure."),
+			forPeopleError("A second, late failure."),
 			{ userId: user.id }
 		)
 		const after = await rowsOf(user.id)
@@ -158,13 +162,29 @@ describe("reply-failed", () => {
 			null,
 			long.session.id,
 			long.message.id,
-			new ComposedError("y".repeat(400)),
+			forPeopleError("y".repeat(400)),
 			{ userId: long.user.id }
 		)
 		const [longRow] = await rowsOf(long.user.id)
 		const text = (longRow.vars as Record<string, string>).error
 		expect(text.length).toBe(160)
 		expect(text.endsWith("…")).toBe(true)
+	}, 60_000)
+
+	test("an administrator presser is told the sentence without the suggestion to ask an administrator", async () => {
+		const { user, session, message } = await scenario("admin-presser")
+		await testDb.update(schema.users).set({ isAdmin: true }).where(eq(schema.users.id, user.id))
+
+		await persistGenerationErrorRow(
+			null,
+			session.id,
+			message.id,
+			new ComposedError("No model is set for Reply."),
+			{ userId: user.id }
+		)
+
+		const [row] = await rowsOf(user.id)
+		expect((row.vars as Record<string, string>).error).toBe("The reply could not be generated.")
 	}, 60_000)
 
 	test("raises nothing when no presser is known", async () => {
@@ -174,7 +194,7 @@ describe("reply-failed", () => {
 			null,
 			session.id,
 			message.id,
-			new ComposedError("No one asked.")
+			forPeopleError("No one asked.")
 		)
 
 		const [failed] = await testDb
@@ -193,14 +213,14 @@ describe("reply-failed", () => {
 			null,
 			session.id,
 			message.id,
-			new ComposedError("First failure."),
+			forPeopleError("First failure."),
 			{ userId: user.id }
 		)
 		await persistGenerationErrorRow(
 			null,
 			other.session.id,
 			other.message.id,
-			new ComposedError("Unrelated failure."),
+			forPeopleError("Unrelated failure."),
 			{ userId: other.user.id }
 		)
 		expect(await openRowsOf(user.id)).toHaveLength(1)
@@ -224,7 +244,7 @@ describe("reply-failed", () => {
 			null,
 			session.id,
 			message.id,
-			new ComposedError("Second failure."),
+			forPeopleError("Second failure."),
 			{ userId: user.id }
 		)
 		const open = await openRowsOf(user.id)

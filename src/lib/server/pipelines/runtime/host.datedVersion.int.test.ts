@@ -551,6 +551,62 @@ describe("the edit history", () => {
 	})
 })
 
+describe("dated by history: no clock, but dated history", () => {
+	async function historyOnly() {
+		const w = await world({ clock: null })
+		for (const fields of [
+			{ year: 3, month: 2, day: 9 },
+			{ year: 7, month: 4, day: 1 }
+		])
+			await db.insert(schema.lorebookEntries).values({
+				lorebookId: w.book.id,
+				typeId: HISTORY_TYPE_ID,
+				typeVersion: 1,
+				position: ++n,
+				title: null,
+				content: "…",
+				fields
+			})
+		const vault = await place(w.book.id, "The Vault")
+		const t = await turn(w.session.id, w.user.id)
+		await t.host.commit!(
+			{ entry: vault.id, content: "Sealed." },
+			UPDATE
+		)
+		return { w, vault, ...t }
+	}
+
+	it("a dated version at the newest history day; the stored row is untouched", async () => {
+		const { w, vault } = await historyOnly()
+		const versions = await versionsOf(w.book.id, vault.id)
+		expect(versions).toHaveLength(1)
+		expect(versions[0]).toMatchObject({
+			base: null,
+			year: 7,
+			month: 4,
+			day: 1,
+			fields: { content: "Sealed." }
+		})
+		expect(await stored(vault.id)).toMatchObject({
+			content: "The Vault, as written."
+		})
+	})
+
+	it("Back on that turn removes the version", async () => {
+		const { retractStateAnchoredTo } = await undo()
+		const { w, vault, message } = await historyOnly()
+		expect(await versionsOf(w.book.id, vault.id)).toHaveLength(1)
+		const undone = await db.transaction(async (tx) =>
+			retractStateAnchoredTo(tx as unknown as Db, message.id, "leaves", {
+				leavingWith: [message.id]
+			})
+		)
+		expect(undone.changed).toBe(true)
+		expect(await versionsOf(w.book.id, vault.id)).toEqual([])
+		expect((await stored(vault.id)).content).toBe("The Vault, as written.")
+	})
+})
+
 describe("a change that waits", () => {
 	it("an entry is not read before its Beginning, so a change at the Beginning's own day is written as a version", async () => {
 		const w = await world()
@@ -584,8 +640,21 @@ describe("a change that waits", () => {
 		)
 	})
 
-	it("a session with no moment writes in place", async () => {
+	it("a session with no moment and no date at all in the lorebook (undatable) writes in place", async () => {
 		const w = await world({ clock: null })
+		const vault = await place(w.book.id, "The Vault")
+		const { host } = await turn(w.session.id, w.user.id)
+		await host.commit!({ entry: vault.id, content: "Sealed." }, UPDATE)
+		expect((await stored(vault.id)).content).toBe("Sealed.")
+		expect(await versionsOf(w.book.id, vault.id)).toEqual([])
+	})
+
+	it("a session on a lorebook with no timeline (timeless) writes in place, even with a stale clock", async () => {
+		const w = await world()
+		await db
+			.update(schema.lorebooks)
+			.set({ timelineEnabled: false })
+			.where(eq(schema.lorebooks.id, w.book.id))
 		const vault = await place(w.book.id, "The Vault")
 		const { host } = await turn(w.session.id, w.user.id)
 		await host.commit!({ entry: vault.id, content: "Sealed." }, UPDATE)

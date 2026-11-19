@@ -4,11 +4,17 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
+import axe from "axe-core"
 
 vi.mock("$app/environment", () => ({
 	dev: true,
 	building: false,
 	browser: true
+}))
+const held = vi.hoisted(() => ({ store: undefined as unknown }))
+vi.mock("./knowledge/bookKnowledge.svelte", async (original) => ({
+	...(await original<Record<string, unknown>>()),
+	getBookKnowledge: () => held.store
 }))
 const { asks, refuse } = vi.hoisted(() => ({
 	asks: [] as Array<{
@@ -79,6 +85,7 @@ let app: ReturnType<typeof mount> | null = null
 beforeEach(() => {
 	asks.length = 0
 	refuse.clear()
+	held.store = undefined
 	openBookTime.open(BOOK)
 	openBookTime.setBranches(BOOK, [])
 })
@@ -477,5 +484,109 @@ describe("select all", () => {
 				'input[type="checkbox"]'
 			)!.checked
 		).toBe(true)
+	})
+})
+
+describe("mark not common knowledge", () => {
+	const marks = (marked: number[], loaded = true, refusal?: string) => {
+		const calls: Array<[number[], boolean]> = []
+		held.store = {
+			loaded,
+			isMarked: (id: number) => marked.includes(id),
+			setMark: async (ids: number[], flag: boolean) => {
+				calls.push([ids, flag])
+				if (refusal) throw new Error(refusal)
+				return { markedEntryIds: [] }
+			}
+		}
+		return calls
+	}
+	const three = () => [sel(1, "Ann"), sel(2, "Bo"), sel(3, "Cy")]
+
+	test("without a store the button is absent; with an unread store too", async () => {
+		await draw(three())
+		expect(button("Mark not common knowledge…")).toBeUndefined()
+		expect(button("Mark common knowledge")).toBeUndefined()
+		app && unmount(app)
+		app = null
+		document.body.innerHTML = ""
+		marks([], false)
+		await draw(three())
+		expect(button("Mark not common knowledge…")).toBeUndefined()
+	})
+
+	test("asks with the count and sends nothing yet; Cancel sends nothing", async () => {
+		const calls = marks([])
+		await draw(three())
+		await press("Mark not common knowledge…")
+		expect(document.body.textContent).toContain(
+			"Mark 3 entries not common knowledge?"
+		)
+		expect(calls).toEqual([])
+		await press("Cancel")
+		expect(calls).toEqual([])
+		expect(document.body.textContent).not.toContain(
+			"Mark 3 entries not common knowledge?"
+		)
+	})
+
+	test("confirming makes exactly one call and the bar says 3 entries changed", async () => {
+		const calls = marks([])
+		const { onDone } = await draw(three())
+		await press("Mark not common knowledge…")
+		await press("Mark not common knowledge")
+		expect(calls).toEqual([[[1, 2, 3], true]])
+		expect(asks).toEqual([])
+		expect(report().headline).toBe("3 entries changed.")
+		expect(onDone).toHaveBeenCalledWith([])
+	})
+
+	test("every selected entry marked: Mark common knowledge, no dialog, one call", async () => {
+		const calls = marks([1, 2, 3])
+		await draw(three())
+		expect(button("Mark not common knowledge…")).toBeUndefined()
+		await press("Mark common knowledge")
+		expect(calls).toEqual([[[1, 2, 3], false]])
+		expect(report().headline).toBe("3 entries changed.")
+	})
+
+	test("an entry already marked is left out of the send", async () => {
+		const calls = marks([2])
+		await draw(three())
+		await press("Mark not common knowledge…")
+		expect(document.body.textContent).toContain(
+			"Mark 2 entries not common knowledge?"
+		)
+		await press("Mark not common knowledge")
+		expect(calls).toEqual([[[1, 3], true]])
+	})
+
+	test("a refusal lists each entry with the sentence", async () => {
+		marks([], true, "Only the owner may do this.")
+		const { onDone } = await draw(three())
+		await press("Mark not common knowledge…")
+		await press("Mark not common knowledge")
+		expect(report().headline).toBe("No entry changed.")
+		expect(report().lines).toEqual([
+			"Ann: Only the owner may do this.",
+			"Bo: Only the owner may do this.",
+			"Cy: Only the owner may do this."
+		])
+		expect(onDone).toHaveBeenCalledWith([1, 2, 3])
+	})
+
+	test("axe finds no violations with the dialog open", async () => {
+		marks([])
+		await draw(three())
+		await press("Mark not common knowledge…")
+		// The dialog is portaled; axe runs on the portal's dialog. Run on the whole
+		// body it also flags the bar the modal hides (`aria-hidden-focus`), which
+		// the dialog's focus trap keeps unreachable.
+		const dialog =
+			document.body.querySelector<HTMLElement>('[role="dialog"]')!
+		const result = await axe.run(dialog, {
+			rules: { "color-contrast": { enabled: false } }
+		})
+		expect(result.violations.map((v) => v.id)).toEqual([])
 	})
 })

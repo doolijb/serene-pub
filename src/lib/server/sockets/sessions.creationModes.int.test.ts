@@ -27,11 +27,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 // The summaries themselves have their own coverage (sessions.closeOut.int.test.ts).
@@ -340,10 +340,16 @@ describe("next-chapter", () => {
 
 	test("a following session is followed by a following one", async () => {
 		const w = await world({ lines: 2 })
+		// The lorebook has no date anywhere: the following session starts today (D52(b)), date only, in the owner's zone (unset here).
+		const { storyToday } = await import("$lib/server/state/storyTime")
+		const before = storyToday(null)
 		const res = await create(w.owner.id, { mode: "next-chapter", from: w.session.id, session: { name: "Chapter two", genreId: STORY_GENRE } })
+		const after = storyToday(null)
 		expect(res.error ?? null).toBeNull()
 		const [next] = await testDb.select().from(schema.sessions).where(eq(schema.sessions.id, res.session.id))
-		expect([next.storyClockYear, next.storyClockMonth, next.storyClockDay, next.storyClockHour, next.storyClockMinute]).toEqual([null, null, null, null, null])
+		const day = (c: { year?: number | null; month?: number | null; day?: number | null }) => [c.year, c.month, c.day]
+		expect([day(before), day(after)]).toContainEqual([next.storyClockYear, next.storyClockMonth, next.storyClockDay])
+		expect([next.storyClockHour, next.storyClockMinute]).toEqual([null, null])
 	}, 60_000)
 
 	test("refuses: no session chosen, and someone else's", async () => {
@@ -388,6 +394,7 @@ describe("a surfaced book (★B-3)", () => {
 		await insertLegacy(testDb as unknown as Db, { sessionId: bare.id, role: "user", content: "a line", channel: "main" })
 		const { ownBookFor, shareAsLorebook } = await import("$lib/server/lorebooks/ownBook")
 		const notes = await ownBookFor(testDb as unknown as Db, bare.id)
+		await testDb.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, notes.id)) // the notes state their timeline
 		await testDb
 			.insert(schema.lorebookEntries)
 			.values({ lorebookId: notes.id, typeId: "core:entry/world-lore", typeVersion: 1, position: 1, title: "The mill", content: "Loud." } as any)

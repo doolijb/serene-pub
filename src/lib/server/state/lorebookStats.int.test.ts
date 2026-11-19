@@ -416,6 +416,57 @@ describe("core:query/stat-trail@1 — one stat over time", () => {
 		])
 	})
 
+	test("timeless: stale history-anchored points keep their order and their since filter, and carry no date", async () => {
+		declareSlots()
+		const b = await book()
+		const h1 = await b.dated({ year: 412, month: 3 }, 1)
+		const h2 = await b.dated({ year: 412, month: 5 }, 2)
+		const s = await session(b)
+		await durable("lorebook", b.lorebook.id, WEATHER, "clear", { historyEntryId: h2.id, sourceSessionId: s.id })
+		await durable("lorebook", b.lorebook.id, WEATHER, "storm", { historyEntryId: h1.id, sourceSessionId: s.id })
+		// Straight to `statTrailFor` with the session's reading, which carries `timelineOff`: the host read's
+		// own reading (`lorebookInScope`) sets it only when a moment is asked (reported, not fixed here).
+		const asked = async () => {
+			const { statTrailFor } = await import("$lib/server/state/statTrail")
+			const { sessionReadingOf } = await import("$lib/server/state/reading")
+			const reading = (await sessionReadingOf(testDb as unknown as Db, s.id))!
+			const query = {
+				lorebookId: b.lorebook.id,
+				sessionId: s.id,
+				reading,
+				owner: { kind: "lorebook" } as any,
+				slotId: "weather",
+				mode: "timeline" as const
+			}
+			const all: any = await statTrailFor(testDb as unknown as Db, query)
+			const since: any = await statTrailFor(testDb as unknown as Db, { ...query, sinceDate: { year: 412, month: 4 } })
+			return { all, since }
+		}
+		const dated = await asked()
+		expect(values(dated.all.points)).toEqual(["storm", "clear"])
+		expect(values(dated.since.points)).toEqual(["clear"])
+		expect(dated.all.points[0].anchor.date).toEqual({ year: 412, month: 3, day: null })
+
+		await testDb
+			.update(schema.lorebooks)
+			.set({ timelineEnabled: false })
+			.where(eq(schema.lorebooks.id, b.lorebook.id))
+		const off = await asked()
+		expect(values(off.all.points)).toEqual(["storm", "clear"])
+		expect(values(off.since.points)).toEqual(["clear"])
+		expect(off.all.points.map((p: any) => p.anchor)).toEqual([
+			{ historyEntryId: h1.id, date: null },
+			{ historyEntryId: h2.id, date: null }
+		])
+
+		await testDb
+			.update(schema.lorebooks)
+			.set({ timelineEnabled: true })
+			.where(eq(schema.lorebooks.id, b.lorebook.id))
+		const back = await asked()
+		expect(back.all.points[0].anchor.date).toEqual({ year: 412, month: 3, day: null })
+	})
+
 	test("through the binding, with since and last on its ports and params", async () => {
 		declareSlots()
 		const b = await book()

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { getContext } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
@@ -13,7 +12,12 @@
 	import { copyName } from "./bookCopy"
 	import { describeOverwriteLosses } from "./overwriteLosses"
 	import { lorebookImportedToast } from "./lorebookImportedToast"
-	import { deleteBookCopy, type DeletingBook } from "./deleteCopy"
+	import {
+		deleteBookCopy,
+		deleteBookRefusal,
+		type DeletingBook
+	} from "./deleteCopy"
+	import BookDeleteRefusal from "./BookDeleteRefusal.svelte"
 	import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 	import { isStarterKit } from "./starterKitCards"
 
@@ -80,7 +84,6 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
-	const openSessionCtx: OpenSessionCtx = getContext("openSessionCtx")
 
 	/**
 	 * The file chosen for import: its text, sent as it was read (the server
@@ -122,14 +125,12 @@
 						"This cannot be undone."
 					]
 				}
-			: deleteBookCopy(deletingBook, {
-					placeTypeId: LOCATION_TYPE_ID,
-					openSessionName:
-						deletingId !== null &&
-						openSessionCtx?.lorebookId === deletingId
-							? openSessionCtx.sessionName
-							: null
-				})
+			: deleteBookCopy(deletingBook, { placeTypeId: LOCATION_TYPE_ID })
+	)
+
+	/** 🚧 A session of the asker's reads the book: the delete is refused (D50). */
+	const deleteRefusal = $derived(
+		deletingKit ? null : deleteBookRefusal(deletingBook)
 	)
 
 	/** What the copy will be called, as the reader may still edit it. */
@@ -731,28 +732,48 @@
 					class="card bg-surface-100-900 border-surface-200-800 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="text-error-600-400 mb-2 text-lg font-bold">
-							{deleteCopy.title}
-						</h2>
-						<div class="mb-4 flex max-w-prose flex-col gap-2">
-							{#each deleteCopy.lines as line, i (i)}
-								<p>{line}</p>
-							{/each}
-						</div>
-						<div class="mt-4 flex items-end gap-2">
-							<button
-								class="btn preset-tonal-surface"
-								onclick={() => (deletingId = null)}
+						{#if deleteRefusal}
+							<Dialog.Title class="mb-2 text-lg font-bold">
+								{deleteRefusal.title}
+							</Dialog.Title>
+							<BookDeleteRefusal
+								words={deleteRefusal}
+								onOpen={() => (deletingId = null)}
+							/>
+							<div class="mt-4 flex items-end gap-2">
+								<button
+									class="btn preset-tonal-surface"
+									onclick={() => (deletingId = null)}
+								>
+									Close
+								</button>
+							</div>
+						{:else}
+							<Dialog.Title
+								class="text-error-600-400 mb-2 text-lg font-bold"
 							>
-								Cancel
-							</button>
-							<button
-								class="btn preset-filled-error-500"
-								onclick={handleDeleteConfirm}
-							>
-								Delete
-							</button>
-						</div>
+								{deleteCopy.title}
+							</Dialog.Title>
+							<div class="mb-4 flex max-w-prose flex-col gap-2">
+								{#each deleteCopy.lines as line, i (i)}
+									<p>{line}</p>
+								{/each}
+							</div>
+							<div class="mt-4 flex items-end gap-2">
+								<button
+									class="btn preset-tonal-surface"
+									onclick={() => (deletingId = null)}
+								>
+									Cancel
+								</button>
+								<button
+									class="btn preset-filled-error-500"
+									onclick={handleDeleteConfirm}
+								>
+									Delete
+								</button>
+							</div>
+						{/if}
 					</div>
 				</Dialog.Content>
 			</Dialog.Positioner>

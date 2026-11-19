@@ -493,7 +493,9 @@ export interface FormCollects {
 export async function formCollectsOf(
 	db: Db,
 	sessionId: number,
-	viewer: ActionViewer
+	viewer: ActionViewer,
+	/** `offered`: the session's function list when the caller has already computed it, as `listSessionActions` takes it. */
+	opts: { offered?: ReadonlyArray<SessionFunction> } = {}
 ): Promise<Record<string, FormCollects>> {
 	const [session] = await db
 		.select({ genreId: schema.sessions.genreId })
@@ -503,7 +505,9 @@ export async function formCollectsOf(
 	if (!session) return {}
 	const genreId = session.genreId ?? STANDARD_GENRE_ID
 	const collecting = (
-		await enabledSessionFunctions(db, sessionId, genreId, viewer.userId)
+		opts.offered
+			? opts.offered.filter((f) => f.enabled)
+			: await enabledSessionFunctions(db, sessionId, genreId, viewer.userId)
 	).filter((a) => a.collects && a.venues.some((v) => v.kind === "form"))
 	if (!collecting.length) return {}
 	const portrayals = await resolveAudiences(

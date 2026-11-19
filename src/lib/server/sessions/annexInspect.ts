@@ -6,8 +6,8 @@
  * declaration covers, as **legacy** (pipelines only, R59).
  *
  * Unlike a person's view (`annexViews.ts`), this shows values whatever their
- * audience, so it is for the session's owner and administrators alone
- * (`sessions:annexInspect`). Even for them a value whose declared shape
+ * audience, so it is for the session's owner alone (`sessions:annexInspect`;
+ * G6: an administrator in another's session is a guest). Even for them a value whose declared shape
  * holds a `secret` is withheld — R61 says such a field cannot be declared,
  * and this checks again rather than trusting that.
  */
@@ -22,7 +22,7 @@ type Inspected = Sockets.Sessions.AnnexInspect.Response
 
 /** The one refusal sentence — the same whether the session is someone else's or absent. */
 export const ANNEX_INSPECT_REFUSAL =
-	"Only the session's owner or an administrator can see its stored data."
+	"Only the session's owner can see its stored data."
 
 /**
  * Lay the stored annex out against the declarations in force. Pure.
@@ -102,12 +102,12 @@ export function groupAnnex(
 
 /**
  * The panel's read for `viewer`: refused (by sentence) unless they own the
- * session or are an administrator.
+ * session. G6: an administrator in another's session is a guest, so is refused too.
  */
 export async function inspectAnnex(
 	db: Db,
 	sessionId: number,
-	viewer: { id: number; isAdmin?: boolean | null }
+	viewer: { id: number }
 ): Promise<{ ok: true; result: Inspected } | { ok: false; error: string }> {
 	const [row] = await db
 		.select({
@@ -118,10 +118,9 @@ export async function inspectAnnex(
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (!viewer.isAdmin && (!row || row.ownerId !== viewer.id))
+	if (!row || row.ownerId !== viewer.id)
 		return { ok: false, error: ANNEX_INSPECT_REFUSAL }
-	if (!row) return { ok: false, error: "No such session." }
-	const declared = await declaredAnnexFields(db, row.genreId ?? "core:genre/chat")
+	const declared = await declaredAnnexFields(db, row.genreId)
 	return {
 		ok: true,
 		result: {

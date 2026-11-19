@@ -170,6 +170,65 @@ describe("core:query/entries-named@1 earmarks what it lists", () => {
 		return (await binding({ scope: { sessionId: w.session.id }, messages: say(text), params: {} }, {})).value
 	}
 
+	it("leaveOut: a left-out entry the lines name is not returned and is reported; one nobody names is not", async () => {
+		const w = await world()
+		const mira = await lore(w.book.id, "Mira", "A baker.")
+		const odo = await lore(w.book.id, "Odo", "A miller.", { keys: ["the mill"] })
+		const zed = await lore(w.book.id, "Zed", "A smith.")
+		let skipped: number[] = []
+		const rows = await named(w, say("Mira and the mill."), {
+			leaveOut: new Set([odo.id, zed.id]),
+			onLeftOut: (ids: number[]) => (skipped = ids)
+		} as never)
+		expect(rows.map((r) => r.entryId)).toEqual([mira.id])
+		expect(skipped).toEqual([odo.id])
+	})
+
+	it("timeless: a history entry the lines name is not matched or returned and the receipt says so; on again it is back", async () => {
+		const { HISTORY_TYPE_ID } = await import("$lib/shared/entries/types")
+		const { historyValues } = await import("$lib/server/pipelines/testing/fixtures")
+		const { eq } = await import("drizzle-orm")
+		const w = await world()
+		const mira = await lore(w.book.id, "Mira", "A baker.")
+		const [war] = await db
+			.insert(schema.lorebookEntries)
+			.values(historyValues([{ lorebookId: w.book.id, year: 5, month: 1, day: 2, keys: ["the siege"] }] as never))
+			.returning()
+		const { coreBindings } = await import("$lib/server/pipelines/runtime/bindings")
+		const binding = coreBindings({})["core:query/entries-named@1"] as unknown as (
+			input: unknown,
+			ctx: unknown
+		) => Promise<{ value: { main: Array<{ entryId: number }>; ids: number[] } }>
+		const ask = async () => {
+			const log = vi.fn()
+			const out = await binding(
+				{
+					scope: { sessionId: w.session.id },
+					messages: say("Mira recalls the siege."),
+					params: { entryTypes: [WORLD_LORE_TYPE_ID, HISTORY_TYPE_ID], knownToSpeaker: false }
+				},
+				{ log }
+			)
+			return { ids: out.value.ids, notes: log.mock.calls.map((c) => c[1]) }
+		}
+		const setTimeline = (on: boolean) =>
+			db.update(schema.lorebooks).set({ timelineEnabled: on }).where(eq(schema.lorebooks.id, w.book.id))
+
+		const on = await ask()
+		expect(on.ids).toEqual(expect.arrayContaining([mira.id, war!.id]))
+		expect(on.notes.join("\n")).not.toMatch(/history/)
+
+		await setTimeline(false)
+		const off = await ask()
+		expect(off.ids).toEqual([mira.id])
+		expect(off.notes).toContain("1 history entry left out: this lorebook keeps no timeline")
+
+		await setTimeline(true)
+		const back = await ask()
+		expect(back.ids).toEqual(expect.arrayContaining([mira.id, war!.id]))
+		expect(back.notes.join("\n")).not.toMatch(/history/)
+	})
+
 	it("earmarks exactly the ids it returns on the registered run", async () => {
 		const reg = await import("$lib/server/pipelines/runtime/runRegistry")
 		reg._reset()

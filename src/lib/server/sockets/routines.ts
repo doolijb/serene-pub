@@ -90,6 +90,7 @@ export const sessionsRoutineLogHandler: Handler<Sockets.Sessions.RoutineLog.Para
 					sessionId,
 					lastInteractionAt: row?.lastInteractionAt ? row.lastInteractionAt.getTime() : null,
 					entries: await routineLog(db as unknown as Db, sessionId, {
+						reader: socket.user,
 						...(typeof params?.since === "number" ? { since: params.since } : {}),
 						...(typeof params?.limit === "number" ? { limit: params.limit } : {})
 					})

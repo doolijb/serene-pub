@@ -105,9 +105,14 @@ describe("the narrator's lore node after the change", () => {
 			"historyMaxEntries",
 			"historyPriority",
 			"historyShare",
+			// Whether a read is limited to what the speaker knows; the bindings
+			// read it as `params.knownToSpeaker !== false`.
+			"knownToSpeaker",
 			"lexicalScoring",
 			"maxRecursionDepth",
 			"scanDepth",
+			// 🚧 wt-1b-fix2 (2026-11-17): the history rule's switch, beside `knownToSpeaker`.
+			"speakerInCast",
 			"titleWeight",
 			"trigramFolding",
 			"worldLoreMaxEntries",

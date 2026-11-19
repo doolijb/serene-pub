@@ -58,3 +58,8 @@ No objection on scope; placement, the stored-cast rule and the warning verified.
    so with all three reads wired a session holding such a scene pays up to three extra statements per reply.
    Not changed (no shipped spec wires `firsthandFor`); **Noticed, not done**: limit `bare` to the scenes the
    call judges.
+
+## Grouped verification (lead, 2026-11-16)
+
+- Full vitest run 9 (`plans/lead-full9.log`): 2,514 files, 25 failed. 21 are the standing baseline; the 4 new ones were pinned expectations that the two lanes moved on purpose (`openRenders.test.ts`: Assemble renders `storyCalendar`; `receipts.int.test.ts` and `pipelines.scoping.int.test.ts`: Story places `gather.unknownEntries.read`; `parity/harness.int.test.ts`: History prints as rows). The lead updated the four expectations; rerun of those files: 58/58 (`plans/lead-run9-fix.log`).
+- `npm run build`: exit 0. `tsc --noEmit`: 0 errors. `npm run check`: 0 errors, 9 warnings (standing).

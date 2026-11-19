@@ -265,6 +265,18 @@
    which Lamplight raised to the 10px row radius (L13, 2026-10-24); a 10px
    corner on a 20px-tall word reads as a pill. */
 @layer base {
+	/* A control's visually hidden <input> is position:absolute. Without a
+	   positioned ancestor it lands against the page and focusing it scrolls
+	   the fixed panel dialog instead of the inner scroller (phone width). So
+	   every switch and radio-like control is its own containing
+	   block. */
+	:where(
+			[data-scope="switch"][data-part="root"],
+			[data-scope="radio-group"][data-part="item"]
+		) {
+		position: relative;
+	}
+
 	/* Every enabled control shows the hand (owner, 2026-11-06: "Cursor
 	   behavior … not working correctly"). Tailwind 4 / Skeleton 5 leave
 	   buttons at `default`; zero specificity, so a component's own cursor

@@ -101,7 +101,10 @@ const notes = (id: number, sessionName: string | null, written: boolean) => ({
 	notesWritten: written
 })
 
-async function open(lorebookId: number | null = null) {
+async function open(
+	lorebookId: number | null = null,
+	attached: { access: "owner" | "shared" } | null = null
+) {
 	loreRoute.set({ lorebookId, scope: "all", settings: false } as any)
 	const target = document.createElement("div")
 	document.body.append(target)
@@ -117,10 +120,23 @@ async function open(lorebookId: number | null = null) {
 	})
 	await settle()
 	client.dispatch("lorebooks:list", {
-		lorebookList: [{ id: 1, name: "Real book", userId: 1 }]
+		lorebookList: [
+			{
+				id: 1,
+				name: "Real book",
+				userId: 1,
+				...(attached ? { bookAccess: attached.access } : {})
+			}
+		]
 	})
 	client.dispatch("lorebooks:sessionNotes", {
-		books: [notes(2, "Rainy night", true), notes(3, "Quiet harbour", false)]
+		books: [
+			{
+				...notes(2, "Rainy night", true),
+				attached: attached ? { id: 1, name: "Real book" } : null
+			},
+			notes(3, "Quiet harbour", false)
+		]
 	})
 	await settle()
 }
@@ -165,4 +181,23 @@ describe("the Session notes section", () => {
 		expect(text()).toContain("Quiet harbour's notes")
 		expect(text()).not.toContain("stored 3")
 	})
+
+	test.each([
+		["owner", true],
+		["shared", false]
+	] as const)(
+		"Share to the attached book is offered only when it is the viewer's own (%s)",
+		async (access, offered) => {
+			await open(null, { access })
+			heading()!.click()
+			await settle()
+			const trigger = document.querySelector<HTMLButtonElement>(
+				"#loreSessionNotesList button[aria-label='Lorebook options']"
+			)
+			trigger!.click()
+			await settle()
+			expect(text().includes("Share to Real book")).toBe(offered)
+			expect(text()).toContain("Merge")
+		}
+	)
 })

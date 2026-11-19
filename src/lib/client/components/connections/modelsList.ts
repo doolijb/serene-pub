@@ -191,7 +191,7 @@ export function isCantUse(entry: FlatModel<any>): boolean {
 
 /**
  * Why a row is in the last group, for its meta line — or null where the row
- * already says it (the "No longer listed" badge, the download line).
+ * already says it (the missing-model badge, the download line).
  */
 export function cantUseNoteOf(entry: FlatModel<any>): string | null {
 	if (entry.missingSince != null) return null

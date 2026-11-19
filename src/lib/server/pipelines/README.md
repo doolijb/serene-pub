@@ -33,7 +33,7 @@ Configuration resolves through four scopes, most specific first (`SCOPE_ORDER` i
 | know why a setting resolved the way it did                         | [`config/world.ts`](config/world.ts) — the scope-chain projection                                               |
 | find where lore is chosen                                          | [`ranking/`](ranking/) — `select.ts` for the decision, `weights.ts` for every constant                           |
 | know what actually ran                                             | [`runtime/receipts.ts`](runtime/receipts.ts)                                                                     |
-| add a node definition                                                    | a descriptor in the SDK, then a binding in [`runtime/bindings.ts`](runtime/bindings.ts)                          |
+| add a node definition                                                    | a descriptor in the SDK, then a binding in the `runtime/bindings.*.ts` file for its area (see `runtime/` below)  |
 
 ## The groups
 
@@ -90,6 +90,38 @@ mechanisms (keyword and semantic among them) over shared scoring. Every tunable 
 itself. `bindings.ts` implements the node definitions. `dispatch.ts` sends a prompt
 built elsewhere. `reviewGate.ts` parks a run awaiting human approval —
 **graph builds always stop here and are never auto-applied.**
+
+`bindings.ts` assembles the binding table: `coreBindings(run)` spreads one map
+per area, each from its own sibling file — `bindings.retrieval.ts` (lore lanes,
+triggers, vector, entity and docs search), `bindings.turnOrder.ts`,
+`bindings.prompt.ts` (the template context, the context builders, Assemble),
+`bindings.providers.ts` (model calls and the tool call), `bindings.summarize.ts`
+(summaries and the tool, form, pick and pair tasks), `bindings.outlets.ts` (the
+writes the host commits), and `bindings.state.ts`, `bindings.relationships.ts`
+and the other groups it spreads. A new binding goes into the file for its area,
+registered as `reads<typeof C.x>(…)` on a handler whose `input` is
+`NodeInput<typeof C.x>`. A new area gets its own `bindings.<area>.ts` exporting
+`<area>Bindings(run?)`, spread in `coreBindings` and added to `FILES` in
+`boot/readsPairing.test.ts`, which checks only the files it names. A helper two
+modules read lives in `bindings.shared.ts`; no `bindings.*.ts` imports
+`bindings.ts`. A handler that serves several ids is also listed in
+`SHARED_CORE_HANDLERS`.
+
+`host.ts` is `createHost`: the run's own state (the live row, its channel, the
+turn's message), the helpers that read or write it, the `read` switch and the
+`commit` cases. The larger `read` cases that need only the host's database,
+scope and self, the node and its query live in sibling files as functions the
+switch calls — `host.read.lorebookEntries.ts`, `host.read.sessionCast.ts`,
+`host.read.summarize.ts`, `host.read.retrieval.ts`, most of them
+`read<Table>(args: HostReadArgs, …cache)` — while the small ones are still
+inline in the switch; `call` lives whole in `host.call.ts` (`hostCall`).
+Types are in `host.types.ts`, shared helpers and row mappers in
+`host.helpers.ts`, the lorebook writes that hold no run state in
+`host.loreWrites.ts`. A new `read` case of that kind goes in the
+`host.read.*.ts` file for its area (a new area gets its own); a new `call`
+case goes in `host.call.ts`; a case that reads or sets the run's state stays in
+`host.ts`. No `host.*.ts` module (tests aside) imports `host.ts`, and callers keep importing every
+name from `host.ts`, which re-exports them.
 
 ### `migrate/` — bringing 0.5 across
 

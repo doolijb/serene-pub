@@ -2,21 +2,10 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
-	HISTORY_TYPE_ID,
-	type NewLorebookEntry
-} from "$lib/shared/entries/types"
-import { historyValues } from "$lib/server/pipelines/testing/fixtures"
-import {
-	createTestDb,
 	createTestUser,
 	type TestDb
 } from "$lib/server/utils/testDb"
-import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import {
-	buildSceneCastList,
-	MAX_BINDINGS_FOR_SCENE_CAST,
-	reconcileParticipantsAndMentioned,
-	reconcileSuggestedNames,
 	resolveCharacterRefs,
 	resolveOrCreateBindingByName,
 	type CastEntry
@@ -25,8 +14,16 @@ import { insertCastMember } from "$lib/server/characters/versions"
 
 let testDb: TestDb
 
+// The seat readers import the app's own database lazily; it is the test's database, never a second one.
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
+})
+
 beforeAll(async () => {
-	testDb = await createTestDb()
+	testDb = (await import("$lib/server/db")).db as unknown as TestDb
 }, 60_000)
 
 async function makeLorebook(userId: number, name = "Test Book") {
@@ -35,46 +32,6 @@ async function makeLorebook(userId: number, name = "Test Book") {
 		.values({ name, userId })
 		.returning()
 	return lorebook
-}
-
-async function makeHistoryEntry(
-	lorebookId: number,
-	overrides: Partial<NewLorebookEntry<typeof HISTORY_TYPE_ID>> = {}
-) {
-	const [entry] = await testDb
-		.insert(schema.lorebookEntries)
-		.values(
-			historyValues([
-				{
-					lorebookId,
-					year: 1,
-					month: 1,
-					day: 1,
-					content: "",
-					keys: "",
-					...overrides
-				}
-			])
-		)
-		.returning()
-	return entry
-}
-
-async function makeScene(
-	lorebookId: number,
-	historyEntryId: number,
-	overrides: Partial<typeof schema.scenes.$inferInsert> = {}
-) {
-	const [scene] = await testDb
-		.insert(schema.scenes)
-		.values({
-			lorebookId,
-			historyEntryId,
-			name: "Scene",
-			...overrides
-		})
-		.returning()
-	return scene
 }
 
 /**
@@ -143,30 +100,6 @@ describe("resolveCharacterRefs", () => {
 	})
 })
 
-describe("reconcileSuggestedNames", () => {
-	test("a name suggested in both lists is kept only as a participant suggestion", () => {
-		const result = reconcileSuggestedNames(
-			["Guard Captain"],
-			["Guard Captain"]
-		)
-		expect(result.participants).toEqual(["Guard Captain"])
-		expect(result.mentioned).toEqual([])
-	})
-
-	test("dedup is case-insensitive", () => {
-		const result = reconcileSuggestedNames(
-			["Guard Captain"],
-			["guard captain"]
-		)
-		expect(result.mentioned).toEqual([])
-	})
-
-	test("no overlap leaves both lists as given", () => {
-		const result = reconcileSuggestedNames(["A"], ["B"])
-		expect(result.participants).toEqual(["A"])
-		expect(result.mentioned).toEqual(["B"])
-	})
-})
 
 describe("resolveOrCreateBindingByName", () => {
 	test("a name matching an existing binding resolves to its id — created:false, no new row", async () => {
@@ -260,267 +193,4 @@ describe("resolveOrCreateBindingByName", () => {
 	})
 })
 
-describe("buildSceneCastList", () => {
-	// ★pT-1 (owner, 2026-11-05): "Everything in session is cast -> active
-	// card" -- a player seat is a priority entry under its member's own name.
-	test("a player seat is merged in like a character seat: its member's own nickname is an alias beside the card's", async () => {
-		const user = await createTestUser(testDb, "cast-player-seat-user")
-		const lorebook = await makeLorebook(user.id)
-		const [persona] = await testDb
-			.insert(schema.characters)
-			.values({ userId: user.id, name: "Pia", description: "" })
-			.returning()
-		const member = (
-			await insertCastMember(testDb, {
-				lorebookId: lorebook.id,
-				characterId: persona.id,
-				binding: "{{char:pia}}",
-				name: "Pia",
-				ownName: "Pia of the Book",
-				ownNickname: "Pip"
-			} as any)
-		).member
-		const [session] = await testDb
-			.insert(schema.sessions)
-			.values({
-				userId: user.id,
-				name: "Player seat session",
-				lorebookId: lorebook.id,
-				isGroup: false
-			})
-			.returning()
-		await testDb.insert(schema.sessionPersonas).values({
-			sessionId: session.id,
-			personaId: persona.id,
-			castMemberId: member.id
-		} as any)
-		const historyEntry = await makeHistoryEntry(lorebook.id)
-		const scene = await makeScene(lorebook.id, historyEntry.id)
 
-		const cast = await buildSceneCastList(
-			scene.id,
-			lorebook.id,
-			session.id,
-			testDb
-		)
-		// The binding's name still wins the canonical name, as a character seat's.
-		const entry = cast.find((c) => c.name === "Pia")
-		expect(entry).toBeDefined()
-		expect(entry!.aliases).toContain("Pip")
-	})
-
-	test("session characters/personas are merged in as priority entries, taking their binding's name when one exists", async () => {
-		const user = await createTestUser(testDb, "cast-session-user")
-		const lorebook = await makeLorebook(user.id)
-		const [character] = await testDb
-			.insert(schema.characters)
-			.values({ userId: user.id, name: "Kestrel", description: "" })
-			.returning()
-		await makeBinding(lorebook.id, {
-			characterId: character.id,
-			name: "Kestrel",
-			binding: "{{char:1}}"
-		})
-		const [session] = await testDb
-			.insert(schema.sessions)
-			.values({
-				userId: user.id,
-				name: "Test Session",
-				lorebookId: lorebook.id,
-				isGroup: false
-			})
-			.returning()
-		await testDb
-			.insert(schema.sessionCharacters)
-			.values({ sessionId: session.id, characterId: character.id })
-
-		const historyEntry = await makeHistoryEntry(lorebook.id)
-		const scene = await makeScene(lorebook.id, historyEntry.id)
-
-		const cast = await buildSceneCastList(
-			scene.id,
-			lorebook.id,
-			session.id,
-			testDb
-		)
-
-		expect(cast).toHaveLength(1)
-		expect(cast[0].name).toBe("Kestrel")
-	})
-
-	test("a background/NPC binding is only in scope once its own history position is at or before the current scene", async () => {
-		const user = await createTestUser(testDb, "cast-timeline-user")
-		const lorebook = await makeLorebook(user.id)
-		const earlyEntry = await makeHistoryEntry(lorebook.id, { year: 1 })
-		const lateEntry = await makeHistoryEntry(lorebook.id, { year: 10 })
-		const earlyScene = await makeScene(lorebook.id, earlyEntry.id)
-		const lateScene = await makeScene(lorebook.id, lateEntry.id)
-
-		// An NPC introduced in the late scene.
-		await makeBinding(lorebook.id, {
-			name: "Late NPC",
-			binding: "{{char:2}}",
-			historyEntryId: lateEntry.id,
-			sceneId: lateScene.id
-		})
-
-		const castForEarlyScene = await buildSceneCastList(
-			earlyScene.id,
-			lorebook.id,
-			null,
-			testDb
-		)
-		expect(castForEarlyScene.map((c) => c.name)).not.toContain("Late NPC")
-
-		const castForLateScene = await buildSceneCastList(
-			lateScene.id,
-			lorebook.id,
-			null,
-			testDb
-		)
-		expect(castForLateScene.map((c) => c.name)).toContain("Late NPC")
-	})
-
-	test("a prior scene's stored ids need no name matching — the binding is already covered by the main sweep", async () => {
-		const user = await createTestUser(testDb, "cast-prior-scene-user")
-		const lorebook = await makeLorebook(user.id)
-		const historyEntry = await makeHistoryEntry(lorebook.id)
-		const priorScene = await makeScene(lorebook.id, historyEntry.id)
-		const nextScene = await makeScene(lorebook.id, historyEntry.id, {
-			name: "Next scene"
-		})
-
-		const npcBinding = await makeBinding(lorebook.id, {
-			name: "Wandering Merchant",
-			binding: "{{char:3}}",
-			historyEntryId: historyEntry.id,
-			sceneId: priorScene.id
-		})
-		await writeSceneCast(
-			priorScene.id,
-			{ participantCharacters: [npcBinding.id] },
-			testDb as any
-		)
-
-		const cast = await buildSceneCastList(
-			nextScene.id,
-			lorebook.id,
-			null,
-			testDb
-		)
-		expect(cast.map((c) => c.id)).toContain(npcBinding.id)
-	})
-
-	test("with sceneId=null (a scene not yet created), every background/NPC binding is included regardless of timeline", async () => {
-		const user = await createTestUser(testDb, "cast-null-scene-user")
-		const lorebook = await makeLorebook(user.id)
-		const lateEntry = await makeHistoryEntry(lorebook.id, { year: 99 })
-		const lateScene = await makeScene(lorebook.id, lateEntry.id)
-		await makeBinding(lorebook.id, {
-			name: "Far Future NPC",
-			binding: "{{char:4}}",
-			historyEntryId: lateEntry.id,
-			sceneId: lateScene.id
-		})
-
-		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)
-		expect(cast.map((c) => c.name)).toContain("Far Future NPC")
-	})
-})
-
-describe("reconcileParticipantsAndMentioned", () => {
-	test("unions sender ids into participants", () => {
-		const result = reconcileParticipantsAndMentioned([1], [], [2, 3])
-		expect(new Set(result.participants)).toEqual(new Set([1, 2, 3]))
-		expect(result.mentioned).toEqual([])
-	})
-
-	test("a sender who is also LLM-extracted as a participant isn't duplicated", () => {
-		const result = reconcileParticipantsAndMentioned([1, 2], [], [2])
-		expect(result.participants.sort()).toEqual([1, 2])
-	})
-
-	test("a sender the LLM placed in mentioned is promoted to participant-only", () => {
-		const result = reconcileParticipantsAndMentioned([1], [2], [2])
-		expect(new Set(result.participants)).toEqual(new Set([1, 2]))
-		expect(result.mentioned).toEqual([])
-	})
-
-	test("the LLM double-listing a non-sender in both arrays still ends up participant-only — the general invariant, not just sender-derived removal", () => {
-		// id 5 is in both LLM-extracted lists but was never a message sender
-		// at all (senderBindingIds is empty) — the fix must still remove it
-		// from mentioned because it's already a participant, not because it
-		// was auto-added.
-		const result = reconcileParticipantsAndMentioned([1, 5], [5, 9], [])
-		expect(new Set(result.participants)).toEqual(new Set([1, 5]))
-		expect(result.mentioned).toEqual([9])
-	})
-
-	test("no senders and no overlap leaves both lists as the LLM produced them", () => {
-		const result = reconcileParticipantsAndMentioned([1], [2], [])
-		expect(result.participants).toEqual([1])
-		expect(result.mentioned).toEqual([2])
-	})
-
-	test("empty participants + only senders still produces a full participant list", () => {
-		const result = reconcileParticipantsAndMentioned([], [], [7, 8])
-		expect(new Set(result.participants)).toEqual(new Set([7, 8]))
-	})
-})
-
-// Round-12 audit fix (MEDIUM): mergeIntoExisting is O(entries) per call,
-// and buildSceneCastList called it once per binding — net O(n^2)
-// Levenshtein-based fuzzy matching with no cap, unlike the sibling
-// duplicateBindingDetection.ts. Fixed by skipping the fuzzy-dedup scan
-// (not the whole function) above MAX_BINDINGS_FOR_SCENE_CAST bindings.
-describe("buildSceneCastList — fuzzy-dedup cap (Round-12 audit fix)", () => {
-	test("above the cap, returns every binding without throwing/hanging and logs a warning", async () => {
-		const user = await createTestUser(testDb, "scenecast-cap-over-user")
-		const lorebook = await makeLorebook(user.id, "Cap Over Book")
-
-		const total = MAX_BINDINGS_FOR_SCENE_CAST + 1
-		for (let i = 0; i < total; i++)
-			await insertCastMember(testDb, {
-				lorebookId: lorebook.id,
-				binding: `{{char:${i + 1}}}`,
-				name: `NPC ${i + 1}`
-			})
-
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)
-
-		expect(cast).toHaveLength(total)
-		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining("skipping fuzzy dedup")
-		)
-		warnSpy.mockRestore()
-	})
-
-	test("under the cap, fuzzy dedup still collapses near-duplicate names as before", async () => {
-		const user = await createTestUser(testDb, "scenecast-cap-under-user")
-		const lorebook = await makeLorebook(user.id, "Cap Under Book")
-
-		for (const v of [
-			{
-				lorebookId: lorebook.id,
-				binding: "{{char:1}}",
-				name: "Jonathan"
-			},
-			{
-				// A near-duplicate (fuzzy match) of the row above — must
-				// still collapse into one entry when under the cap.
-				lorebookId: lorebook.id,
-				binding: "{{char:2}}",
-				name: "Jonathon"
-			}
-		])
-			await insertCastMember(testDb, v)
-
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		const cast = await buildSceneCastList(null, lorebook.id, null, testDb)
-
-		expect(warnSpy).not.toHaveBeenCalled()
-		expect(cast).toHaveLength(1)
-		warnSpy.mockRestore()
-	})
-})

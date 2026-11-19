@@ -88,7 +88,10 @@
 			if (!validatePassphrase()) return
 			isSettingPassphrase = true
 			setPassphraseHere = true
-			socket?.emit("users:current:setPassphrase", { passphrase })
+			socket?.emit("users:current:setPassphrase", {
+				passphrase,
+				enableAccounts: true
+			})
 		} else {
 			socket?.emit("systemSettings:updateAccountsEnabled", {
 				enabled: true
@@ -156,9 +159,6 @@
 				notify.success({
 					source: "socket:users:current:setPassphrase",
 					title: "Passphrase set"
-				})
-				socket?.emit("systemSettings:updateAccountsEnabled", {
-					enabled: true
 				})
 				showModal = false
 			} else {

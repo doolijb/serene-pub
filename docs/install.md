@@ -91,7 +91,7 @@ Stop here for now, or carry straight on: the wizard's next step is choosing a mo
 
 :::warning If this didn't work
 - **The tray icon appeared but nothing opened.** The first start can take a little while. Click the tray icon to open Serene Pub; if it still doesn't open, choose **Open Browser** from the icon's menu, or open your browser at `http://localhost:3000`.
-- **The tray icon says Serene Pub stopped.** Choose **View Logs** from its menu. `server.log` holds what the app printed before it stopped; it's the most useful thing to include when you ask for help. Choose **Start** to try again.
+- **The tray icon says Serene Pub stopped.** Choose **View Logs** from its menu. `server.log` holds what the app printed before it stopped; it's the most useful thing to include when you ask for help. Choose **Start** (it reads **Restart** if Serene Pub stopped unexpectedly) to try again.
 - **No tray icon on Windows.** When Windows can't show the icon, Serene Pub starts anyway after about five seconds. With no **Quit** to choose, closing the Serene Pub window stops it, and `launcher.log` in the `logs` folder of your [data folder](./troubleshooting.md#where-your-data-is) says `tray unavailable`.
 - **Nothing happened at all.** Start it from a terminal so you can read why: see [Running without the launcher](#running-without-the-launcher-servers-troubleshooting).
 - **"Address already in use" or "port 3000".** Another program is already using that address. Close it, or change the port as described in [Environment variables](./environment-variables.md).

@@ -212,4 +212,18 @@ describe("the narrator's cadence in the turn picker", () => {
 		await settle()
 		expect(asks()).toEqual([])
 	})
+
+	test("a locked cadence reads as words with its cause tied to the value", async () => {
+		show()
+		const form = ownerForm("every-round")
+		Object.assign(form.groups[0].fields[0], { editable: false, lockedAt: "preset", readOnlyReason: "Set by the session's preset." })
+		client.dispatch("sessions:settingsForm", form)
+		await settle()
+		const row = target.querySelector(`[data-setting='${JSON.stringify(["genre", "narratorInterjections"])}']`)!
+		expect(row.querySelectorAll("input, button, select, [role=switch]")).toHaveLength(0)
+		const reason = [...row.querySelectorAll("p")].find((p) => p.textContent?.trim() === "Set by the session's preset.")
+		expect(reason?.id).toBeTruthy()
+		const value = [...row.querySelectorAll("p")].find((p) => p.textContent?.trim() === "Every round")
+		expect(value?.getAttribute("aria-describedby")).toBe(reason!.id)
+	})
 })

@@ -323,15 +323,15 @@ export async function sessionLoreWrite(
  * story now — its own clock, or its line's stored clock, time of day dropped
  * because entries are dated by day. When the line's present is only its
  * newest history entry, the new one is the step after it (`nextStoryDate`,
- * rolled over by the book's calendar); a line with no dates at all starts at
- * Year 1, Month 1, Day 1.
+ * rolled over by the book's calendar). A story with no now has no date to give:
+ * null, and the caller refuses the write (it never invents Year 1).
  */
 export function historyDateOfSessionWrite(
 	write: Pick<SessionLoreWrite, "storyNow">,
 	calendar?: StoryCalendar | null
-): { year: number; month: number | null; day: number | null } {
+): { year: number; month: number | null; day: number | null } | null {
 	const now = write.storyNow
-	if (!now) return { year: 1, month: 1, day: 1 }
+	if (!now) return null
 	const date = {
 		year: now.year,
 		month: now.month ?? null,

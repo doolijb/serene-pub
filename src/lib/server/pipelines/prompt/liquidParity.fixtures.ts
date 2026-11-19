@@ -238,10 +238,11 @@ Example dialogue:
 {%- endfor -%}`
 
 const HISTORY_LIQUID =
-	"{ {%- for row in history %}" +
-	'"{{ row.date | formatDate }}{% if row.dateDelta %} ({{ row.dateDelta | formatDateDelta }}){% endif %}":' +
-	"{{ row.content | jsonValue: indent: 0 }}{% unless forloop.last %},{% endunless %}" +
-	"{% endfor -%} }"
+	"[{% for row in history %}" +
+	'{"date":{{ row.date | formatDate | jsonValue: indent: 0 }}' +
+	'{% if row.dateDelta %},"dateDelta":"{{ row.dateDelta | formatDateDelta }}"{% endif %}' +
+	',"content":{{ row.content | jsonValue: indent: 0 }}}' +
+	"{% unless forloop.last %},{% endunless %}{% endfor %}]"
 
 const EARLIER_SCENES_LIQUID =
 	"[{% for scene in earlierScenes %}" +

@@ -36,13 +36,14 @@ import { specOwnerPluginId } from "$lib/server/pipelines/boot/store"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost, type HostScope } from "$lib/server/pipelines/runtime/host"
+import { takePeopleSentence } from "$lib/server/pipelines/runtime/host.types"
 import {
 	saveReceipt,
 	receiptWithoutQueryText,
 	type RunArtifact
 } from "$lib/server/pipelines/runtime/receipts"
 import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
-import { ceilingFor } from "$lib/server/pipelines/runtime/callTether"
+import { ceilingFor, stepTimeLimitsOff } from "$lib/server/pipelines/runtime/callTether"
 import { PipelineUnavailableError } from "$lib/server/pipelines/runtime/runTurn"
 import { likenessOf } from "$lib/server/characters/likeness"
 import { ensureCardVersion } from "$lib/server/characters/versions"
@@ -263,29 +264,43 @@ export async function runCardAction(req: CardActionRequest): Promise<Receipt> {
 		signal: req.signal
 	}
 
+	// 🚧 The diagnostic switch (Admin › Diagnostics), read once as the run starts.
+	const limitsOff = await stepTimeLimitsOff(db)
 	const world = await buildWorld(db, { specId })
 	if (req.overrides?.length) world.overrides.push(...req.overrides)
 	const user = String(req.userId)
 	const seed = uuidv4()
-	const receipt = await run(doc, {
-		world,
-		input,
-		runId,
-		seed,
-		triggerSource: "ui",
-		bindings: coreBindings({ runId, user, seed }),
-		host: createHost(db, scope),
-		onNode: req.onNode,
-		...(req.onStatus ? { onStatus: req.onStatus } : {}),
-		cancelSignal: req.cancelSignal,
-		// 🚧 LS3: the ceiling of the run's trigger family — a person's press.
-		timeoutCeilingMs: ceilingFor("action"),
-		reviewer: createReviewer({
-			userId: req.userId,
-			specId,
-			signal: req.signal
-		})
-	} as any)
+	// The people sentence the halt's raise site marked rides the receipt as
+	// `meta.peopleSentence`; the run's records are dropped when it ends, however it ends.
+	let receipt: Awaited<ReturnType<typeof run>>
+	try {
+		receipt = await run(doc, {
+			world,
+			input,
+			runId,
+			seed,
+			triggerSource: "ui",
+			bindings: coreBindings({ runId, user, seed }),
+			host: createHost(db, scope),
+			onNode: req.onNode,
+			...(req.onStatus ? { onStatus: req.onStatus } : {}),
+			cancelSignal: req.cancelSignal,
+			// 🚧 LS3: the ceiling of the run's trigger family — a person's press.
+			timeoutCeilingMs: ceilingFor("action"),
+			// 🚧 Diagnostic switch on: no step limit and no ceiling; Stop still ends the run.
+			...(limitsOff ? { stepTimeLimitsOff: true } : {}),
+			reviewer: createReviewer({
+				userId: req.userId,
+				specId,
+				signal: req.signal
+			})
+		} as any)
+		const people = takePeopleSentence(runId, receipt.haltReason)
+		if ((receipt.outcome === "halt" || receipt.outcome === "err") && typeof people === "string")
+			receipt.meta = { ...(receipt.meta ?? {}), peopleSentence: people }
+	} finally {
+		takePeopleSentence(runId, undefined)
+	}
 
 	receiptWithoutQueryText(receipt)
 	// 🚧 LS2: every run records its trigger family — a card's action is a press.

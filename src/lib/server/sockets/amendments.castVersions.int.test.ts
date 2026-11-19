@@ -992,7 +992,8 @@ describe("cardMemberAt reads versions", () => {
 		const early = await cardMemberAt(db(), {
 			lorebookId: w.book.id,
 			characterId: w.card.id,
-			at: at(5)
+			at: at(5),
+			timelineOff: false
 		})
 		// Before the first change: the base, and its active card.
 		expect(early?.member).toMatchObject({
@@ -1004,7 +1005,8 @@ describe("cardMemberAt reads versions", () => {
 		const late = await cardMemberAt(db(), {
 			lorebookId: w.book.id,
 			characterId: w.card.id,
-			at: at(12)
+			at: at(12),
+			timelineOff: false
 		})
 		expect(late?.member).toMatchObject({
 			id: w.member.id,
@@ -1039,7 +1041,8 @@ describe("cardMemberAt reads versions", () => {
 			)
 		const read = await cardMemberAt(db(), {
 			lorebookId: w.book.id,
-			characterId: w.card.id
+			characterId: w.card.id,
+			timelineOff: false
 		})
 		expect(read?.member).toMatchObject({
 			id: w.member.id,

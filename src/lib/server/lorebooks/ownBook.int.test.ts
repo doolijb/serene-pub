@@ -153,7 +153,7 @@ describe("the session's own notes", () => {
 		expect(ids).not.toContain(made.id)
 	})
 
-	test("readable by the session's members and nobody else; never read into another session", async () => {
+	test("readable by the session's owner and nobody else (a guest has no access, G2); never read into another session", async () => {
 		const w = await world()
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const guest = await createTestUser(testDb, `ownBook-guest-${n}`)
@@ -163,9 +163,10 @@ describe("the session's own notes", () => {
 		const notes = await ownBookFor(testDb as any, w.session.id)
 		const { lorebookAccessFor, findOwnedBook } = await import("$lib/server/utils/ownedBook")
 		expect(await lorebookAccessFor(notes.id, w.user.id, { db: testDb as any })).toBe("owner")
-		expect(await lorebookAccessFor(notes.id, guest.id, { db: testDb as any })).toBe("owner")
+		expect(await lorebookAccessFor(notes.id, guest.id, { db: testDb as any })).toBeNull()
 		expect(await lorebookAccessFor(notes.id, stranger.id, { db: testDb as any, isAdmin: true })).toBeNull()
-		expect(await findOwnedBook(testDb as any, guest.id, notes.id)).toBeTruthy()
+		expect(await findOwnedBook(testDb as any, w.user.id, notes.id)).toBeTruthy()
+		expect(await findOwnedBook(testDb as any, guest.id, notes.id)).toBeUndefined()
 		expect(await findOwnedBook(testDb as any, stranger.id, notes.id)).toBeUndefined()
 	})
 
@@ -599,7 +600,7 @@ describe("wave 3: the notes routed whole (PLAN-rulesets §26)", () => {
 })
 
 describe("every session owns a book (pr-6, B §B-3)", () => {
-	test("insertOwnBook is born Gregorian with its clock unset", async () => {
+	test("insertOwnBook is born on the real calendar with its clock unset", async () => {
 		const w = await world()
 		const { insertOwnBook, OWN_BOOK_CALENDAR } = await import("./ownBook")
 		const made = await insertOwnBook(testDb as any, {
@@ -620,6 +621,43 @@ describe("every session owns a book (pr-6, B §B-3)", () => {
 			storyClockHour: null,
 			storyClockMinute: null
 		})
+	}, 60_000)
+
+	test("a new own book is born on the real calendar; an existing twelve-months calendar reads back unchanged", async () => {
+		const w = await world()
+		const { insertOwnBook } = await import("./ownBook")
+		const { STORY_CALENDAR_PRESETS } = await import("@serene-pub/sdk")
+		const real = STORY_CALENDAR_PRESETS.find((p) => p.id === "real-calendar")!.calendar
+		const twelve = STORY_CALENDAR_PRESETS.find((p) => p.id === "twelve-months")!.calendar
+		const made = await insertOwnBook(testDb as any, {
+			sessionId: w.session.id,
+			userId: w.user.id,
+			name: "Real",
+			overlayOf: null,
+			primaryRuleset: w.session.primaryRuleset,
+			rulesetVersion: null
+		})
+		expect((made.storyCalendar as any).leap).toEqual({
+			every: 4,
+			month: 2,
+			skipEvery: 100,
+			keepEvery: 400
+		})
+		expect(made.storyCalendar).toEqual(real)
+
+		// An older book stored its own copy: nothing here rewrites it.
+		const older = await world()
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: older.user.id, name: "Older", storyCalendar: twelve as any })
+			.returning()
+		const { ensureOwnBooks } = await import("./ownBook")
+		await ensureOwnBooks(testDb as any)
+		const [after] = await testDb
+			.select()
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, book!.id))
+		expect(after!.storyCalendar).toEqual(twelve)
 	}, 60_000)
 
 	test("ensureOwnBooks gives older sessions one, sets overlays, and is idempotent", async () => {
@@ -719,7 +757,9 @@ describe("every session owns a book (pr-6, B §B-3)", () => {
 		expect(row).toMatchObject({
 			sessionId: w.session.id,
 			sessionName: w.session.name,
-			attached: { id: w.lorebook!.id, name: w.lorebook!.name }
+			attached: { id: w.lorebook!.id, name: w.lorebook!.name },
+			// A session's own notes are read by that session.
+			readBy: [{ id: w.session.id, name: w.session.name ?? null }]
 		})
 		const main: any = await lorebooks.lorebooksListHandler.handler(fakeSocket(w.user.id), {} as any, noopEmit)
 		expect(main.lorebookList.map((b: any) => b.id)).not.toContain(notes.id)

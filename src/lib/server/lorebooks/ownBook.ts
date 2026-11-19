@@ -16,7 +16,7 @@
  *
  * - **made at the session's birth** (`insertOwnBook`, inside `sessions:create`,
  *   the chat imports and a branch), named after the session and taking its
- *   ruleset; born Gregorian (`OWN_BOOK_CALENDAR`) with its clock unset.
+ *   ruleset; born on the real calendar (`OWN_BOOK_CALENDAR`) with its clock unset.
  *   `ownBookFor` is the get-or-create safety net for a session a path skipped,
  *   and `ensureOwnBooks` the boot pass that gave older sessions theirs;
  * - **out of the pickers**: the shared lists and search filter
@@ -53,22 +53,25 @@ import { and, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-or
 import { randomUUID } from "node:crypto"
 import { liveMessageWhere } from "$lib/server/messages/store"
 import * as schema from "$lib/server/db/schema"
+import { canWriteLorebook } from "$lib/server/utils/ownedBook"
+import { liveProvidedBookSql, primerRowEditProblem } from "$lib/server/plugins/providedMarks"
 import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
 import { ensureSessionLine } from "$lib/server/lorebooks/sessionLine"
-import { TIMELINE_OFF_SENTENCES, timelineOfBook } from "$lib/server/lorebooks/timeline"
+import { TIMELINE_OFF_SENTENCES, timelineDefaultFor, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 import { SHARE_REFUSALS, SURFACED_BOOK_REFUSAL } from "$lib/shared/lorebooks/sessionNotes"
-import { STORY_CALENDAR_PRESETS, parseStoryCalendar, type StoryCalendar } from "@serene-pub/sdk"
+import { STORY_CALENDAR_PRESETS, getGenre, parseStoryCalendar, type StoryCalendar } from "@serene-pub/sdk"
 import { getSessionGenre } from "$lib/server/pipelines/entities/sessionGenres"
+import { entryLockedAgainstRuns } from "$lib/shared/lorebooks/runLocks"
 
 /** What a session's own book is named when the session has no name. */
 const UNNAMED = "Untitled session"
 
 export type OwnBookRow = typeof schema.lorebooks.$inferSelect
 
-/** 🚧 R-e: the calendar every own book is born with — the SDK preset "Twelve months, 365 days". Its clock is unset. */
+/** 🚧 R-e: the calendar every new own book is born with — the SDK preset "The real calendar" (Gregorian, real leap rule). Its clock is unset. Existing own books keep the calendar they stored. */
 export const OWN_BOOK_CALENDAR: StoryCalendar = STORY_CALENDAR_PRESETS.find(
-	(p) => p.id === "twelve-months"
+	(p) => p.id === "real-calendar"
 )!.calendar
 
 /** The session's own book, when it has one. Never creates. */
@@ -180,7 +183,11 @@ export async function genreCalendarOf(tx: Db, sessionId: number): Promise<StoryC
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return OWN_BOOK_CALENDAR
-	const decl = (await getSessionGenre(tx, session.genreId))?.shape.calendar
+	return calendarOfGenre(tx, session.genreId)
+}
+
+async function calendarOfGenre(tx: Db, genreId: string): Promise<StoryCalendar> {
+	const decl = (await getSessionGenre(tx, genreId))?.shape.calendar
 	if (!decl) return OWN_BOOK_CALENDAR
 	try {
 		if (decl.months) return parseStoryCalendar(decl) ?? OWN_BOOK_CALENDAR
@@ -214,11 +221,35 @@ export async function insertOwnBook(
 		rulesetVersion: string | null
 		/** The book's calendar; absent, the session's genre declares it (`shape.calendar`), else core's. */
 		calendar?: StoryCalendar | null
-		/** 🚧 The notes' Timeline switch when they overlay nothing; ignored when `overlayOf` is set. Absent, the column's default. */
+		/** 🚧 The notes' Timeline switch when they overlay nothing; ignored when `overlayOf` is set. Absent, `timelineDefaultFor` the session's genre and preset (a preset is read even if disabled or withdrawn). */
 		timelineEnabled?: boolean
 	}
 ): Promise<OwnBookRow> {
-	const calendar = row.calendar !== undefined ? row.calendar : await genreCalendarOf(tx, row.sessionId)
+	// One read of the session row serves the calendar and the Timeline default.
+	const needsCalendar = row.calendar === undefined
+	const needsTimeline = row.overlayOf == null && row.timelineEnabled === undefined
+	let calendar: StoryCalendar | null = row.calendar ?? null
+	let timelineDefault: boolean | undefined
+	if (needsCalendar || needsTimeline) {
+		const [session] = await tx
+			.select({ genreId: schema.sessions.genreId, presetId: schema.sessions.presetId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, row.sessionId))
+			.limit(1)
+		if (needsCalendar) calendar = session ? await calendarOfGenre(tx, session.genreId) : OWN_BOOK_CALENDAR
+		if (needsTimeline) {
+			let defaults: unknown = null
+			if (session?.presetId != null) {
+				const [preset] = await tx
+					.select({ defaults: schema.sessionPresets.defaults })
+					.from(schema.sessionPresets)
+					.where(eq(schema.sessionPresets.id, session.presetId))
+					.limit(1)
+				defaults = preset?.defaults ?? null
+			}
+			timelineDefault = timelineDefaultFor(session ? getGenre(session.genreId) : null, { defaults })
+		}
+	}
 	await tx
 		.insert(schema.lorebooks)
 		.values({
@@ -239,7 +270,9 @@ export async function insertOwnBook(
 				? { timelineEnabled: await timelineOfBook(tx, row.overlayOf) }
 				: row.timelineEnabled !== undefined
 					? { timelineEnabled: row.timelineEnabled }
-					: {})
+					: timelineDefault !== undefined
+						? { timelineEnabled: timelineDefault }
+						: {})
 		})
 		.onConflictDoNothing()
 	const made = await ownBookOf(tx, row.sessionId)
@@ -353,7 +386,7 @@ export function booksReadBy(attachedId: number | null, ownBookId: number | null)
  * - `book` — the attached lorebook: the session's owner owns it and the
  *   owner's lore write mode is **Full**;
  * - `own-book` — the session's own notes: no book, Review changes, Off, or a
- *   book someone else owns (a shared book is read and copied, never written).
+ *   lorebook the session's owner may not write (someone else's, or a live provided lorebook): it is read and copied, never written.
  *
  * Pure: the caller reads the facts. `reason: "delete"` is the delete
  * safeguard, whose notes go with the session it records — it never routes to
@@ -364,11 +397,17 @@ export type LoreWriteRoute = "book" | "own-book"
 export function loreWriteRoute(facts: {
 	attachedId: number | null
 	bookOwnerId: number | null
+	bookProvided: boolean
 	sessionOwnerId: number
 	mode: LoreWriteMode
 }): LoreWriteRoute {
 	if (facts.attachedId == null) return "own-book"
-	if (facts.bookOwnerId !== facts.sessionOwnerId) return "own-book"
+	// A book with no owner, or one the session's owner may not write, is read and copied.
+	if (
+		facts.bookOwnerId == null ||
+		!canWriteLorebook(facts.sessionOwnerId, { userId: facts.bookOwnerId, provided: facts.bookProvided })
+	)
+		return "own-book"
 	return facts.mode === "full" ? "book" : "own-book"
 }
 
@@ -412,7 +451,7 @@ export async function loreWriteTargetFor(
 		attachedId == null
 			? []
 			: await db
-					.select({ userId: schema.lorebooks.userId })
+					.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 					.from(schema.lorebooks)
 					.where(eq(schema.lorebooks.id, attachedId))
 					.limit(1)
@@ -420,6 +459,7 @@ export async function loreWriteTargetFor(
 	const route = loreWriteRoute({
 		attachedId,
 		bookOwnerId: book?.userId ?? null,
+		bookProvided: !!book?.provided,
 		sessionOwnerId: session.userId,
 		mode
 	})
@@ -494,7 +534,7 @@ export async function loreWriteBookIdOf(db: Db, sessionId: number): Promise<numb
 		attachedId == null
 			? []
 			: await db
-					.select({ userId: schema.lorebooks.userId })
+					.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 					.from(schema.lorebooks)
 					.where(eq(schema.lorebooks.id, attachedId))
 					.limit(1)
@@ -502,6 +542,7 @@ export async function loreWriteBookIdOf(db: Db, sessionId: number): Promise<numb
 	const route = loreWriteRoute({
 		attachedId,
 		bookOwnerId: book?.userId ?? null,
+		bookProvided: !!book?.provided,
 		sessionOwnerId: session.userId,
 		mode
 	})
@@ -528,7 +569,7 @@ export async function keepsValuesInOwnBook(db: Db, sessionId: number): Promise<b
 		attachedId == null
 			? []
 			: await db
-					.select({ userId: schema.lorebooks.userId })
+					.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 					.from(schema.lorebooks)
 					.where(eq(schema.lorebooks.id, attachedId))
 					.limit(1)
@@ -536,6 +577,7 @@ export async function keepsValuesInOwnBook(db: Db, sessionId: number): Promise<b
 		loreWriteRoute({
 			attachedId,
 			bookOwnerId: book?.userId ?? null,
+			bookProvided: !!book?.provided,
 			sessionOwnerId: session.userId,
 			mode: "full"
 		}) === "own-book"
@@ -572,9 +614,10 @@ export async function turnAnchorOf(
 /**
  * Whether `userId` may read and write book `lorebookId` as a session's notes:
  * `undefined` when the book is not anyone's notes (ask the ordinary check),
- * else whether they are one of the session's members — its owner or a guest.
- * Nobody else: no share, no administrator exception — the notes are the
- * session's and nothing else's (ruled 2026-10-16).
+ * else whether they are the session's owner. Nobody else: no share, no
+ * administrator exception, and a guest of the session has no access (owner
+ * ruling G2, 2026-11-16) — the notes are the session owner's and nothing
+ * else's (ruled 2026-10-16).
  */
 export async function ownBookAccessFor(
 	db: Db,
@@ -587,28 +630,16 @@ export async function ownBookAccessFor(
 		.where(eq(schema.lorebooks.id, lorebookId))
 		.limit(1)
 	if (book?.sessionId == null) return undefined
-	return isSessionMember(db, book.sessionId, userId)
+	return isSessionOwner(db, book.sessionId, userId)
 }
 
-async function isSessionMember(db: Db, sessionId: number, userId: number): Promise<boolean> {
+async function isSessionOwner(db: Db, sessionId: number, userId: number): Promise<boolean> {
 	const [session] = await db
 		.select({ userId: schema.sessions.userId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (!session) return false
-	if (session.userId === userId) return true
-	const [guest] = await db
-		.select({ userId: schema.sessionGuests.userId })
-		.from(schema.sessionGuests)
-		.where(
-			and(
-				eq(schema.sessionGuests.sessionId, sessionId),
-				eq(schema.sessionGuests.userId, userId)
-			)
-		)
-		.limit(1)
-	return !!guest
+	return session?.userId === userId
 }
 
 /** One own book: what on it carries no key goes (`purgeLorebook`), then the row and its entries, in one transaction. */
@@ -704,7 +735,9 @@ export async function takeOwnBookEntriesAnchoredTo(
 		.where(
 			and(
 				eq(schema.lorebookEntries.lorebookId, ownBook.id),
-				inArray(schema.lorebookEntries.sourceMessageId, [...messageIds])
+				inArray(schema.lorebookEntries.sourceMessageId, [...messageIds]),
+				// A locked entry stays when its turn is taken back.
+				eq(schema.lorebookEntries.entryLock, false)
 			)
 		)
 		.returning()
@@ -1297,12 +1330,20 @@ export async function surfacedBookRefusal(
 /** A refusal of a notes action, as a sentence a person can read. */
 export class OwnBookRefusal extends Error {}
 
+/** The refusal for a lorebook the person may not write: the provided-lorebook sentence when it is a live provided one, else "only the owner". Reads only on this refusal path. */
+async function notWritableSentence(db: Db, bookId: number, book: { provided: boolean } | undefined): Promise<string> {
+	if (!book?.provided) return APPLY_OVERLAY_REFUSALS.notOwner
+	return (await primerRowEditProblem(db, bookId)) ?? APPLY_OVERLAY_REFUSALS.notOwner
+}
+
 /** The refusals "Apply to the lorebook" gives. */
 export const APPLY_OVERLAY_REFUSALS = Object.freeze({
 	missing: "Session not found.",
 	// Wording (owner 2026-11-05, "There's always a lorebook"): the session's lorebook is its own notes here.
 	noBook: "This session's lorebook is its own notes, so there is no other lorebook to apply them to.",
-	notOwner: "Only the lorebook's owner can apply changes to it."
+	notOwner: "Only the lorebook's owner can apply changes to it.",
+	// 🚧 Provisional wording (★ owner).
+	notSessionOwner: "Only the session's owner can apply its changes or take them back."
 })
 
 /**
@@ -1318,6 +1359,8 @@ interface OverlayEntryItem {
 	title: string
 	/** The message that wrote it. */
 	sourceMessageId: number | null
+	/** Set (true) when the entry is locked against runs: the automatic Apply leaves it. */
+	entryLocked?: true
 }
 
 /** One field a held amendment changes, as the card says it. */
@@ -1346,6 +1389,8 @@ interface OverlayEntryChangeItem {
 	changes: OverlayChange[]
 	/** Why Apply would not take it now; null when clean. */
 	conflict: string | null
+	/** Set (true) when the entry is locked against runs: the automatic Apply leaves it. */
+	entryLocked?: true
 }
 
 /** 🚧 A link between the lorebook's own entries or members that the session drew: it moves to the lorebook on its own. */
@@ -1362,7 +1407,21 @@ interface OverlayLinkItem {
 	sourceMessageId: number | null
 }
 
-export type OverlayItem = OverlayEntryItem | OverlayEntryChangeItem | OverlayLinkItem
+/** 🚧 A knowledge tie play wrote to the notes while the lorebook is not on Full, offered in Apply (ruled D41, 2026-11-16: "Offer it in Apply"). Moves to the lorebook as the same row. */
+interface OverlayKnowledgeTieItem {
+	kind: "knowledge-tie"
+	tieId: number
+	/** The entry the member knows of (the tie's `to` end). */
+	entryId: number
+	/** That entry's type. */
+	typeId: string
+	/** "‹Member› was told about ‹Entry›" or "‹Member› has been to ‹Entry›", as the session reads the names. */
+	title: string
+	/** The made-row imprint's message (the turn that wrote it); null when none. */
+	sourceMessageId: number | null
+}
+
+export type OverlayItem = OverlayEntryItem | OverlayEntryChangeItem | OverlayLinkItem | OverlayKnowledgeTieItem
 
 /** 🚧 Provisional copy: the owner has not seen these sentences. */
 const HELD_CHANGE_CONFLICTS = Object.freeze({
@@ -1394,7 +1453,8 @@ const TAKE_BACK_REFUSALS = Object.freeze({
 	filedUnder: (entry: string) => `An entry in the lorebook is filed under ${entry} now, so this can't be taken back.`,
 	linkGone: (link: string) => `The link ${link} is no longer in the lorebook, so this can't be taken back.`,
 	paragraphBuried: (day: string) =>
-		`Something was written after this session's paragraph on ${day}, so this can't be taken back.`
+		`Something was written after this session's paragraph on ${day}, so this can't be taken back.`,
+	tieGone: (title: string) => `The knowledge tie "${title}" is no longer in the lorebook, so this can't be taken back.`
 })
 
 /** 🚧 Provisional copy: the owner has not seen this sentence. */
@@ -1609,13 +1669,12 @@ async function standaloneLinksOf(
 	return { rows, facts }
 }
 
-/** Each link as a line a person reads: "‹From› ‹wording› ‹To›", the entries as the session reads them (held changes laid on), a member by its name. */
-async function linkTitlesOf(
+/** Names an end as the session reads it: an entry (held changes laid on) or a member by its binding name. */
+async function endNamerOf(
 	db: Db,
 	sessionId: number,
-	links: readonly LinkRow[],
 	facts: LinkEndFacts
-): Promise<Map<number, string>> {
+): Promise<(entryId: number | null, nodeId: number | null) => string> {
 	const { sessionReadingOf } = await import("$lib/server/state/reading")
 	const { entryOverlaysFor, entryAt } = await import("$lib/server/state/entriesOnReading")
 	const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
@@ -1629,13 +1688,64 @@ async function linkTitlesOf(
 		if (!overlays || !reading || row.lorebookId !== reading.lorebookId) return row.title ?? ""
 		return String(entryAt(toEntryRow(row), overlays, reading).name ?? row.title ?? "")
 	}
-	const end = (entryId: number | null, nodeId: number | null) =>
-		entryId != null ? entryName(entryId) : (facts.nodes.get(nodeId!)?.name ?? "")
+	return (entryId, nodeId) => (entryId != null ? entryName(entryId) : (facts.nodes.get(nodeId!)?.name ?? ""))
+}
+
+/** Each link as a line a person reads: "‹From› ‹wording› ‹To›", the entries as the session reads them (held changes laid on), a member by its name. */
+async function linkTitlesOf(
+	db: Db,
+	sessionId: number,
+	links: readonly LinkRow[],
+	facts: LinkEndFacts
+): Promise<Map<number, string>> {
+	const end = await endNamerOf(db, sessionId, facts)
 	return new Map(
 		links.map((l) => [
 			l.id,
 			`${end(l.fromEntryId, l.fromNodeId)} ${l.relationshipType} ${end(l.toEntryId, l.toNodeId)}`
 		])
+	)
+}
+
+/**
+ * 🚧 The notes' knowledge ties that play wrote and the lorebook may take
+ * (ruled D41, 2026-11-16: "Offer it in Apply"): a play kind, active, on no
+ * branch, not a ruleset's row, whose member and entry are both the
+ * lorebook's. A hand tie is never one; a tie on a notes-born entry or from a
+ * notes-only member rides with its own end. Ties whose pair already has an
+ * active hand tie in the lorebook are left out ("A hand tie always wins over
+ * what play wrote", D39): a read writes nothing, Apply drops them. Oldest
+ * first. Use only `t`.
+ */
+async function heldKnowledgeTiesOf(
+	t: Db,
+	ownBookId: number,
+	bookId: number
+): Promise<{ rows: LinkRow[]; facts: LinkEndFacts }> {
+	const { handTieInBook, heldPlayTiesIn } = await import("$lib/server/lorebooks/entryKnowledge")
+	const ours = await heldPlayTiesIn(t, { notesId: ownBookId, lorebookId: bookId })
+	const facts = await linkEndFactsOf(t, ours)
+	const rows: LinkRow[] = []
+	for (const l of ours)
+		if ((await handTieInBook(t, { lorebookId: bookId, castMemberId: l.fromNodeId!, entryId: l.toEntryId! })) == null)
+			rows.push(l)
+	return { rows, facts }
+}
+
+/** 🚧 Provisional copy: the owner has not seen these sentences. */
+const knowledgeTieSentence = (kind: string | null, member: string, entry: string): string =>
+	kind === "has_been_there" ? `${member} has been to ${entry}` : `${member} was told about ${entry}`
+
+/** Each held tie as the line a person reads. */
+async function tieTitlesOf(
+	db: Db,
+	sessionId: number,
+	ties: readonly LinkRow[],
+	facts: LinkEndFacts
+): Promise<Map<number, string>> {
+	const end = await endNamerOf(db, sessionId, facts)
+	return new Map(
+		ties.map((l) => [l.id, knowledgeTieSentence(l.knowledgeKind, end(null, l.fromNodeId), end(l.toEntryId, null))])
 	)
 }
 
@@ -1671,7 +1781,8 @@ async function madeLinkMessagesOf(
  * a history day of a date the lorebook holds on the session's line
  * (`lorebookDayOfDate`) is 🚧 listed as the change it is: a paragraph on the
  * lorebook's day (`notesEntryId`) — then 🚧 each link of the notes that is the
- * lorebook's alone, oldest first, then each held change to an entry of that
+ * lorebook's alone, oldest first, then 🚧 each knowledge tie play wrote to the
+ * notes (`heldKnowledgeTiesOf`), oldest first, then each held change to an entry of that
  * lorebook, oldest anchor first, with the conflict check's answer.
  */
 export async function overlayItemsOf(db: Db, sessionId: number): Promise<OverlayItem[]> {
@@ -1701,7 +1812,8 @@ export async function overlayItemsOf(db: Db, sessionId: number): Promise<Overlay
 				title: e.title,
 				content: e.content,
 				fields: e.fields,
-				sourceMessageId: e.sourceMessageId
+				sourceMessageId: e.sourceMessageId,
+				entryLock: e.entryLock
 			})
 			.from(e)
 			.where(and(eq(e.lorebookId, ownBook.id), isNull(e.branchId)))
@@ -1740,7 +1852,8 @@ export async function overlayItemsOf(db: Db, sessionId: number): Promise<Overlay
 					entryId: r.id,
 					typeId: r.typeId,
 					title: r.title ?? "",
-					sourceMessageId: r.sourceMessageId ?? null
+					sourceMessageId: r.sourceMessageId ?? null,
+					...(entryLockedAgainstRuns(r) ? { entryLocked: true as const } : {})
 				})
 				continue
 			}
@@ -1756,7 +1869,8 @@ export async function overlayItemsOf(db: Db, sessionId: number): Promise<Overlay
 				changes: [
 					{ field: "content", label: contentLabel, before, after: joinParagraph(before, r.content ?? "") }
 				],
-				conflict: null
+				conflict: null,
+				...(entryLockedAgainstRuns(day) || entryLockedAgainstRuns(r) ? { entryLocked: true as const } : {})
 			})
 		}
 		const alone = await standaloneLinksOf(db, ownBook.id, session.lorebookId)
@@ -1768,6 +1882,23 @@ export async function overlayItemsOf(db: Db, sessionId: number): Promise<Overlay
 				items.push({
 					kind: "link",
 					linkId: l.id,
+					entryId: entry.id,
+					typeId: entry.typeId,
+					title: titles.get(l.id) ?? "",
+					sourceMessageId: made.get(l.id) ?? null
+				})
+			}
+		}
+		// 🚧 Then each knowledge tie play wrote to the notes (D41), oldest first.
+		const ties = await heldKnowledgeTiesOf(db, ownBook.id, session.lorebookId)
+		if (ties.rows.length) {
+			const titles = await tieTitlesOf(db, sessionId, ties.rows, ties.facts)
+			const made = await madeLinkMessagesOf(db, ownBook.id, ties.rows.map((l) => l.id))
+			for (const l of ties.rows) {
+				const entry = ties.facts.entries.get(l.toEntryId!)!
+				items.push({
+					kind: "knowledge-tie",
+					tieId: l.id,
 					entryId: entry.id,
 					typeId: entry.typeId,
 					title: titles.get(l.id) ?? "",
@@ -1817,7 +1948,8 @@ export async function overlayItemsOf(db: Db, sessionId: number): Promise<Overlay
 			title: String(read.name ?? entry.title ?? ""),
 			sourceMessageId: amendment.sourceMessageId ?? null,
 			changes,
-			conflict: verdict.conflict
+			conflict: verdict.conflict,
+			...(entryLockedAgainstRuns(entry) ? { entryLocked: true as const } : {})
 		})
 	}
 	return items
@@ -1890,6 +2022,12 @@ export interface ApplyOverlayResult {
 	dropped: number[]
 	/** 🚧 Links of the notes that were the lorebook's alone, moved (links that rode with entries are not here). */
 	appliedLinks: number[]
+	/** 🚧 Knowledge ties play wrote to the notes, moved to the lorebook (the same row ids). */
+	appliedTies: number[]
+	/** 🚧 Knowledge ties the lorebook already had live (same member, entry, kind, line and day): the notes' copy deleted instead of moved. */
+	droppedTies: number[]
+	/** 🚧 Knowledge ties deleted because the lorebook holds a hand tie for the pair ("A hand tie always wins over what play wrote"), selected or not. */
+	supersededTies: number[]
 	/** 🚧 Own-book history days merged into the lorebook's day of the same date (the own day's id). */
 	mergedDays: number[]
 	/** 🚧 Own-book links the lorebook already said, deleted instead of moved. */
@@ -1935,7 +2073,7 @@ export interface ApplyOverlayResult {
  *
  * Selection: `entryIds` and `amendmentIds` both absent applies every item;
  * `entryIds` only, those new entries only; `amendmentIds` only, those held
- * changes only; both, both. The attached book's owner only: applying is a write.
+ * changes only; both, both. The session's owner, when `canWriteLorebook` lets them write the attached lorebook: applying is a write.
  */
 export async function applyOverlayItems(
 	db: Db,
@@ -1946,12 +2084,15 @@ export async function applyOverlayItems(
 		amendmentIds?: readonly number[] | null
 		/** 🚧 Standalone links to move (`OverlayLinkItem.linkId`). With `entryIds` (new entries and held paragraphs, by the own day's id) and `amendmentIds`: any given selects only those. */
 		linkIds?: readonly number[] | null
+		/** 🚧 Knowledge ties to move (`OverlayKnowledgeTieItem.tieId`); like `linkIds`, any list given selects only what it names. */
+		tieIds?: readonly number[] | null
 		/** Set by `applyHeldAutomatically` only: the records name this cause instead of the person. */
 		automatic?: { automatic: AutomaticApplyCause; sceneId?: number }
 	}
 ): Promise<ApplyOverlayResult> {
 	const [session] = await db
 		.select({
+			userId: schema.sessions.userId,
 			lorebookId: schema.sessions.lorebookId,
 			primaryRuleset: schema.sessions.primaryRuleset,
 			rulesetVersion: schema.sessions.rulesetVersion
@@ -1963,12 +2104,13 @@ export async function applyOverlayItems(
 	const bookId = session.lorebookId
 	if (bookId == null) throw new OwnBookRefusal(APPLY_OVERLAY_REFUSALS.noBook)
 	const [book] = await db
-		.select({ userId: schema.lorebooks.userId })
+		.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, bookId))
 		.limit(1)
-	if (!book || book.userId !== input.userId)
-		throw new OwnBookRefusal(APPLY_OVERLAY_REFUSALS.notOwner)
+	if (!book || !canWriteLorebook(input.userId, book))
+		throw new OwnBookRefusal(await notWritableSentence(db, bookId, book))
+	if (session.userId !== input.userId) throw new OwnBookRefusal(APPLY_OVERLAY_REFUSALS.notSessionOwner)
 	const who: ApplyWho = input.automatic
 		? {
 				automatic: input.automatic.automatic,
@@ -1976,10 +2118,11 @@ export async function applyOverlayItems(
 			}
 		: { by: { userId: input.userId } }
 	const items = await overlayItemsOf(db, input.sessionId)
-	const everything = !input.entryIds && !input.amendmentIds && !input.linkIds
+	const everything = !input.entryIds && !input.amendmentIds && !input.linkIds && !input.tieIds
 	const wantedEntries = input.entryIds ? new Set(input.entryIds) : null
 	const wantedChanges = input.amendmentIds ? new Set(input.amendmentIds) : null
 	const wantedLinks = input.linkIds ? new Set(input.linkIds) : null
+	const wantedTies = input.tieIds ? new Set(input.tieIds) : null
 	const chosen = items.filter(
 		(i): i is OverlayEntryItem => i.kind === "entry" && (everything || !!wantedEntries?.has(i.entryId))
 	)
@@ -1997,6 +2140,11 @@ export async function applyOverlayItems(
 	const chosenLinkIds = new Set(
 		items.filter((i): i is OverlayLinkItem => i.kind === "link" && (everything || !!wantedLinks?.has(i.linkId))).map((i) => i.linkId)
 	)
+	const chosenTieIds = new Set(
+		items
+			.filter((i): i is OverlayKnowledgeTieItem => i.kind === "knowledge-tie" && (everything || !!wantedTies?.has(i.tieId)))
+			.map((i) => i.tieId)
+	)
 	const ownBook = (await ownBookOf(db, input.sessionId)) ?? (await ownBookFor(db, input.sessionId))
 	const { sessionReadingOf } = await import("$lib/server/state/reading")
 	let reading = (await sessionReadingOf(db, input.sessionId))!
@@ -2012,6 +2160,9 @@ export async function applyOverlayItems(
 	const appliedLinks: number[] = []
 	const mergedDays: number[] = []
 	const droppedLinks: number[] = []
+	const appliedTies: number[] = []
+	const droppedTies: number[] = []
+	const supersededTies: number[] = []
 	const heldDays: ApplyOverlayResult["heldDays"] = []
 	let settled: ApplyOverlayResult["settled"] = null
 	const batch = randomUUID()
@@ -2042,7 +2193,12 @@ export async function applyOverlayItems(
 			await tx.delete(a).where(eq(a.id, amendment.id))
 			dropped.push(amendment.id)
 		}
-		if (!chosen.length && !chosenParagraphs.length && !chosenChanges.length && !chosenLinkIds.size) return
+		// "A hand tie always wins over what play wrote" (D39): a held play tie the lorebook's hand tie outranks is deleted, selected or not.
+		if (ownBook.overlayOf != null) {
+			const { dropSupersededKnowledgeTies } = await import("$lib/server/lorebooks/entryKnowledge")
+			supersededTies.push(...(await dropSupersededKnowledgeTies(t, { userId: input.userId, notesId: ownBook.id, lorebookId: bookId })))
+		}
+		if (!chosen.length && !chosenParagraphs.length && !chosenChanges.length && !chosenLinkIds.size && !chosenTieIds.size) return
 		// 🚧 Something is applied, so a session still riding its parent's line forks its own now, and
 		// everything below is written and judged on it, never on the parent's.
 		await ensureSessionLine(t, input.sessionId)
@@ -2325,6 +2481,18 @@ export async function applyOverlayItems(
 				endIsBooks(facts, bookId, l.fromEntryId, l.fromNodeId) &&
 				endIsBooks(facts, bookId, l.toEntryId, l.toNodeId)
 		)
+		// 🚧 A row dated by a day that stays in the notes is dated by the lorebook's day of that date, or by none.
+		const dayInLorebook = async (historyEntryId: number | null): Promise<number | null> => {
+			if (historyEntryId == null) return null
+			const [named] = await tx
+				.select({ lorebookId: e.lorebookId, fields: e.fields })
+				.from(e)
+				.where(eq(e.id, historyEntryId))
+				.limit(1)
+			if (named?.lorebookId !== ownBook.id) return historyEntryId
+			const date = historyEntryDate(named.fields)
+			return date ? ((await lorebookDayOfDate(t, { lorebookId: bookId, branchId, date }))?.historyEntryId ?? null) : null
+		}
 		const moving = [...riding.map((l) => ({ l, standalone: false })), ...alone.map((l) => ({ l, standalone: true }))].sort(
 			(x, y) => x.l.id - y.l.id
 		)
@@ -2333,19 +2501,7 @@ export async function applyOverlayItems(
 			const titles = await linkTitlesOf(t, input.sessionId, alone, facts)
 			const made = await madeLinkMessagesOf(t, ownBook.id, alone.map((l) => l.id))
 			for (const { l, standalone } of moving) {
-				// 🚧 A link dated by a day that stays in the notes is dated by the lorebook's day of that date, or by none.
-				let day = l.historyEntryId
-				if (day != null) {
-					const [named] = await tx
-						.select({ lorebookId: e.lorebookId, fields: e.fields })
-						.from(e)
-						.where(eq(e.id, day))
-						.limit(1)
-					if (named?.lorebookId === ownBook.id) {
-						const date = historyEntryDate(named.fields)
-						day = date ? ((await lorebookDayOfDate(t, { lorebookId: bookId, branchId, date }))?.historyEntryId ?? null) : null
-					}
-				}
+				const day = await dayInLorebook(l.historyEntryId)
 				// 🚧 What the lorebook already says is not said twice: the notes' copy goes.
 				const twin = await findLinkedThatWay(
 					t,
@@ -2380,6 +2536,44 @@ export async function applyOverlayItems(
 				})
 				if (standalone) {
 					appliedLinks.push(l.id)
+					if (messageId != null) appliedAnchors.push(messageId)
+				}
+			}
+		}
+		// 🚧 Each chosen knowledge tie play wrote (D41: "Offer it in Apply"): the same row, on the session's line, dated as a link is.
+		if (chosenTieIds.size) {
+			const { moveKnowledgeTieToBook } = await import("$lib/server/lorebooks/entryKnowledge")
+			const tieRows = await heldKnowledgeTiesOf(t, ownBook.id, bookId)
+			const tieTitles = await tieTitlesOf(t, input.sessionId, tieRows.rows, tieRows.facts)
+			const tieMade = await madeLinkMessagesOf(t, ownBook.id, tieRows.rows.map((x) => x.id))
+			for (const tieId of [...chosenTieIds].sort((x, y) => x - y)) {
+				const row = tieRows.rows.find((x) => x.id === tieId)
+				if (!row) continue
+				const outcome = await moveKnowledgeTieToBook(t, {
+					userId: input.userId,
+					tieId,
+					lorebookId: bookId,
+					branchId,
+					historyEntryId: await dayInLorebook(row.historyEntryId)
+				})
+				if (outcome === "twin") droppedTies.push(tieId)
+				else if (outcome === "superseded") supersededTies.push(tieId)
+				else if (outcome === "moved") {
+					const messageId = tieMade.get(tieId) ?? null
+					await fileImprint({
+						messageId,
+						subjectKind: "relationship",
+						subjectId: tieId,
+						cause: {
+							...who,
+							sessionId: input.sessionId,
+							knowledgeTie: true,
+							title: tieTitles.get(tieId) ?? "",
+							messageId,
+							moved: { lorebookId: ownBook.id, branchId: row.branchId, historyEntryId: row.historyEntryId }
+						}
+					})
+					appliedTies.push(tieId)
 					if (messageId != null) appliedAnchors.push(messageId)
 				}
 			}
@@ -2470,16 +2664,22 @@ export async function applyOverlayItems(
 		const stillHeldAnchors: number[] = []
 		if (ownBook.overlayOf != null)
 			for (const row of await tx
-				.select({ at: e.sourceMessageId })
+				.select({ at: e.sourceMessageId, entryLock: e.entryLock })
 				.from(e)
 				.where(and(eq(e.lorebookId, ownBook.id), isNull(e.branchId))))
-				if (row.at != null) stillHeldAnchors.push(row.at)
+				// A locked entry waits for a person and does not hold the settle line back.
+				if (row.at != null && !entryLockedAgainstRuns(row)) stillHeldAnchors.push(row.at)
 		if (ownBook.overlayOf != null) {
 			const left = await standaloneLinksOf(t, ownBook.id, bookId)
 			for (const m of (await madeLinkMessagesOf(t, ownBook.id, left.rows.map((l) => l.id))).values())
 				if (m != null) stillHeldAnchors.push(m)
+			const leftTies = await heldKnowledgeTiesOf(t, ownBook.id, bookId)
+			for (const m of (await madeLinkMessagesOf(t, ownBook.id, leftTies.rows.map((l) => l.id))).values())
+				if (m != null) stillHeldAnchors.push(m)
 		}
-		for (const { amendment } of await heldNow()) if (amendment.sourceMessageId != null) stillHeldAnchors.push(amendment.sourceMessageId)
+		for (const { amendment, entry } of await heldNow())
+			if (amendment.sourceMessageId != null && !entryLockedAgainstRuns(entry))
+				stillHeldAnchors.push(amendment.sourceMessageId)
 		const through = stillHeldAnchors.length ? Math.min(newest, Math.min(...stillHeldAnchors) - 1) : newest
 		const { settleThrough } = await import("$lib/server/sessions/settle")
 		settled = await settleThrough(t, input.sessionId, through, { userId: input.userId })
@@ -2489,9 +2689,15 @@ export async function applyOverlayItems(
 		applied,
 		appliedChanges,
 		stillHeld,
-		batch: applied.length || appliedChanges.length || appliedLinks.length || mergedDays.length ? batch : null,
+		batch:
+			applied.length || appliedChanges.length || appliedLinks.length || appliedTies.length || mergedDays.length
+				? batch
+				: null,
 		dropped,
 		appliedLinks,
+		appliedTies,
+		droppedTies,
+		supersededTies,
 		mergedDays,
 		droppedLinks,
 		heldDays,
@@ -2501,7 +2707,7 @@ export async function applyOverlayItems(
 
 /**
  * 🚧 **Take back an Apply**: the one server function that undoes an Apply
- * (a press or an automatic one). The attached lorebook's owner only; with
+ * (a press or an automatic one). The session's owner, when `canWriteLorebook` lets them write the attached lorebook; with
  * `sessionId`, only that session's batch. Reads the batch's `apply` records,
  * **all or nothing**: it checks everything first, writes nothing until every
  * check passed, and refuses, in a sentence, when something stands on any of
@@ -2531,11 +2737,19 @@ export async function takeBackApply(
 	const bookId = records[0]!.lorebookId
 	const sessionId = records[0]!.sessionId
 	const [book] = await db
-		.select({ userId: schema.lorebooks.userId })
+		.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, bookId))
 		.limit(1)
-	if (!book || book.userId !== input.userId) throw new OwnBookRefusal(APPLY_OVERLAY_REFUSALS.notOwner)
+	if (!book || !canWriteLorebook(input.userId, book))
+		throw new OwnBookRefusal(await notWritableSentence(db, bookId, book))
+	const [batchSession] = await db
+		.select({ userId: schema.sessions.userId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!batchSession || batchSession.userId !== input.userId)
+		throw new OwnBookRefusal(APPLY_OVERLAY_REFUSALS.notSessionOwner)
 	const ownBook = await ownBookFor(db, sessionId)
 	const { sameValue, unwrap } = await import("$lib/server/lorebooks/imprints")
 	const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
@@ -2558,6 +2772,7 @@ export async function takeBackApply(
 			dated?: boolean
 			moved?: Moved
 			standalone?: true
+			knowledgeTie?: true
 			title?: string
 			merged?: Merged
 		}
@@ -2752,6 +2967,17 @@ export async function takeBackApply(
 				.limit(1)
 			if (!still) throw new OwnBookRefusal(TAKE_BACK_REFUSALS.linkGone(cause.title ?? "link"))
 		}
+		// 🚧 A knowledge tie must still be in the lorebook; the move back is the one below.
+		for (const tie of linkMoves) {
+			const cause = causeOf(tie)
+			if (!cause.knowledgeTie) continue
+			const [still] = await tx
+				.select({ id: r.id })
+				.from(r)
+				.where(and(eq(r.id, tie.subjectId), eq(r.lorebookId, bookId)))
+				.limit(1)
+			if (!still) throw new OwnBookRefusal(TAKE_BACK_REFUSALS.tieGone(cause.title ?? "tie"))
+		}
 		// 🚧 A merged day: the lorebook's day must still end with the paragraph this session appended.
 		const mergePlan: { record: (typeof records)[number]; merged: Merged; lore: EntryRow; content: string }[] = []
 		for (const record of mergeRecords) {
@@ -2930,11 +3156,11 @@ export async function applyHeldAutomatically(
 		const ownBook = await ownBookOf(db, input.sessionId)
 		if (!ownBook || ownBook.overlayOf == null) return null
 		const [book] = await db
-			.select({ userId: schema.lorebooks.userId })
+			.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 			.from(schema.lorebooks)
 			.where(eq(schema.lorebooks.id, session.lorebookId))
 			.limit(1)
-		if (!book || book.userId !== session.userId) return null
+		if (!book || !canWriteLorebook(session.userId, book)) return null
 		const { bookLoreWriteMode } = await import("$lib/server/state/loreWriteMode")
 		if ((await bookLoreWriteMode(db, session.lorebookId)) !== "full") return null
 		// An Apply discards the Forward stack for good. Nothing automatic does that
@@ -3013,16 +3239,24 @@ export async function applyHeldAutomatically(
 		const within = (anchor: number | null) =>
 			inRange(anchor) && (copied == null || (anchor != null && !copied.has(anchor)))
 		const items = await overlayItemsOf(db, input.sessionId)
-		const entryIds = items.filter((i) => i.kind === "entry" && within(i.sourceMessageId)).map((i) => (i as OverlayEntryItem).entryId)
+		// A locked entry's items are left to a person: not applied here, and not in the settle minimum below.
+		const entryIds = items
+			.filter((i) => i.kind === "entry" && !i.entryLocked && within(i.sourceMessageId))
+			.map((i) => (i as OverlayEntryItem).entryId)
 		// 🚧 A held paragraph is offered by its own-book day, a standalone link by its id: the same range rule.
 		for (const i of items)
-			if (i.kind === "entry-change" && i.notesEntryId != null && within(i.sourceMessageId)) entryIds.push(i.notesEntryId)
+			if (i.kind === "entry-change" && i.notesEntryId != null && !i.entryLocked && within(i.sourceMessageId))
+				entryIds.push(i.notesEntryId)
 		const linkIds = items.filter((i): i is OverlayLinkItem => i.kind === "link" && within(i.sourceMessageId)).map((i) => i.linkId)
+		// 🚧 A knowledge tie play wrote (D41) rides the same range rule; branches are not filtered, as links are not.
+		const tieIds = items
+			.filter((i): i is OverlayKnowledgeTieItem => i.kind === "knowledge-tie" && within(i.sourceMessageId))
+			.map((i) => i.tieId)
 		// Every held change in range is offered, conflicted or not: Apply re-checks each in anchor order after
 		// the folds before it, so one that waits on an earlier change of this session folds with it, and a
 		// real conflict stays held with its reason (additive or clean, decided at accept time).
 		let amendmentIds = items
-			.filter((i): i is OverlayEntryChangeItem => i.kind === "entry-change" && i.amendmentId != null && within(i.sourceMessageId))
+			.filter((i): i is OverlayEntryChangeItem => i.kind === "entry-change" && i.amendmentId != null && !i.entryLocked && within(i.sourceMessageId))
 			.map((i) => i.amendmentId!)
 		if (isBranch && amendmentIds.length) {
 			const dated = new Set(
@@ -3036,7 +3270,7 @@ export async function applyHeldAutomatically(
 			amendmentIds = amendmentIds.filter((id) => dated.has(id))
 		}
 		const done =
-			!entryIds.length && !amendmentIds.length && !linkIds.length
+			!entryIds.length && !amendmentIds.length && !linkIds.length && !tieIds.length
 				? null
 				: await applyOverlayItems(db, {
 						sessionId: input.sessionId,
@@ -3044,6 +3278,7 @@ export async function applyHeldAutomatically(
 						entryIds,
 						amendmentIds,
 						linkIds,
+						tieIds,
 						automatic: { automatic: input.automatic, ...(input.sceneId != null ? { sceneId: input.sceneId } : {}) }
 					})
 
@@ -3052,6 +3287,7 @@ export async function applyHeldAutomatically(
 		const route = loreWriteRoute({
 			attachedId: session.lorebookId,
 			bookOwnerId: book.userId,
+			bookProvided: !!book.provided,
 			sessionOwnerId: session.userId,
 			mode: await sessionLoreWriteMode(db, input.sessionId)
 		})
@@ -3070,6 +3306,7 @@ export async function applyHeldAutomatically(
 		if (settleTo != null && waitingStart != null) settleTo = Math.min(settleTo, waitingStart - 1)
 		if (settleTo != null) {
 			const stillWaiting = (await overlayItemsOf(db, input.sessionId))
+				.filter((i) => !(i.kind === "entry" || i.kind === "entry-change") || !i.entryLocked)
 				.map((i) => i.sourceMessageId)
 				.filter((n): n is number => n != null)
 			if (stillWaiting.length) settleTo = Math.min(settleTo, Math.min(...stillWaiting) - 1)
@@ -3104,6 +3341,9 @@ export async function applyHeldAutomatically(
 			batch: null,
 			dropped: [],
 			appliedLinks: [],
+			appliedTies: [],
+			droppedTies: [],
+			supersededTies: [],
 			mergedDays: [],
 			droppedLinks: [],
 			heldDays: [],
@@ -3117,8 +3357,8 @@ export async function applyHeldAutomatically(
 }
 
 /**
- * What the lorebook's owner may do here: `mayApply` — the reader owns the
- * session's lorebook (Apply and Take back are theirs); `appliesItself` — the
+ * What the reader may do here: `mayApply` — the reader is the session's owner
+ * and may write its lorebook (Apply and Take back are theirs); `appliesItself` — the
  * lorebook takes this session's changes by itself (the session's owner owns
  * it, branch or not, and the write setting in force for the lorebook is
  * Full). Both false when the session reads no lorebook.
@@ -3139,16 +3379,16 @@ export async function overlayAccessOf(
 		.limit(1)
 	if (!session || session.lorebookId == null) return none
 	const [book] = await db
-		.select({ userId: schema.lorebooks.userId })
+		.select({ userId: schema.lorebooks.userId, provided: liveProvidedBookSql() })
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, session.lorebookId))
 		.limit(1)
 	if (!book) return none
 	const { bookLoreWriteMode } = await import("$lib/server/state/loreWriteMode")
 	return {
-		mayApply: book.userId === userId,
+		mayApply: session.userId === userId && canWriteLorebook(userId, book),
 		appliesItself:
-			book.userId === session.userId &&
+			canWriteLorebook(session.userId, book) &&
 			(await bookLoreWriteMode(db, session.lorebookId)) === "full"
 	}
 }
@@ -3157,7 +3397,8 @@ export async function overlayAccessOf(
  * What was applied from a session, one batch per Apply, newest first: who
  * pressed (a person's shown name) or why it applied by itself, the scene when
  * the cause names one, and each moved entry and folded change as the lorebook
- * holds it now. Links ride with their entries and are not items.
+ * holds it now. Links ride with their entries and are not items; 🚧 a
+ * knowledge tie that moved in on its own (`cause.knowledgeTie`) is one.
  */
 export async function appliedBatchesOf(db: Db, sessionId: number): Promise<Sockets.Sessions.AppliedBatches.Batch[]> {
 	const I = schema.loreImprints
@@ -3183,6 +3424,7 @@ export async function appliedBatchesOf(db: Db, sessionId: number): Promise<Socke
 		amendmentId?: number
 		key?: string
 		standalone?: true
+		knowledgeTie?: true
 		title?: string
 	}
 	const userIds = [
@@ -3229,6 +3471,25 @@ export async function appliedBatchesOf(db: Db, sessionId: number): Promise<Socke
 				entryId,
 				title: linkTitles.get(x.subjectId) ?? (x.cause as Cause).title ?? ""
 			} as unknown as Sockets.Sessions.AppliedBatches.Item)
+		}
+		// 🚧 A knowledge tie moved in is an item of its own, the sentence as the list worded it.
+		const tieRecords = rows.filter((x) => x.subjectKind === "relationship" && x.field == null && (x.cause as Cause).knowledgeTie)
+		const tieRows = tieRecords.length
+			? await db
+					.select()
+					.from(schema.narrativeRelationships)
+					.where(inArray(schema.narrativeRelationships.id, tieRecords.map((x) => x.subjectId)))
+			: []
+		const tieFacts = tieRows.length ? await linkEndFactsOf(db, tieRows) : null
+		const tieTitles = tieFacts ? await tieTitlesOf(db, sessionId, tieRows, tieFacts) : new Map<number, string>()
+		for (const x of tieRecords) {
+			const tie = tieRows.find((l) => l.id === x.subjectId)
+			items.push({
+				kind: "knowledge-tie",
+				tieId: x.subjectId,
+				entryId: tie?.toEntryId ?? 0,
+				title: tieTitles.get(x.subjectId) ?? (x.cause as Cause).title ?? ""
+			})
 		}
 		for (const group of changes.values()) {
 			const entry = entries.get(group[0]!.subjectId)

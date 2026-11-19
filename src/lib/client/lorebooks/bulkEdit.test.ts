@@ -7,6 +7,7 @@ import {
 	bulkDeleteCopy,
 	bulkMoveCount,
 	bulkMoveProblem,
+	bulkNotCommonCopy,
 	bulkReport,
 	filedUnderCount,
 	planBulk,
@@ -101,19 +102,80 @@ describe("planBulk", () => {
 	})
 })
 
+describe("planBulk, knowledge", () => {
+	test("notCommon leaves out the marked; common leaves out the unmarked, silently", () => {
+		const rows = [row(1, { notCommon: true }), row(2)]
+		const a = planBulk("notCommon", rows, { lineName })
+		expect(a.send.map((r) => r.id)).toEqual([2])
+		expect(a.skip).toEqual([])
+		const b = planBulk("common", rows, { lineName })
+		expect(b.send.map((r) => r.id)).toEqual([1])
+		expect(b.skip).toEqual([])
+	})
+	test("a could-exist-here row is skipped with its sentence; a History entry is sent", () => {
+		const far = row(1, { listed: false, branchId: 4 })
+		expect(planBulk("notCommon", [far], { lineName }).skip[0].reason).toBe(
+			"On line 4: only Move down the tree… reaches it from here."
+		)
+		const h = row(2, { typeId: HISTORY_TYPE_ID })
+		expect(planBulk("notCommon", [h], { lineName }).send).toEqual([h])
+	})
+})
+
+describe("toggleActions, knowledge", () => {
+	test("common only when every listed selected row is marked", () => {
+		expect(toggleActions([]).knowledge).toBe("notCommon")
+		expect(
+			toggleActions([
+				row(1, { notCommon: true }),
+				row(2, { notCommon: true })
+			]).knowledge
+		).toBe("common")
+		expect(
+			toggleActions([row(1, { notCommon: true }), row(2)]).knowledge
+		).toBe("notCommon")
+		expect(
+			toggleActions([
+				row(1, { notCommon: true }),
+				row(2, { listed: false })
+			]).knowledge
+		).toBe("common")
+	})
+	test("labels", () => {
+		expect(BULK_LABELS.notCommon).toBe("Mark not common knowledge…")
+		expect(BULK_LABELS.common).toBe("Mark common knowledge")
+	})
+})
+
+describe("bulkNotCommonCopy", () => {
+	test("one and many", () => {
+		expect(bulkNotCommonCopy(1)).toEqual({
+			title: "Mark 1 entry not common knowledge?",
+			message:
+				"Only the cast members tied to it will read it when they speak; every other cast member stops reading it."
+		})
+		expect(bulkNotCommonCopy(3)).toEqual({
+			title: "Mark 3 entries not common knowledge?",
+			message:
+				"Only the cast members tied to them will read them when they speak; every other cast member stops reading them."
+		})
+	})
+})
+
 describe("toggleActions", () => {
 	test("both ways, none selected = first word", () => {
 		expect(toggleActions([])).toEqual({
 			pin: "pin",
 			off: "off",
-			archive: "archive"
+			archive: "archive",
+			knowledge: "notCommon"
 		})
 		expect(
 			toggleActions([
 				row(1, { pinned: true, off: true, archived: true }),
 				row(2, { pinned: true, off: true, archived: true })
 			])
-		).toEqual({ pin: "unpin", off: "on", archive: "unarchive" })
+		).toMatchObject({ pin: "unpin", off: "on", archive: "unarchive" })
 		expect(toggleActions([row(1, { pinned: true }), row(2)]).pin).toBe(
 			"pin"
 		)

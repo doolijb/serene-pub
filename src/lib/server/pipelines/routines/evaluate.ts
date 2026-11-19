@@ -22,6 +22,9 @@
  *    routine's own write caused wakes other routines one level deep only —
  *    the reckoning moving the clock wakes a Timeline Cron, whose own writes
  *    wake nothing.
+ *  · A routine's `when` (R31) is asked once its cadence is due; when it
+ *    does not hold the routine does not fire, keeps its cadence state and
+ *    leaves an inspector line.
  *  · A Timeline Cron or story-clock Schedule skipped because the clock
  *    jumped past its ceiling leaves an inspector line (R19).
  */
@@ -224,6 +227,7 @@ export async function evaluateMoments(
 		if (!routines.length) return queued
 		const { routineQueue, routineLine } = await import("$lib/server/pipelines/routines/run")
 		let sessionFacts: Readonly<Record<string, unknown>> | undefined
+		let values: unknown
 		for (const { moment, event, payload } of moments) {
 			for (const r of routines) {
 				const ref = r.trigger.cadence
@@ -248,13 +252,31 @@ export async function evaluateMoments(
 								`cadence:${sessionId}:${r.key}`,
 								(sessionFacts ??= await sessionTurnFacts(db, sessionId))
 							)
+				// A routine's `when` (R31) is asked as the event path asks it, over the
+				// session's published values, once a cadence says it is due. A
+				// routine whose `when` fails fires nothing and keeps the cadence
+				// state it had: it is due again at the next moment it wakes on.
+				if (verdict.due && r.when) {
+					const { whenHolds } = await import("$lib/server/pipelines/registrations/resolve")
+					const { publishedValues } = await import("$lib/server/pipelines/entities/publishedValues")
+					const held = await whenHolds(db, sessionId, [r], (values ??= await publishedValues(db, sessionId)))
+					if (!held.run.length) {
+						await routineLine(db, {
+							firing: { sessionId, registrationKey: r.key, pipeline: r.pipeline },
+							reason: "Skipped: its `when` condition does not hold now",
+							kind: "skipped"
+						})
+						continue
+					}
+				}
 				if (!same(verdict.state, state)) await saveCadenceState(db, sessionId, r.key, verdict.state)
 				if (!verdict.due) {
 					if (verdict.reason?.startsWith("Skipped:") && moment.kind === "story-clock-moved")
 						await routineLine(db, {
 							firing: { sessionId, registrationKey: r.key, pipeline: r.pipeline },
 							reason: `${verdict.reason}${jumpWords(moment.from, moment.to)}`,
-							kind: "skipped"
+							kind: "skipped",
+							forPeople: true
 						})
 					continue
 				}

@@ -416,3 +416,34 @@ describe("the Update offer on the member page", () => {
 		expect(document.querySelector("[data-card-update-offer]")).toBeNull()
 	})
 })
+
+describe("Edit history requests", () => {
+	const server = {
+		id: BIANCA,
+		binding: "{{char:1}}",
+		lorebookId: BOOK,
+		castVersionId: 33,
+		name: "Bianca",
+		characterId: null,
+		summary: "Words.",
+		description: "Own description.",
+		retold: {},
+		baseColumns: columns({ summary: "Words." }),
+		cardVersion: null,
+		cardCurrentVersion: null,
+		behindCard: false
+	}
+	const changes = [change(33, 10, columns({ summary: "Words." }))]
+	const asked = () =>
+		client.emits.filter((e) => e.event === "characterVersions:redlines").length
+
+	test("a member's version in a book the reader can write asks for its history", async () => {
+		await mountMember(server, changes, undefined, { bookAccess: "owner" })
+		expect(asked()).toBeGreaterThan(0)
+	})
+
+	test("a member's version in a read-only book asks for none", async () => {
+		await mountMember(server, changes, undefined, { bookAccess: "shared" })
+		expect(asked()).toBe(0)
+	})
+})

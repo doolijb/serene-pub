@@ -124,7 +124,10 @@
 	])
 
 	let lineValue = $derived(branchId == null ? "main" : String(branchId))
-	let clockMode = $derived(clock ? "own" : "follow")
+	// 🚧 An own clock chosen with nothing to start it from: the inputs show empty
+	// (never Year 1) until a year is typed and the clock holds a date.
+	let ownPending = $state(false)
+	let clockMode = $derived(clock || ownPending ? "own" : "follow")
 	/** The present of the line being read: where a session with no clock stands. */
 	let followed = $derived.by<StoryClock | null>(() => {
 		if (!presents) return null
@@ -168,13 +171,19 @@
 	}
 
 	function setClockMode(value: string) {
-		if (value === "follow") clock = null
-		else if (value === "own" && !clock) {
-			// The first set starts FROM the followed present.
-			const f = followed
-			clock = f
-				? { year: f.year, month: f.month ?? null, day: f.day ?? null, hour: f.hour ?? null, minute: f.minute ?? null }
-				: { year: 1, month: null, day: null, hour: null, minute: null }
+		if (value === "follow") {
+			ownPending = false
+			clock = null
+		} else if (value === "own" && !clock) {
+			// The first set starts FROM the followed present, else the book's
+			// start date; with neither the inputs are empty.
+			const f = followed ?? time.start?.date ?? null
+			if (f) {
+				clock = { year: f.year, month: f.month ?? null, day: f.day ?? null, hour: f.hour ?? null, minute: f.minute ?? null }
+			} else {
+				year = month = day = hour = minute = null
+				ownPending = true
+			}
 		}
 	}
 
@@ -287,7 +296,7 @@
 		{disabled}
 		onValueChange={setClockMode}
 	/>
-	{#if !clock}
+	{#if !clock && !ownPending}
 		<p class="text-surface-600-400 text-xs" data-testid="session-story-clock-followed">
 			{#if followed}
 				Stands at {spell(followed)}, the line's present. It moves as the lorebook does.
@@ -382,7 +391,7 @@
 			<p id="session-story-clock-hint" class="text-surface-600-400 text-xs" aria-live="polite">
 				{#if dayNeedsMonth}
 					A day needs a month.
-				{:else if num(year) !== null}
+				{:else if num(year) !== null && clock}
 					Stands at {spell(clock)}. Moving it never moves the lorebook's present.
 				{:else}
 					The clock needs a year.

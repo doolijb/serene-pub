@@ -304,9 +304,14 @@ export const samplingConfigsUsedBy: Handler<
 	Sockets.SamplingConfigs.UsedBy.Response
 > = {
 	event: "samplingConfigs:usedBy",
-	// No admin check: which jobs and pipelines pick a config are read-only
-	// facts, the same names the pickers already show.
-	handler: async (_socket, _params, emitToUser) => {
+	// Admin-only, like every sampling handler: members never see sampling.
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const error =
+				"Access denied. Only admin users can manage sampling configs."
+			emitToUser("samplingConfigs:usedBy:error", { error })
+			throw new Error(error)
+		}
 		const res = await buildSamplingConfigsUsedBy()
 		emitToUser("samplingConfigs:usedBy", res)
 		return res

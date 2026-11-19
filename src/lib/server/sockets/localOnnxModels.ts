@@ -1122,7 +1122,7 @@ export async function reconcileOnnxDownloadsOnBoot() {
  * projection): one is on disk (a
  * complete `onnx` `local_models` row for embeddings or named entities), or a
  * loadout names a local ONNX connection. The two connections now always
- * exist (`ensureLocalOnnxConnections`), so their existence no longer says
+ * exist (`ensureLocalOnnxConnections`), so their existence does not say
  * anyone asked; a boot that reached out on that alone would be a network call
  * nobody asked for. Never throws, and never awaited by its
  * caller: a list that cannot be loaded falls back to the built-in catalogue

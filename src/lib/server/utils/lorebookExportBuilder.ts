@@ -267,7 +267,7 @@ export async function buildLorebookExportData(
 	// relationships below can reference one.
 	// 🚧 §0-B / ★4b: a scene not yet compiled (no history entry) still goes
 	// out, nested under the history entry of its day when the book has one,
-	// else under a dated, empty entry the document carries for it (nothing is
+	// else under an empty entry the document carries for it (dated that day, or carrying no date for an undated scene) (nothing is
 	// written to the book). The name is the display name, written frozen.
 	const { sceneDisplayNames } = await import("$lib/server/scenes/liveScenes")
 	const shownSceneNames = await sceneDisplayNames(db, lorebook.scenes)
@@ -301,7 +301,7 @@ export async function buildLorebookExportData(
 			filedUnder.set(scene.id, filedByRule)
 			continue
 		}
-		const dayKey = `${year ?? 1}-${year != null ? month : 1}-${year != null ? day : 1}`
+		const dayKey = year != null ? `${year}-${month}-${day}` : "undated"
 		let syntheticId = dayEntries.get(dayKey)
 		if (syntheticId === undefined) {
 			syntheticId = -(syntheticEntries.length + 1)
@@ -311,9 +311,8 @@ export async function buildLorebookExportData(
 				lorebookId: lorebook.id,
 				keys: [],
 				content: "",
-				year: year ?? 1,
-				month: year != null ? month : 1,
-				day: year != null ? day : 1,
+				// An undated scene's entry carries no year, month or day.
+				...(year != null ? { year, month, day } : {}),
 				position: syntheticPosition++
 			} as any)
 			syntheticEntries.push(
@@ -449,8 +448,11 @@ export async function buildLorebookExportData(
 			const isOwnedOrUnbound =
 				!node.characterId || node.character?.userId === userId
 			const own = baseOfMember.get(node.id)
+			// A card-less member's node name is its base version's name (the
+			// row holds its shown name); a carded member's stays the row's.
 			const stated = {
 				...node,
+				name: own?.name ?? node.name,
 				nodeState: own?.nodeState ?? ("active" as const),
 				nodeVisibility: own?.nodeVisibility ?? ("normal" as const)
 			}

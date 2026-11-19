@@ -115,6 +115,7 @@ async function setup(opts: Opts = {}) {
 		.returning()
 	const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
 	const own = await ownBookFor(db(), session!.id)
+	await testDb.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, own.id)) // the notes state their timeline
 	const [lineRow] = await testDb
 		.insert(schema.lorebookBranches)
 		.values({ lorebookId: own.id, name: "Own line", forkYear: 10 })

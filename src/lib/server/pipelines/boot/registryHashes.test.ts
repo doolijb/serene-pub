@@ -714,7 +714,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// port — the entries its selective logic ruled out, as eligibility verdicts
 	// (lorebooks C2). Edited in place; no migration (the slug's pointer moves at
 	// boot). (was "140fe9926f31bc")
-	"core:query/world-lore@1": "8a660280c2cef",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "8a660280c2cef")
+	"core:query/world-lore@1": "10470d82c74e65", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "2d6c79205a8a5")
 	// Moved (W1, 2026-09-17): gained the `speaker` in-port — a participant
 	// reference naming whose private lore this read is for, wired inside a
 	// repeating clause so two voices of one turn read two pools from one
@@ -734,7 +735,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-02 (lorebooks Wave 8): the keyword lane's new `exclusions` out-
 	// port (lorebooks C2). Edited in place; no migration (the slug's pointer moves
 	// at boot). (was "d57fea94d7a4b")
-	"core:query/character-lore@1": "14fab76b8a3b72",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "14fab76b8a3b72")
+	"core:query/character-lore@1": "194231eec16f7a", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "1e39536e4c1f9d")
 	// Gained the `channel` param in 0.6-preview (migration 0149, 20 §7);
 	// default 'main' reproduces the legacy read byte-for-byte.
 	//
@@ -879,7 +881,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// preset turns it off. The cast-wide read (nobody speaking) is the host read's,
 	// not the descriptor's. Proven: the descriptor with only `loreLinks` deleted
 	// hashes to the old pin. (was "11a0d9e6e56a49")
-	"core:query/relationship-search@1": "14d6e302a08f1f",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "14d6e302a08f1f")
+	"core:query/relationship-search@1": "1a5fd6b54189fd", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "1b81c3ff16d8fe")
 	"core:query/graph-scenes@1": "3d0bc6433032e",
 	// The third gather branch, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
@@ -902,7 +905,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-02 (lorebooks Wave 8): the keyword lane's new `exclusions` out-
 	// port (lorebooks C2). Edited in place; no migration (the slug's pointer moves
 	// at boot). (was "e1166297a747a")
-	"core:query/history-entries@1": "dd12a4e6fec4c", // 2026-11-15 time-t6c1: firsthandFor/firsthandBy in-ports added (was "1403d2cf364be7")
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "dd12a4e6fec4c")
+	"core:query/history-entries@1": "1f75b839ead8b3", // 2026-11-17 wt-1b: speakerInCast param added (was "12766ab08547dc"); 2026-11-15 time-t6c1: firsthandFor/firsthandBy in-ports added (was "1403d2cf364be7")
 	// Re-projected by 0186: the same `scanDepth` correction, on this type's own
 	// duplicate declaration of the field. Deliberately still a separate schema
 	// rather than folded into the shared `loreSlots` — the two overlap in that
@@ -973,7 +977,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-02 (lorebooks Wave 8): the new `exclusions` out-port (lorebooks
 	// C2). Edited in place; no migration (the slug's pointer moves at boot). (was
 	// "404416a976bd")
-	"core:query/lorebook-triggers@1": "190c56d8514e39",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "190c56d8514e39")
+	"core:query/lorebook-triggers@1": "1408f4f7947c", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "16fd141a62a540")
 	// A **new** type (2026-09-17), so no migration and no bump — the same
 	// sentence `entry-keys@1` below stands on. It is the **listing** door the
 	// five definitions above are not: no mechanism runs, nothing is scored, and
@@ -1002,7 +1007,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// false) — each row's lore links, said from the row, on `links`. Additive:
 	// off, a row carries no `links`. Proven: the snapshot entry with only that
 	// param deleted hashes back to the old pin. (was "13572f1bddbdd1")
-	"core:query/lorebook-entries@1": "3763af6fd2ef8",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "3763af6fd2ef8")
+	"core:query/lorebook-entries@1": "22fb8e73e9705", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "1d216a5ff76edb")
 	// A **new** type, so no migration and no bump — policy's own sentence,
 	// "adding a new type is safe and needs no migration". Nothing else in this
 	// table moved when it landed, which is the check that says the declaration
@@ -1051,7 +1057,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// semantics — the leak guard for an arm inside a per-voice clause (lorebooks C3,
 	// R3). Edited in place; no migration (the slug's pointer moves at boot). (was
 	// "1e4527ac6d1122")
-	"core:query/vector-search@1": "3ecd7d4089af2",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "3ecd7d4089af2")
+	"core:query/vector-search@1": "c895bfa8b3ca", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "821f094ea983f")
 	// New 2026-10-02 (lorebooks C2/R4, E-2): the cast's presences as the run's
 	// session reads them — its line, and `at` its story clock. A new type.
 	// E M0 2026-10-28: the `atHour` in-port and `placements` out-port (lane T3/T4, SHAPES L3). (was "68689a20c23d4")
@@ -1071,7 +1078,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `maxEntries` 0→5 / `maxMessages` 0→20: retrieval on by default (R5, A23(b)).
 	// Edited in place; no migration (the slug's pointer moves at boot). (was
 	// "1c6d05c53e6a7c")
-	"core:query/entity-search@1": "1b90356d30b294",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "1b90356d30b294")
+	"core:query/entity-search@1": "1999d3190ce309", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "3c5fd0b2bbc57")
 	// Documentation search (U5g, R-18, 2026-09-16) — the guide genre's one
 	// retrieval mechanism: the compiled docs' sections, scored against the
 	// newest messages, published in the `worldLore` band. A **new** type id.
@@ -1103,7 +1111,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved 2026-10-02 (lorebooks Wave 8): the `speaker` in-port (lorebooks C3, R3).
 	// Edited in place; no migration (the slug's pointer moves at boot). (was
 	// "14722f3bd64182")
-	"core:query/entity-link@1": "1ec6b7b641ddd5",
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "1ec6b7b641ddd5")
+	"core:query/entity-link@1": "13527111b3ff52", // 2026-11-17 wt-1b-fix2: speakerInCast param added (was "81843215bfe37")
 	// Gained a `variables` slot for its post-budget lore and history in
 	// 0.6-preview. Re-projected by migration 0108, on the same terms as 0107.
 	// Migration 0095 — answer 3.
@@ -1853,9 +1862,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:query/round-worth@1": "17f5045d5976ed",
 	"core:query/scene-boundaries@1": "12e77a18036ca5" /* new — lead, sense-scn 2026-11-12 */,
 	"core:query/scene-summary-due@1": "d78f075f52a77" /* new — lead, sense-sum 2026-11-12 */,
-	"core:query/earlier-scenes@1": "3dbaa76aa7888", // 2026-11-15 time-t6b: firsthandFor/firsthandBy in-ports added (was "baf88f0f6b87b")
-	"core:query/entries-named@1": "1ee43a2b9ae71a" /* new — lead, lore-match 2026-11-13 */,
-	"core:query/unknown-entries@1": "156b3a840fe94b" /* new — time-t6c2 2026-11-15 */,
+	"core:query/earlier-scenes@1": "1b5872c29105dc", // 2026-11-17 wt-1b: speakerInCast param added (was "3dbaa76aa7888"); 2026-11-15 time-t6b: firsthandFor/firsthandBy in-ports added (was "baf88f0f6b87b")
+	// Moved 2026-11-16 (kn-2a): the params slot gained `knownToSpeaker` (was "1ee43a2b9ae71a")
+	"core:query/entries-named@1": "15e306b5646f3c" /* 2026-11-17 wt-1b-fix2: speakerInCast param added (was "135590a5eb0239"); new — lead, lore-match 2026-11-13 */,
 	"core:outlet/summarize-finished-scene@1": "1803781561967b" /* (was "1443315d18526") — lead, 2026-11-13: it declares `review.fields` (every effectful definition does; the SDK's forms test caught the gap). */,
 	// New 2026-10-31 (M2c path B; pinned by E): the Guide's draft reader (T) and the four library outlets (T), each with review.fields.
 	"core:task/read-library-draft@1": "143fcc2d9e0fb7",
@@ -1863,6 +1872,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	"core:outlet/update-character@1": "17f8558f4845b3",
 	// New 2026-11-06 (cv-sdk): a session's story write to one cast member (review on `changes`).
 	"core:outlet/update-cast-member@1": "b14c341a7644",
+	// New 2026-11-16 (kn-4b): notes that a cast member came to know an entry in play.
+	"core:outlet/note-entry-knowledge@1": "14fcb5d12c8d76",
 	"core:outlet/create-lorebook@1": "5c69133a08a97",
 	"core:outlet/set-lorebook-annex-field@1": "44910c1fc9bad",
 	// 2026-10-28 (E-fix T-1): convert-ruleset declares `review: { fields: [] }`, so its pin moved.
@@ -1948,7 +1959,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// entry. Same `@1` under the freeze; the app asks the role map
 	// (`declaresParent`), and the history-anchor clear migration empties any
 	// stored filing. (was "c52dca49f40fd")
-	"core:entry/history@1": "1d2cdefaa3b6d2",
+	// Moved (was "1d2cdefaa3b6d2") 2026-11-16, tl-2d: history year has no default
+	// (the declared `default: 1` is gone; `year` stays `required`).
+	"core:entry/history@1": "1d00acc7a87392",
 	// NEW (L3, 2026-09-17): a place the story can be in, and can be walked out
 	// of. World lore's roles and fields, the `worldLore` band, rendered by the
 	// world-lore variable — what earns it a type is that a place is a thing

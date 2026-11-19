@@ -191,7 +191,12 @@ describe("session.fields", () => {
 			// Story's fields since the layering (lane 3, 2026-10-20): the voices,
 			// at their defaults (Rest follows the reckoning's mode, R55).
 			sideCast: false,
-			narratorInterjections: "off"
+			narratorInterjections: "off",
+			// The session-wide speech and sheet-latitude fields, at their declared defaults.
+			speechReadAloud: "off",
+			speechNarratorVoice: "",
+			sessionLanguage: "",
+			ownerSheetLatitude: "all-any"
 		})
 	}, 60_000)
 })

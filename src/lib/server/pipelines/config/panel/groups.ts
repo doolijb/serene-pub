@@ -375,6 +375,28 @@ export function modelCallsOf(
 	return out
 }
 
+/** Each model call's settings-group heading, by `plan.calls` index; two alternatives headed alike take their branch's name. */
+export function callHeadingsOf(args: {
+	plan: GroupPlan
+	nodes: readonly GroupingNode[]
+	decls: readonly Pick<Decl, "nodeKey" | "typeLabel">[]
+	language?: string
+}): string[] {
+	const { plan, nodes, decls, language } = args
+	const byKey = new Map(nodes.map((n) => [n.key, n]))
+	const definitionName = (nodeKey: string) =>
+		decls.find((d) => d.nodeKey === nodeKey)?.typeLabel ?? ""
+	const base = plan.calls.map((c) =>
+		groupHeadingOf(byKey.get(c.modelCall), definitionName(c.modelCall), language)
+	)
+	// 🚧 Alternatives headed alike (lane T3): the branch names each — _Reply · prose_, _Reply · changes_.
+	return plan.calls.map((c, i) =>
+		c.branch && base.some((h, j) => j !== i && h === base[i])
+			? `${base[i]} · ${branchWords(c.branch)}`
+			: base[i]!
+	)
+}
+
 /**
  * The view's settings groups (see the file comment), from the options this
  * viewer was shown, in spine order. Each Advanced step is keyed and headed by
@@ -408,8 +430,7 @@ export function settingsGroupsOf(args: {
 	)
 	const plan = planGroups({ nodes, edges, modelCalls, ...(clauses ? { clauses } : {}) })
 	const byKey = new Map(nodes.map((n) => [n.key, n]))
-	const definitionName = (nodeKey: string) =>
-		decls.find((d) => d.nodeKey === nodeKey)?.typeLabel ?? ""
+	const headings = callHeadingsOf({ plan, nodes, decls, language })
 
 	type Draft = Omit<SettingsGroup, "changedInAdvanced"> & { modelCall?: string }
 	const drafts: Draft[] = plan.calls.map((c, i) => {
@@ -419,17 +440,11 @@ export function settingsGroupsOf(args: {
 			key: `g${i}`,
 			kind: "model-call",
 			modelCall: c.modelCall,
-			heading: groupHeadingOf(node, definitionName(c.modelCall), language),
+			heading: headings[i]!,
 			...(purpose ? { purpose } : {}),
 			front: [],
 			advanced: []
 		}
-	})
-	// 🚧 Alternatives headed alike (lane T3): the branch names each — _Reply · prose_, _Reply · changes_.
-	const baseHeadings = drafts.map((d) => d.heading)
-	plan.calls.forEach((c, i) => {
-		if (c.branch && baseHeadings.some((h, j) => j !== i && h === baseHeadings[i]))
-			drafts[i]!.heading = `${baseHeadings[i]} · ${branchWords(c.branch)}`
 	})
 	// The whole pipeline — or, for a spec with one model call or none, the
 	// one unheaded group that holds everything.

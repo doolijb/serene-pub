@@ -34,6 +34,7 @@ import { and, asc, desc, eq, gte, inArray, lte, notInArray, sql } from "drizzle-
 import * as schema from "$lib/server/db/schema"
 import { canonicalChannel } from "$lib/server/messages/channels"
 import { liveMessageWhere } from "$lib/server/messages/store"
+import { notAFailedReplySql } from "$lib/server/messages/failedReply"
 import {
 	loreWritesOffRefusal,
 	sceneWriteRefusal
@@ -53,17 +54,31 @@ import {
 } from "$lib/shared/lorebooks/storyDate"
 import { sceneStartOf } from "./historyEntryOfDate"
 import { BranchRefusal, lineOfBook } from "$lib/server/state/reading"
-import { writeSceneCast, readSceneCast } from "$lib/server/utils/sceneCast"
+import {
+	writeSceneCast,
+	readSceneCast,
+	type SceneCast,
+	type SceneCastRedline
+} from "$lib/server/utils/sceneCast"
 import {
 	proposeSceneCast,
 	evidenceWords,
-	type CastTurn,
-	type RosterMember
+	quotedRanges,
+	renderEvidence,
+	type CastTurn
 } from "$lib/server/utils/sceneCastProposal"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
-import { parseEntityKey } from "$lib/server/pipelines/ranking/entities"
+import {
+	parseEntityKey,
+	EMPTY_GAZETTEER,
+	type Gazetteer
+} from "$lib/server/pipelines/ranking/entities"
 import { castMemberCards } from "$lib/server/utils/castMemberCards"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
+import {
+	RUN_LOCK_SENTENCES,
+	sceneLockedAgainstRuns
+} from "$lib/shared/lorebooks/runLocks"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { cardsAsSeatsRead, seatCardsAsRead } from "$lib/server/pipelines/prompt/seatCards"
 
@@ -72,12 +87,12 @@ export class SceneBoundaryRefusal extends Error {}
 
 type SceneRow = typeof schema.scenes.$inferSelect
 
-/** One proposed participant, with the evidence the review shows. */
+/** One listed participant, with the evidence the review shows. */
 export interface ProposedSceneCastMember {
 	key: string
 	name: string
 	evidenceLabel: string
-	/** The book's member it was written as; null for an open-tier name (not written). */
+	/** The book's member it was written as; null when no member resolved (not written). */
 	bindingId: number | null
 }
 
@@ -214,7 +229,8 @@ async function boundaryMessage(
 
 /**
  * The scene's story lines: one lane, by id, from `from` to `to` (open-ended
- * when null). Hidden lines are left out — the transcript a summary reads.
+ * when null). Hidden lines and failed replies (`notAFailedReplySql`: nobody
+ * said them) are left out — the transcript a summary reads.
  */
 export async function storyLinesInRange(
 	db: Db,
@@ -230,7 +246,9 @@ export async function storyLinesInRange(
 			role: schema.sessionMessages.role,
 			characterId: schema.sessionMessages.characterId,
 			personaId: schema.sessionMessages.personaId,
-			castMemberId: schema.sessionMessages.castMemberId
+			castMemberId: schema.sessionMessages.castMemberId,
+			isNarratorResponse: schema.sessionMessages.isNarratorResponse,
+			metadata: schema.sessionMessages.metadata
 		})
 		.from(schema.sessionMessages)
 		.where(
@@ -238,6 +256,7 @@ export async function storyLinesInRange(
 				eq(schema.sessionMessages.sessionId, sessionId),
 				eq(schema.sessionMessages.channel, channel),
 				eq(schema.sessionMessages.isHidden, false),
+				notAFailedReplySql,
 				gte(schema.sessionMessages.id, from),
 				to != null ? lte(schema.sessionMessages.id, to) : undefined
 			)
@@ -539,10 +558,20 @@ export async function worldStateReader(
 	db: Db,
 	sessionId: number
 ): Promise<(stateKey: string, at?: { messageId: number }) => Promise<string | null>> {
-	const { sessionLinks, vocabularyFor, valueOf, slotKey, qualifiedSlotKey } =
-		await import("$lib/server/state/resolve")
+	const { sessionLinks, vocabularyFor } = await import("$lib/server/state/resolve")
 	const links = await sessionLinks(db, sessionId)
 	const vocabulary = await vocabularyFor(db, sessionId, links)
+	return worldStateReaderWith(db, sessionId, links, vocabulary)
+}
+
+/** `worldStateReader` over links and vocabulary the caller already loaded. */
+async function worldStateReaderWith(
+	db: Db,
+	sessionId: number,
+	links: StateLinks,
+	vocabulary: StateVocabulary
+): Promise<(stateKey: string, at?: { messageId: number }) => Promise<string | null>> {
+	const { valueOf, slotKey, qualifiedSlotKey } = await import("$lib/server/state/resolve")
 	return async (stateKey, at) => {
 		const decl = vocabulary.entries
 			.map((e) => e.decl)
@@ -565,6 +594,10 @@ export async function worldStateReader(
 		return stateValueText(db, value)
 	}
 }
+
+type StateResolve = typeof import("$lib/server/state/resolve")
+type StateLinks = Awaited<ReturnType<StateResolve["sessionLinks"]>>
+type StateVocabulary = Awaited<ReturnType<StateResolve["vocabularyFor"]>>
 
 /** One state value as words: a string trimmed, a number, a lore reference's title; else null. */
 async function stateValueText(db: Db, value: unknown): Promise<string | null> {
@@ -607,6 +640,484 @@ export async function scenePlaceOf(
 			: await scenePlaceKeyOf(db, sessionId)
 	if (!stateKey) return null
 	return (await worldStateReader(db, sessionId))(stateKey, at)
+}
+/**
+ * A line as the speaker rules read it: the card columns, the member column
+ * and the two `metadata` stamps that name a speaker where no card does.
+ */
+export interface SpokenLine {
+	id: number
+	characterId: number | null
+	personaId: number | null
+	castMemberId: number | null
+	/** The line's text and kind: read for speech tags only on a narrator line (`isNarratorLine`). */
+	content?: string | null
+	role?: string | null
+	isNarratorResponse?: boolean | null
+	isHidden?: boolean | null
+	metadata?: {
+		speaker?: string | null
+		sideCharacter?: { characterId?: number | null } | null
+	} | null
+}
+
+/**
+ * Who spoke a line. A card (`cardId`, a character or a persona) is resolved to
+ * its member by the reader; with no card the speaker is `memberId`, a live
+ * member of the session's book. `playerSeatId` is the player seat the line
+ * was stamped with, which owns the speaker's place state.
+ */
+export interface LineSpeaker {
+	cardId: number | null
+	memberId: number | null
+	memberName: string | null
+	playerSeatId: number | null
+}
+
+/** A speaker as one string, the key of a set: `card:<id>` or `member:<id>`. */
+export const speakerRefOf = (s: LineSpeaker): string =>
+	s.cardId != null ? `card:${s.cardId}` : `member:${s.memberId}`
+
+/**
+ * 🚧 Who spoke each line, from what the line stores — never from its text.
+ * In order: the card columns (`character_id`, then `persona_id`); the member
+ * column (`cast_member_id`, a card-less character seat); `metadata.speaker`
+ * `player-seat:<id>` (a card-less player seat) mapped to that seat's member;
+ * `metadata.speaker` `character:<id>`, else `metadata.sideCharacter
+ * .characterId` (a side-character turn, which keeps `character_id` null),
+ * mapped to that card's member in the session's book. A line with none of
+ * these, or whose member is not in the book (gone), has no entry: nobody
+ * spoke it. Speech tags inside narration name nobody here.
+ */
+export async function lineSpeakersOf(
+	db: Db,
+	scene: { sessionId: number; lorebookId: number },
+	lines: ReadonlyArray<SpokenLine>
+): Promise<Map<number, LineSpeaker>> {
+	const out = new Map<number, LineSpeaker>()
+	const bare = lines.filter((l) => (l.characterId ?? l.personaId) == null)
+	const stamped = new Map<
+		number,
+		{ seatId: number | null; cardId: number | null }
+	>()
+	for (const l of bare) {
+		const speaker = l.metadata?.speaker
+		const seat = typeof speaker === "string" ? /^player-seat:(\d+)$/.exec(speaker) : null
+		const card =
+			typeof speaker === "string" ? /^character:(\d+)$/.exec(speaker) : null
+		stamped.set(l.id, {
+			seatId: seat ? Number(seat[1]) : null,
+			cardId: card
+				? Number(card[1])
+				: (l.metadata?.sideCharacter?.characterId ?? null)
+		})
+	}
+	const seatIds = [
+		...new Set([...stamped.values()].flatMap((s) => (s.seatId != null ? [s.seatId] : [])))
+	]
+	const seatMember = new Map<number, number | null>()
+	if (seatIds.length) {
+		const rows = await db
+			.select({
+				id: schema.sessionPersonas.id,
+				castMemberId: schema.sessionPersonas.castMemberId
+			})
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, scene.sessionId),
+					inArray(schema.sessionPersonas.id, seatIds)
+				)
+			)
+		for (const r of rows) seatMember.set(r.id, r.castMemberId)
+	}
+	const needCards = [...stamped.values()].some((s) => s.cardId != null)
+	const memberOfCard = needCards
+		? (await castMemberCards(db, scene.lorebookId)).memberOf
+		: new Map<number, number>()
+	const members = new Map<number, { memberId: number; seatId: number | null }>()
+	for (const l of bare) {
+		const s = stamped.get(l.id)!
+		const memberId =
+			l.castMemberId ??
+			(s.seatId != null ? seatMember.get(s.seatId) : null) ??
+			(s.cardId != null ? memberOfCard.get(s.cardId) : null) ??
+			null
+		if (memberId != null) members.set(l.id, { memberId, seatId: s.seatId })
+	}
+	const live = new Map<number, string>()
+	const ids = [...new Set([...members.values()].map((m) => m.memberId))]
+	if (ids.length)
+		for (const r of await db
+			.select({
+				id: schema.lorebookBindings.id,
+				name: schema.lorebookBindings.name
+			})
+			.from(schema.lorebookBindings)
+			.where(
+				and(
+					eq(schema.lorebookBindings.lorebookId, scene.lorebookId),
+					inArray(schema.lorebookBindings.id, ids)
+				)
+			))
+			live.set(r.id, r.name)
+	for (const l of lines) {
+		const card = l.characterId ?? l.personaId
+		if (card != null) {
+			out.set(l.id, {
+				cardId: card,
+				memberId: l.castMemberId,
+				memberName: null,
+				playerSeatId: null
+			})
+			continue
+		}
+		const m = members.get(l.id)
+		if (!m || !live.has(m.memberId)) continue
+		out.set(l.id, {
+			cardId: null,
+			memberId: m.memberId,
+			memberName: live.get(m.memberId) ?? null,
+			playerSeatId: m.seatId != null && seatMember.has(m.seatId) ? m.seatId : null
+		})
+	}
+	return out
+}
+
+/** The session's card → member (character seats) and persona → player seat maps, a card's first live seat winning. */
+interface SeatMaps {
+	memberOfCard: Map<number, number>
+	playerSeatOfPersona: Map<number, number>
+}
+
+async function seatMapsOf(db: Db, sessionId: number): Promise<SeatMaps> {
+	const [characterSeats, playerSeats] = await Promise.all([
+		db
+			.select({
+				characterId: schema.sessionCharacters.characterId,
+				castMemberId: schema.sessionCharacters.castMemberId
+			})
+			.from(schema.sessionCharacters)
+			.where(eq(schema.sessionCharacters.sessionId, sessionId))
+			.orderBy(
+				sql`(${schema.sessionCharacters.removedAt} is not null)`,
+				asc(sql`coalesce(${schema.sessionCharacters.position}, 0)`),
+				asc(schema.sessionCharacters.id)
+			),
+		db
+			.select({
+				id: schema.sessionPersonas.id,
+				personaId: schema.sessionPersonas.personaId
+			})
+			.from(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.sessionId, sessionId))
+			.orderBy(
+				sql`(${schema.sessionPersonas.removedAt} is not null)`,
+				asc(sql`coalesce(${schema.sessionPersonas.position}, 0)`),
+				asc(schema.sessionPersonas.id)
+			)
+	])
+	const memberOfCard = new Map<number, number>()
+	for (const r of characterSeats)
+		if (
+			r.characterId != null &&
+			r.castMemberId != null &&
+			!memberOfCard.has(r.characterId)
+		)
+			memberOfCard.set(r.characterId, r.castMemberId)
+	const playerSeatOfPersona = new Map<number, number>()
+	for (const r of playerSeats)
+		if (r.personaId != null && !playerSeatOfPersona.has(r.personaId))
+			playerSeatOfPersona.set(r.personaId, r.id)
+	return { memberOfCard, playerSeatOfPersona }
+}
+
+/**
+ * The place rule for one speaker's line, as a check to call per line. A line
+ * passes when the speaker has no place of its own as of that line, or the
+ * scene has no place at that line, or one of the speaker's own places names
+ * the scene's place. What the comparison needs: the session's state links
+ * (read when a speaker is first checked), the speaker's own place as of the
+ * line, and — only when the speaker has one — the vocabulary that names the
+ * genre's place slot, for the scene's place as of the line. The seat maps
+ * (card → member, persona → player seat) are read only for a card's line,
+ * and only when `seats` is not passed.
+ */
+async function placeRuleOf(
+	db: Db,
+	sessionId: number,
+	placeKey: string,
+	seats?: {
+		memberOfCard: Map<number, number>
+		playerSeatOfPersona: Map<number, number>
+	}
+): Promise<(line: SpokenLine, who: LineSpeaker) => Promise<boolean>> {
+	const { sessionLinks, vocabularyFor, valueOf } = await import(
+		"$lib/server/state/resolve"
+	)
+	const { castOwnerOf } = await import("$lib/server/state/owners")
+	const { HOST_PLACE_SLOT_ID, sameName } = await import("@serene-pub/sdk")
+	let links: StateLinks | undefined
+	let vocabulary: StateVocabulary | undefined
+	const linksOnce = async () => (links ??= await sessionLinks(db, sessionId))
+	let seatMaps = seats
+	const seatsOf = async () => (seatMaps ??= await seatMapsOf(db, sessionId))
+	const placeAt = new Map<number, string | null>()
+	let readWorld: Awaited<ReturnType<typeof worldStateReaderWith>> | null = null
+	const scenePlaceAt = async (messageId: number) => {
+		if (placeAt.has(messageId)) return placeAt.get(messageId)!
+		const known = await linksOnce()
+		vocabulary ??= await vocabularyFor(db, sessionId, known)
+		readWorld ??= await worldStateReaderWith(db, sessionId, known, vocabulary)
+		const place = await readWorld(placeKey, { messageId })
+		placeAt.set(messageId, place)
+		return place
+	}
+	return async (l, who) => {
+		let owner
+		if (who.cardId == null)
+			owner =
+				who.playerSeatId != null
+					? ({ kind: "player_seat", id: who.playerSeatId } as const)
+					: ({ kind: "seated_member", id: who.memberId! } as const)
+		else {
+			const { memberOfCard, playerSeatOfPersona } = await seatsOf()
+			owner =
+				l.characterId != null
+					? castOwnerOf({
+							characterId: l.characterId,
+							seatMemberId:
+								l.castMemberId ?? memberOfCard.get(l.characterId) ?? null
+						})
+					: castOwnerOf({
+							characterId: l.personaId!,
+							playerSeatId: playerSeatOfPersona.get(l.personaId!) ?? null
+						})
+		}
+		const own = await valueOf(
+			db,
+			{ sessionId, owner, slotId: HOST_PLACE_SLOT_ID, asOfMessageId: l.id },
+			{ links: await linksOnce(), ...(vocabulary ? { vocabulary } : {}) }
+		)
+		const places: string[] = []
+		for (const item of Array.isArray(own) ? own : [own]) {
+			const text = await stateValueText(db, item)
+			if (text) places.push(text)
+		}
+		if (!places.length) return true
+		const here = await scenePlaceAt(l.id)
+		return here == null || places.some((p) => sameName(p, here))
+	}
+}
+
+/**
+ * A narrator line: voiced by no one in the cast. It is not hidden, carries no
+ * card, member or side-character stamp, no `metadata.speaker` naming a seat
+ * (`player-seat:`, `seated-member:`) or a card (`character:`), and is either
+ * flagged a narrator response or sent by the assistant. A person's line
+ * (`role` user), a system line and a character's line are never one.
+ */
+export function isNarratorLine(l: SpokenLine): boolean {
+	if (l.isHidden) return false
+	if (l.characterId != null || l.personaId != null || l.castMemberId != null)
+		return false
+	if (l.metadata?.sideCharacter?.characterId != null) return false
+	const speaker = l.metadata?.speaker
+	if (
+		typeof speaker === "string" &&
+		/^(player-seat|seated-member|character):/.test(speaker)
+	)
+		return false
+	return l.isNarratorResponse === true || l.role === "assistant"
+}
+
+/** A member a narrator line's speech tag names: the surface form, the lines (1-based positions in the list read) and the card the tag's key names. */
+interface TaggedMember {
+	name: string
+	positions: number[]
+	cardId: number | null
+}
+
+/**
+ * 🚧 The members of the session's lorebook that a **narrator line** names with
+ * a speech tag (the detector of `sceneCastProposal`, `classifySite` →
+ * `speech-tag`: a name beside a speech verb, outside the quotation, in a
+ * passage that has one). Only lines `isNarratorLine` accepts and `spoken`
+ * has no speaker for are read; a tag in a person's or a character's own line
+ * names nobody here. Only gazetteer hits that are members count (the
+ * book's own names, never an open-tier name, an entry or a place); nothing is
+ * minted. A name only addressed, spoken to or mentioned is not a tag. The names
+ * are loaded only when a narrator line has a quotation (a speech tag needs
+ * one).
+ */
+async function narratorTagged(
+	db: Db,
+	scene: { lorebookId: number },
+	lines: ReadonlyArray<SpokenLine>,
+	spoken: ReadonlyMap<number, LineSpeaker>,
+	opts: { gazetteer?: Gazetteer } = {}
+): Promise<Map<number, TaggedMember>> {
+	const out = new Map<number, TaggedMember>()
+	const turns: CastTurn[] = []
+	lines.forEach((l, i) => {
+		if (spoken.has(l.id) || !isNarratorLine(l) || !l.content) return
+		if (!quotedRanges(l.content).length) return
+		turns.push({ index: i + 1, content: l.content, senderKey: null })
+	})
+	if (!turns.length) return out
+	const gazetteer =
+		opts.gazetteer ??
+		(await (await import("$lib/server/annotations")).loadVocabulary(
+			db,
+			scene.lorebookId
+		)).gazetteer
+	const tags = proposeSceneCast(turns, { gazetteer }).participants.flatMap((p) => {
+		const tag = p.evidence.find((e) => e.kind === "speech-tag")
+		const ref = parseEntityKey(p.key)
+		return tag && p.tier === "gazetteer" && ref && ref.kind !== "entry"
+			? [{ p, tag, ref }]
+			: []
+	})
+	// A card's name answers for the member linked to it in this book (a book
+	// holds a card once); one read for every tagged card.
+	const cardIds = tags.flatMap((t) => (t.ref.kind === "character" ? [t.ref.id] : []))
+	const memberOfCard = new Map<number, number>()
+	if (cardIds.length)
+		for (const r of await db
+			.select({
+				id: schema.lorebookBindings.id,
+				characterId: schema.lorebookBindings.characterId
+			})
+			.from(schema.lorebookBindings)
+			.where(
+				and(
+					eq(schema.lorebookBindings.lorebookId, scene.lorebookId),
+					inArray(schema.lorebookBindings.characterId, cardIds)
+				)
+			))
+			memberOfCard.set(r.characterId!, r.id)
+	for (const { p, tag, ref } of tags) {
+		const memberId =
+			ref.kind === "cast_member" ? ref.id : (memberOfCard.get(ref.id) ?? null)
+		if (memberId == null) continue
+		const hit = out.get(memberId)
+		if (hit) {
+			hit.positions = [...new Set([...hit.positions, ...tag.turns])].sort(
+				(a, b) => a - b
+			)
+			continue
+		}
+		out.set(memberId, {
+			name: p.name,
+			positions: [...tag.turns],
+			cardId: ref.kind === "character" ? ref.id : null
+		})
+	}
+	return out
+}
+
+/**
+ * The tagged members the place rule keeps: a member's own place as of a line
+ * their tag sits in, against the scene's place at that line, exactly as for a
+ * sender; kept when one line passes. `passes` null: the genre names no place
+ * key, nobody is ruled out. A tagged card is a player's persona when a player
+ * seat holds it (`seats.playerSeatOfPersona`), else a character.
+ */
+async function taggedKept(
+	tagged: ReadonlyMap<number, TaggedMember>,
+	lines: ReadonlyArray<SpokenLine>,
+	passes: ((line: SpokenLine, who: LineSpeaker) => Promise<boolean>) | null,
+	seats: SeatMaps | undefined
+): Promise<Map<number, TaggedMember>> {
+	if (!passes) return new Map(tagged)
+	const kept = new Map<number, TaggedMember>()
+	for (const [memberId, t] of tagged) {
+		for (const position of t.positions) {
+			const at = lines[position - 1]!
+			const persona =
+				t.cardId != null && seats?.playerSeatOfPersona.has(t.cardId)
+			const as: SpokenLine = {
+				id: at.id,
+				characterId: t.cardId != null && !persona ? t.cardId : null,
+				personaId: persona ? t.cardId : null,
+				castMemberId: memberId
+			}
+			const who: LineSpeaker = {
+				cardId: t.cardId,
+				memberId,
+				memberName: null,
+				playerSeatId: null
+			}
+			if (await passes(as, who)) {
+				kept.set(memberId, t)
+				break
+			}
+		}
+	}
+	return kept
+}
+
+/**
+ * 🚧 The speakers a scene's `lines` list, and the narrator-tagged members
+ * among them: those that spoke at least one line (`lineSpeakersOf`) or that a
+ * narrator line names with a speech tag (`narratorTagged`), and that their
+ * place does not rule out. A line passes when the genre names no place key, or
+ * the member has no place of its own as of that line, or the scene has no
+ * place at that line, or one of the member's own places names the scene's
+ * place; a member is listed when one of its lines passes (benching plays no
+ * part, and the session's world place is never the member's own). Owner
+ * rulings: "Attended = spoke in the scene" … "For core catelogue, we will go
+ * with: Spoke at least once, and further filtering by cast members position"
+ * (D57, 2026-11-16); "Active means spoke at least once in the scene" (B1,
+ * 2026-11-17); "A cast member with a speech tag in the narrator's lines
+ * counts as having spoken" (SC2, 2026-11-17). A genre or plugin may compile a
+ * scene's cast differently; the reads only ask the stored cast.
+ *
+ * `speakers` holds refs (`speakerRefOf`: `card:<id>` for a card's line,
+ * `member:<id>` for a card-less speaker or a tagged member); `tagged` the
+ * kept tagged members by member id. `seats` spares the seat reads when the
+ * caller has them; `gazetteer` the name list.
+ */
+export async function castSpeakersOf(
+	db: Db,
+	scene: { sessionId: number; lorebookId: number },
+	lines: ReadonlyArray<SpokenLine>,
+	opts: { seats?: SeatMaps; gazetteer?: Gazetteer } = {}
+): Promise<{ speakers: Set<string>; tagged: Map<number, TaggedMember> }> {
+	const speakers = new Set<string>()
+	const who = await lineSpeakersOf(db, scene, lines)
+	const found = await narratorTagged(db, scene, lines, who, {
+		gazetteer: opts.gazetteer
+	})
+	if (!who.size && !found.size) return { speakers, tagged: found }
+	const placeKey = await scenePlaceKeyOf(db, scene.sessionId)
+	if (!placeKey) {
+		for (const s of who.values()) speakers.add(speakerRefOf(s))
+		for (const memberId of found.keys()) speakers.add(`member:${memberId}`)
+		return { speakers, tagged: found }
+	}
+	let seats = opts.seats
+	if (!seats && [...found.values()].some((t) => t.cardId != null))
+		seats = await seatMapsOf(db, scene.sessionId)
+	const passes = await placeRuleOf(db, scene.sessionId, placeKey, seats)
+	for (const l of lines) {
+		const s = who.get(l.id)
+		if (!s || speakers.has(speakerRefOf(s))) continue
+		if (await passes(l, s)) speakers.add(speakerRefOf(s))
+	}
+	const tagged = await taggedKept(found, lines, passes, seats)
+	for (const memberId of tagged.keys()) speakers.add(`member:${memberId}`)
+	return { speakers, tagged }
+}
+
+/** `castSpeakersOf`'s refs: who a scene's lines list. */
+export async function sceneCastSpeakers(
+	db: Db,
+	scene: { sessionId: number; lorebookId: number },
+	lines: ReadonlyArray<SpokenLine>,
+	seats?: SeatMaps
+): Promise<Set<string>> {
+	return (await castSpeakersOf(db, scene, lines, { seats })).speakers
 }
 
 /** `Scene N` [` · <place>`] [` · <date>`], deterministic — the place as it stood at the opening line. */
@@ -739,18 +1250,20 @@ export async function sceneDisplayNames(
 // ── cast ────────────────────────────────────────────────────────────────────
 
 /**
- * Propose the scene's cast from its lines (`proposeSceneCast`, no model) and
- * write the participants that resolve to a card as the scene's
- * `scene_characters`. Open-tier names are returned, not written: a name with
- * no member is a person's to accept.
+ * List the scene's cast from its lines (`readCastProposal`: whoever sent a
+ * line or is tagged as the speaker in a narrator line, minus those their
+ * place rules out) and write the participants that
+ * resolve to a member as the scene's `scene_characters`.
  */
 async function proposeAndWriteCast(
 	db: Db,
-	scene: SceneRow
+	scene: SceneRow,
+	redline?: SceneCastRedline
 ): Promise<ProposedSceneCastMember[]> {
+	if (sceneLockedAgainstRuns(scene)) return []
 	const proposal = await readCastProposal(db, scene)
 	if (!proposal) return []
-	return writeProposedCast(db, scene, proposal)
+	return (await writeProposedCast(db, scene, proposal, redline)) ?? []
 }
 
 /**
@@ -780,12 +1293,17 @@ async function proposedMembersInBook(
 	return new Set(rows.map((r) => r.id))
 }
 
-/** Write a proposal's card participants as the scene's `scene_characters` — open and close's write. */
+/**
+ * Write a listing's participants as the scene's `scene_characters` — every live write's (open, close, move, merge, refresh).
+ * A locked scene keeps its cast as it is: nothing is written and the result is null.
+ */
 async function writeProposedCast(
 	db: Db,
 	scene: SceneRow,
-	proposal: NonNullable<Awaited<ReturnType<typeof readCastProposal>>>
-): Promise<ProposedSceneCastMember[]> {
+	proposal: NonNullable<Awaited<ReturnType<typeof readCastProposal>>>,
+	redline?: SceneCastRedline
+): Promise<ProposedSceneCastMember[] | null> {
+	if (sceneLockedAgainstRuns(scene)) return null
 	const out: ProposedSceneCastMember[] = []
 	const participantIds: number[] = []
 	const liveMembers = await proposedMembersInBook(
@@ -815,7 +1333,12 @@ async function writeProposedCast(
 			bindingId
 		})
 	}
-	await writeSceneCast(scene.id, { participantCharacters: participantIds }, db)
+	await writeSceneCast(
+		scene.id,
+		{ participantCharacters: participantIds },
+		db,
+		redline
+	)
 	await db
 		.update(schema.scenes)
 		.set({ castResolvedAt: new Date() })
@@ -824,17 +1347,86 @@ async function writeProposedCast(
 }
 
 /**
+ * A refresh for a line nobody in the cast spoke: only a narrator line with a
+ * speech tag can add anyone (`narratorTagged`, this one line). The names are
+ * loaded only for a narrator line that has a quotation; the stored cast is
+ * read only when a tag names a member, and no place read happens unless a new
+ * member is tagged. True when the cast was rewritten.
+ */
+async function refreshFromTags(
+	db: Db,
+	scene: SceneRow,
+	sessionId: number,
+	line: SpokenLine,
+	placeKeyHeld: string | null | undefined
+): Promise<boolean> {
+	if (!isNarratorLine(line) || !line.content || !quotedRanges(line.content).length)
+		return false
+	const named = await narratorTagged(db, scene, [line], new Map())
+	if (!named.size) return false
+	const stored = (await readSceneCast(scene.id, db)).participantCharacters
+	const found = new Map([...named].filter(([id]) => !stored.includes(id)))
+	if (!found.size) return false
+	const placeKey =
+		placeKeyHeld !== undefined
+			? placeKeyHeld
+			: await scenePlaceKeyOf(db, sessionId)
+	let kept = found
+	if (placeKey) {
+		const seats = [...found.values()].some((t) => t.cardId != null)
+			? await seatMapsOf(db, sessionId)
+			: undefined
+		kept = await taggedKept(
+			found,
+			[line],
+			await placeRuleOf(db, sessionId, placeKey, seats),
+			seats
+		)
+	}
+	if (!kept.size) return false
+	const listed = (id: number) => ({
+		key: `cast_member:${id}`,
+		name: "",
+		evidenceLabel: "",
+		evidenceWords: ""
+	})
+	const written = await writeProposedCast(
+		db,
+		scene,
+		{
+			participants: [...stored, ...kept.keys()].map(listed),
+			lineCount: 0
+		},
+		{
+			by: { sessionId },
+			cause: "scene-compiler",
+			before: { participantCharacters: stored }
+		}
+	)
+	return written !== null
+}
+
+/**
  * 🚧 Keep an **open** scene's stored cast current (live scenes §15 G3): a
- * line landed on its lane, so propose the cast again (`proposeSceneCast`, no
- * model) and write it as open and close do — but only when the proposal's
- * participants differ from the stored ones (as members), so a line by someone
- * already in the scene writes nothing. True when the cast was rewritten.
+ * line landed on its lane. A scene lists whoever spoke in it, so a new line
+ * can only add its own speaker (`lineSpeakersOf`) or, on a narrator line,
+ * the members its speech tags name (`refreshFromTags`): one the stored cast
+ * already lists writes nothing and reads no other line; a new one is added
+ * after the stored cast when their place does not rule them out (the one
+ * line). `placeKey` is the genre's place key when the
+ * caller holds it (null: no place), read here when absent. True when the
+ * cast was rewritten. A person added by hand who never spoke stays listed.
  * Only an open range scene the line belongs to (at or after its opening);
  * anything else is left alone.
  */
 export async function refreshOpenSceneCast(
 	db: Db,
-	params: { sessionId: number; channel: string; messageId: number }
+	params: {
+		sessionId: number
+		channel: string
+		messageId: number
+		placeKey?: string | null
+	}
 ): Promise<boolean> {
 	const [scene] = await db
 		.select()
@@ -849,46 +1441,83 @@ export async function refreshOpenSceneCast(
 		)
 		.limit(1)
 	if (!scene || scene.openedAtMessageId! > params.messageId) return false
-	const proposal = await readCastProposal(db, scene)
-	if (!proposal) return false
-	// Compared as members, the way the write resolves them: a card through
-	// its member in this book (any card of theirs, `castMemberCards`), a
-	// `cast_member:` key as itself. A card with no member yet would be minted
-	// by the write, so it is a change.
-	const { memberOf } = await castMemberCards(db, scene.lorebookId)
-	const liveMembers = await proposedMembersInBook(
-		db,
-		scene.lorebookId,
-		proposal
-	)
-	const proposed = new Set<number>()
-	let mints = false
-	for (const p of proposal.participants) {
-		const ref = parseEntityKey(p.key)
-		if (ref?.kind === "character") {
-			const memberId = memberOf.get(ref.id)
-			if (memberId != null) proposed.add(memberId)
-			else mints = true
-		} else if (ref?.kind === "cast_member" && liveMembers.has(ref.id))
-			proposed.add(ref.id)
+	if (sceneLockedAgainstRuns(scene)) return false
+	const [line] = await db
+		.select({
+			id: schema.sessionMessages.id,
+			characterId: schema.sessionMessages.characterId,
+			personaId: schema.sessionMessages.personaId,
+			castMemberId: schema.sessionMessages.castMemberId,
+			content: schema.sessionMessages.content,
+			role: schema.sessionMessages.role,
+			isNarratorResponse: schema.sessionMessages.isNarratorResponse,
+			metadata: schema.sessionMessages.metadata
+		})
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.id, params.messageId),
+				eq(schema.sessionMessages.sessionId, params.sessionId),
+				eq(schema.sessionMessages.isHidden, false),
+				notAFailedReplySql
+			)
+		)
+		.limit(1)
+	if (!line) return false
+	const scenePair = { sessionId: params.sessionId, lorebookId: scene.lorebookId }
+	const who = (await lineSpeakersOf(db, scenePair, [line])).get(line.id)
+	if (!who) return refreshFromTags(db, scene, params.sessionId, line, params.placeKey)
+	// A card is compared as its member in this book (any card of theirs,
+	// `castMemberCards`); a card with no member yet would be minted by the write.
+	const memberId =
+		who.cardId != null
+			? ((await castMemberCards(db, scene.lorebookId)).memberOf.get(
+					who.cardId
+				) ?? null)
+			: who.memberId
+	const stored = (await readSceneCast(scene.id, db)).participantCharacters
+	if (memberId != null && stored.includes(memberId)) return false
+	const placeKey =
+		params.placeKey !== undefined
+			? params.placeKey
+			: await scenePlaceKeyOf(db, params.sessionId)
+	if (placeKey) {
+		const passes = await placeRuleOf(db, params.sessionId, placeKey)
+		if (!(await passes(line, who))) return false
 	}
-	const stored = new Set(
-		(await readSceneCast(scene.id, db)).participantCharacters
+	const listed = (key: string) => ({
+		key,
+		name: "",
+		evidenceLabel: "",
+		evidenceWords: ""
+	})
+	const written = await writeProposedCast(
+		db,
+		scene,
+		{
+			participants: [
+				...stored.map((id) => listed(`cast_member:${id}`)),
+				listed(
+					memberId != null ? `cast_member:${memberId}` : `character:${who.cardId}`
+				)
+			],
+			lineCount: 0
+		},
+		{
+			by: { sessionId: params.sessionId },
+			cause: "scene-compiler",
+			before: { participantCharacters: stored }
+		}
 	)
-	const same =
-		!mints &&
-		stored.size === proposed.size &&
-		[...proposed].every((id) => stored.has(id))
-	if (same) return false
-	await writeProposedCast(db, scene, proposal)
-	return true
+	return written !== null
 }
 
 /**
- * 🚧 The scene's cast as `proposeSceneCast` proposes it now — senders,
- * roster, names in the lines (no model), each with its evidence — and
- * nothing written: what Chronicle's *Open scene* card shows while the scene
- * is still being played. Null for a scene with no range.
+ * 🚧 The scene's cast as core's compiler lists it: whoever sent a line or a
+ * narrator line's speech tag names, minus those their place rules out
+ * (`castSpeakersOf`), each with its evidence — and nothing written: what
+ * Chronicle's *Open scene* card shows while the scene is still being played.
+ * The roster and the other names found in the lines make no participant. Null for a scene with no range.
  */
 export async function readCastProposal(
 	db: Db,
@@ -912,18 +1541,10 @@ export async function readCastProposal(
 			)
 		)
 	]
-	const [sessionChars, sessionPersonas, memberSeats] = await Promise.all([
-		db
-			.select({ characterId: schema.sessionCharacters.characterId })
-			.from(schema.sessionCharacters)
-			.where(
-				and(
-					eq(schema.sessionCharacters.sessionId, scene.sessionId),
-					eq(schema.sessionCharacters.isActive, true)
-				)
-			),
+	const [sessionPersonas, memberSeats] = await Promise.all([
 		db
 			.select({
+				id: schema.sessionPersonas.id,
 				personaId: schema.sessionPersonas.personaId,
 				castMemberId: schema.sessionPersonas.castMemberId
 			})
@@ -950,16 +1571,11 @@ export async function readCastProposal(
 				asc(schema.sessionCharacters.id)
 			)
 	])
-	const rosterIds = [
-		...sessionChars.map((r) => r.characterId),
-		...sessionPersonas.map((r) => r.personaId)
-	].filter((v): v is number => v != null)
-	const allIds = [...new Set([...ids, ...rosterIds])]
-	const cards = allIds.length
+	const cards = ids.length
 		? await db
 				.select()
 				.from(schema.characters)
-				.where(inArray(schema.characters.id, allIds))
+				.where(inArray(schema.characters.id, ids))
 		: []
 	// A persona is a character row (0132); it is named as the summarizer names
 	// a persona's line (`resolvePersonaName`), a character by its name.
@@ -1001,10 +1617,10 @@ export async function readCastProposal(
 	)
 	// A seat is keyed as the book's vocabulary keys its member (lane s4-ner,
 	// `annotations/index.ts` `loadVocabulary`): by its card while the card is
-	// live, as `cast_member:<id>` once the card is soft-deleted — so a seat
-	// whose card is gone and who is also named in the scene shows once, and a
-	// carded seat who is named still shows once. A member-less seat keeps its
-	// card key. Not behind the flip: it is the entity-key rule, not a seat ref.
+	// live, as `cast_member:<id>` once the card is soft-deleted. A member-less
+	// seat keeps its card key. A card-less line of a member whose card also
+	// has lines here (a side-character turn) takes that same key, so one
+	// person lists once.
 	const memberOfCard = new Map<number, number>()
 	for (const r of memberSeats)
 		if (
@@ -1028,8 +1644,29 @@ export async function readCastProposal(
 		member != null && deletedCards.has(cardId)
 			? `cast_member:${member}`
 			: `character:${cardId}`
+	const scenePair = { sessionId: scene.sessionId, lorebookId: scene.lorebookId }
+	const whoOf = await lineSpeakersOf(db, scenePair, lines)
+	// The card a member's lines are keyed by, when that card has a line here.
+	const cardOfMember = new Map<number, number>()
+	const bookCards = await castMemberCards(db, scene.lorebookId)
+	for (const [cardId, memberId] of bookCards.memberOf)
+		if (cards.some((c) => c.id === cardId) && !cardOfMember.has(memberId))
+			cardOfMember.set(memberId, cardId)
 	const turns: CastTurn[] = lines.map((l, i) => {
 		const sender = l.characterId ?? l.personaId
+		const cardless = sender == null ? whoOf.get(l.id) : undefined
+		if (cardless) {
+			const card = cardOfMember.get(cardless.memberId!)
+			return {
+				index: i + 1,
+				content: l.content,
+				senderKey:
+					card != null
+						? seatKey(card, cardless.memberId)
+						: `cast_member:${cardless.memberId}`,
+				senderName: cardless.memberName ?? undefined
+			}
+		}
 		const member =
 			l.castMemberId ??
 			(l.characterId != null
@@ -1044,12 +1681,6 @@ export async function readCastProposal(
 			senderName: sender != null ? nameOf.get(sender) : undefined
 		}
 	})
-	const roster: RosterMember[] = rosterIds
-		.filter((id) => nameOf.has(id))
-		.map((id) => ({
-			key: seatKey(id, memberOfCard.get(id) ?? memberOfPersona.get(id)),
-			name: nameOf.get(id)!
-		}))
 	let gazetteer
 	try {
 		const { loadVocabulary } = await import("$lib/server/annotations")
@@ -1057,14 +1688,62 @@ export async function readCastProposal(
 	} catch {
 		gazetteer = undefined
 	}
-	const proposal = proposeSceneCast(turns, { roster, gazetteer })
+	const proposal = proposeSceneCast(turns, { gazetteer })
+	// Whoever sent a line, minus those their place rules out: the sender
+	// tier only. A key is a sender's when a turn carries it.
+	const playerSeatOfPersona = new Map<number, number>()
+	for (const r of sessionPersonas)
+		if (r.personaId != null && !playerSeatOfPersona.has(r.personaId))
+			playerSeatOfPersona.set(r.personaId, r.id)
+	const { speakers, tagged } = await castSpeakersOf(db, scenePair, lines, {
+		seats: { memberOfCard, playerSeatOfPersona },
+		gazetteer: gazetteer ?? EMPTY_GAZETTEER
+	})
+	// Two deleted cards of one member share a `cast_member:` key: any of them counts.
+	const sendersOfKey = new Map<string, Set<string>>()
+	lines.forEach((l, i) => {
+		const key = turns[i]!.senderKey
+		const who = whoOf.get(l.id)
+		if (!key || !who) return
+		const refs = sendersOfKey.get(key)
+		if (refs) refs.add(speakerRefOf(who))
+		else sendersOfKey.set(key, new Set([speakerRefOf(who)]))
+	})
+	const listed = proposal.participants.filter(
+		(p) =>
+			p.evidence.some((e) => e.kind === "sender") &&
+			[...(sendersOfKey.get(p.key) ?? [])].some((ref) => speakers.has(ref))
+	)
+	// A member a narrator line's speech tag names (`narratorTagged`) is keyed by
+	// member, once: not again when their own lines already list them.
+	const memberOfKey = (key: string) => {
+		const ref = parseEntityKey(key)
+		return ref?.kind === "cast_member"
+			? ref.id
+			: ref?.kind === "character"
+				? bookCards.memberOf.get(ref.id)
+				: undefined
+	}
+	const listedMembers = new Set(listed.map((p) => memberOfKey(p.key)))
+	const tags = [...tagged].filter(([memberId]) => !listedMembers.has(memberId))
 	return {
-		participants: proposal.participants.map((p) => ({
-			key: p.key,
-			name: p.name,
-			evidenceLabel: p.evidenceLabel,
-			evidenceWords: evidenceWords(p.evidence)
-		})),
+		participants: [
+			...listed.map((p) => ({
+				key: p.key,
+				name: p.name,
+				evidenceLabel: p.evidenceLabel,
+				evidenceWords: evidenceWords(p.evidence)
+			})),
+			...tags.map(([memberId, t]) => {
+				const evidence = [{ kind: "speech-tag" as const, turns: t.positions }]
+				return {
+					key: `cast_member:${memberId}`,
+					name: t.name,
+					evidenceLabel: renderEvidence(evidence),
+					evidenceWords: evidenceWords(evidence)
+				}
+			})
+		],
 		lineCount: lines.length
 	}
 }
@@ -1250,7 +1929,11 @@ export async function appendSceneNote(
 		runId: string | null
 		messageId: number | null
 	}
-): Promise<{ sceneId: number; notes: NonNullable<SceneRow["notes"]> }> {
+): Promise<{
+	sceneId: number
+	notes: NonNullable<SceneRow["notes"]>
+	lockedNote?: string
+}> {
 	const { sessionId } = input
 	// 🚧 Provisional copy: the owner has not seen these sentences.
 	const text = typeof input.text === "string" ? input.text.trim() : ""
@@ -1260,13 +1943,35 @@ export async function appendSceneNote(
 	const off = await loreWritesOffRefusal(tx, sessionId)
 	if (off) throw new SceneBoundaryRefusal(off)
 
+	const sceneColumns = {
+		id: schema.scenes.id,
+		sessionId: schema.scenes.sessionId,
+		channel: schema.scenes.channel,
+		name: schema.scenes.name,
+		nameIsDefault: schema.scenes.nameIsDefault,
+		openedAtMessageId: schema.scenes.openedAtMessageId,
+		selectedMessageIds: schema.scenes.selectedMessageIds,
+		notes: schema.scenes.notes,
+		sceneLock: schema.scenes.sceneLock
+	}
 	let id: number
+	let target: {
+		id: number
+		sessionId: number | null
+		channel: string
+		name: string | null
+		nameIsDefault: boolean
+		openedAtMessageId: number | null
+		selectedMessageIds: number[]
+		notes: SceneRow["notes"]
+		sceneLock: boolean
+	}
 	if (input.sceneId !== undefined && input.sceneId !== null) {
 		const n = Number(input.sceneId)
 		const missing = `there is no scene ${String(input.sceneId)}.`
 		if (!Number.isSafeInteger(n) || n <= 0) throw new SceneBoundaryRefusal(missing)
 		const [row] = await tx
-			.select({ id: schema.scenes.id, sessionId: schema.scenes.sessionId })
+			.select(sceneColumns)
 			.from(schema.scenes)
 			.where(eq(schema.scenes.id, n))
 			.limit(1)
@@ -1274,10 +1979,11 @@ export async function appendSceneNote(
 		if (row.sessionId !== sessionId)
 			throw new SceneBoundaryRefusal("that scene belongs to another session.")
 		id = row.id
+		target = row
 	} else {
 		const channel = canonicalChannel(input.channel ?? "main")
 		const [open] = await tx
-			.select({ id: schema.scenes.id })
+			.select(sceneColumns)
 			.from(schema.scenes)
 			.where(
 				and(
@@ -1293,6 +1999,17 @@ export async function appendSceneNote(
 				"no scene is open to note; open one first (propose-scene-cue@1)."
 			)
 		id = open.id
+		target = open
+	}
+
+	// A locked scene takes no run's note: nothing is written and the run is told.
+	if (sceneLockedAgainstRuns(target)) {
+		const shown = (await sceneDisplayNames(tx, [target])).get(target.id)
+		return {
+			sceneId: id,
+			notes: target.notes ?? [],
+			lockedNote: RUN_LOCK_SENTENCES.scene(shown ?? target.name ?? "This scene")
+		}
 	}
 
 	const note = {
@@ -1451,7 +2168,11 @@ export async function openScene(
 		throw err
 	}
 
-	if (result.closed) await proposeAndWriteCast(db, result.closed)
+	if (result.closed)
+		await proposeAndWriteCast(db, result.closed, {
+			by: { sessionId },
+			cause: "scene-compiler"
+		})
 	const castProposal = await proposeAndWriteCast(db, result.scene)
 	/**
 	 * 🚧 The session moments (PLAN-layering D7, lane 6): the scene this
@@ -1558,7 +2279,10 @@ export async function closeScene(
 		)
 		return closeWithin(tx, scene, at)
 	})
-	const castProposal = await proposeAndWriteCast(db, closed)
+	const castProposal = await proposeAndWriteCast(db, closed, {
+		by: { sessionId: scene.sessionId },
+		cause: "scene-compiler"
+	})
 	// 🚧 The session moment (PLAN-layering D7, lane 6): `scene-closed`.
 	{
 		const { noteScene } = await import("$lib/server/pipelines/routines/moments")
@@ -1704,7 +2428,10 @@ export async function moveSceneBoundary(
 			)
 		throw err
 	}
-	const castProposal = await proposeAndWriteCast(db, moved)
+	const castProposal = await proposeAndWriteCast(db, moved, {
+		by: { sessionId: scene.sessionId },
+		cause: "scene-compiler"
+	})
 	return {
 		sessionId: scene.sessionId,
 		scene: await reread(db, moved.id),
@@ -1759,7 +2486,10 @@ export async function mergeScene(
 			.returning()
 		return row
 	})
-	const castProposal = await proposeAndWriteCast(db, merged)
+	const castProposal = await proposeAndWriteCast(db, merged, {
+		by: { sessionId: scene.sessionId },
+		cause: "scene-compiler"
+	})
 	return {
 		sessionId: scene.sessionId,
 		scene: await reread(db, merged.id),
@@ -1775,30 +2505,49 @@ export const DEFAULT_SUMMARIZE_SCENE_SPEC_ID = "core:spec/summarize-scene"
 
 /**
  * The summarize-scene spec for a session (PROPOSAL-live-scenes §13, item 3):
- * its genre's `summarize.scene`, else core's default. A genre whose spec is
- * not published here (its plugin uninstalled or disabled) falls back to the
- * default with a note the review shows. Resolution is the socket's, never
- * the view's.
+ * the one its registrations run on the summarize-scene action
+ * (`summaryRegistrationOf`), else its genre's declared `summarize.scene`, else core's
+ * default. A genre whose declared spec is not published here (its plugin
+ * uninstalled or disabled) falls back to the default with a note the review
+ * shows. Resolution is the socket's, never the view's.
  */
 export async function resolveSummarizeSceneSpec(
 	db: Db,
 	sessionId: number | null
 ): Promise<{ specId: string; note?: string }> {
 	if (sessionId == null) return { specId: DEFAULT_SUMMARIZE_SCENE_SPEC_ID }
+	const { summaryRegistrationOf } = await import("$lib/server/pipelines/registrations/summaryRegistration")
+	const registered = await summaryRegistrationOf(db, sessionId, "scene")
+	if (registered) return { specId: registered.spec }
 	const [row] = await db
 		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return resolveSummarizeSceneSpecOfGenre(db, row?.genreId ?? null)
+	return declaredSummarizeSceneSpec(db, row?.genreId ?? null)
 }
 
 /**
  * 🚧 The summarize-scene spec a genre's sessions resolve to — the same rule
  * `resolveSummarizeSceneSpec` applies to a session, from the genre id (the
- * settings form has no session yet when it creates one).
+ * settings form has no session yet when it creates one): the genre's own
+ * registration on the summarize-scene action, else its declared
+ * `summarize.scene`, else core's default.
  */
 export async function resolveSummarizeSceneSpecOfGenre(
+	db: Db,
+	genreId: string | null
+): Promise<{ specId: string; note?: string }> {
+	if (!genreId) return { specId: DEFAULT_SUMMARIZE_SCENE_SPEC_ID }
+	const { summaryRegistrationIn } = await import("$lib/server/pipelines/registrations/summaryRegistration")
+	const { genreRegistrations } = await import("$lib/server/pipelines/registrations/resolve")
+	const registered = summaryRegistrationIn(await genreRegistrations(db, genreId), "scene")
+	if (registered) return { specId: registered.spec }
+	return declaredSummarizeSceneSpec(db, genreId)
+}
+
+/** The genre's declared `summarize.scene` (a plugin genre's by its manifest), else core's default, with a note when the declared spec is not published. */
+async function declaredSummarizeSceneSpec(
 	db: Db,
 	genreId: string | null
 ): Promise<{ specId: string; note?: string }> {
@@ -1915,7 +2664,15 @@ export async function sceneHeaderOf(
 		const place = await scenePlaceOf(db, scene.sessionId, { messageId: opening })
 		if (place) out.place = place
 	}
-	const clock = sceneClockOf(scene, "opened")
+	// A lorebook that keeps no timeline puts no date in the preamble.
+	const { timelineOfBook, sessionTimelineOf } = await import("$lib/server/lorebooks/timeline")
+	const keepsTimeline =
+		scene.lorebookId != null
+			? await timelineOfBook(db, scene.lorebookId)
+			: scene.sessionId != null
+				? await sessionTimelineOf(db, scene.sessionId)
+				: true
+	const clock = keepsTimeline ? sceneClockOf(scene, "opened") : null
 	if (clock)
 		out.date = formatDate(dayOf(clock), await bookCalendarOf(db, scene.lorebookId))
 	// The preamble says each fact once: an automatic name already carries
@@ -1937,9 +2694,11 @@ export async function sceneHeaderOf(
  * moves/removes them, Forward restores them"; shapes §A-2). Always the scene
  * as it stood BEFORE: `removed` — it opened at the taken row and was deleted;
  * `changed` — it was reopened, its close moved, or its selection trimmed.
+ * A `removed` scene carries its cast as it stood; a record without one restores
+ * the scene row alone.
  */
 export type SceneBoundaryTaken =
-	| { kind: "removed"; row: SceneRow }
+	| { kind: "removed"; row: SceneRow; cast?: SceneCast }
 	| { kind: "changed"; row: SceneRow }
 
 /** 🚧 The notes one scene lost to `takeSceneNotesAt`, in their original order. */
@@ -2058,8 +2817,9 @@ export async function takeSceneBoundariesAt(
 		(x) => x.openedAtMessageId === messageId && notDone(x)
 	)) {
 		if (await laterLineStays(tx, sessionId, s.channel, messageId, leaving)) continue
+		const cast = await readSceneCast(s.id, tx)
 		await tx.delete(schema.scenes).where(eq(schema.scenes.id, s.id))
-		taken.push({ kind: "removed", row: s })
+		taken.push({ kind: "removed", row: s, cast })
 		const before = await lineBefore(tx, sessionId, s.channel, messageId)
 		const prior = (await sceneRows())
 			.filter(
@@ -2135,8 +2895,9 @@ export async function takeSceneBoundariesAt(
 			(id) => id !== messageId
 		)
 		if (s.openedAtMessageId == null && left.length === 0) {
+			const cast = await readSceneCast(s.id, tx)
 			await tx.delete(schema.scenes).where(eq(schema.scenes.id, s.id))
-			taken.push({ kind: "removed", row: s })
+			taken.push({ kind: "removed", row: s, cast })
 		} else {
 			await tx
 				.update(schema.scenes)
@@ -2157,6 +2918,29 @@ export async function restoreSceneBoundaries(tx: Db, taken: readonly SceneBounda
 	for (const t of [...taken].reverse()) {
 		if (t.kind === "removed") {
 			await tx.insert(schema.scenes).values(t.row)
+			// Put back as stored, with no Edit history row: restoring is not a new change.
+			// A member deleted since is skipped.
+			if (t.cast) {
+				const ids = [...t.cast.participantCharacters, ...t.cast.mentionedCharacters]
+				const live = new Set(
+					ids.length
+						? (
+								await tx
+									.select({ id: schema.lorebookBindings.id })
+									.from(schema.lorebookBindings)
+									.where(inArray(schema.lorebookBindings.id, ids))
+							).map((r) => r.id)
+						: []
+				)
+				await writeSceneCast(
+					t.row.id,
+					{
+						participantCharacters: t.cast.participantCharacters.filter((i) => live.has(i)),
+						mentionedCharacters: t.cast.mentionedCharacters.filter((i) => live.has(i))
+					},
+					tx
+				)
+			}
 		} else {
 			await tx.update(schema.scenes).set(t.row).where(eq(schema.scenes.id, t.row.id))
 		}

@@ -147,6 +147,29 @@ export const SEAT_REFUSALS = {
 	}
 }
 
+/** 🚧 The sentences a seat's move from a person to the AI is refused with (owner rulings S2, MV1, 2026-11-17). ★ copy for the owner. */
+export const SEAT_MOVE_REFUSALS = {
+	ownerOnly: "Only the session's owner can move a seat to the AI.",
+	seatGone: "That seat is no longer in the session.",
+	noCast: "That seat has no character or cast member, so the AI can't play it.",
+	/** A live character seat already holds the card or the member. */
+	alreadyAi(name: string): string {
+		return `${name} already has a seat the AI plays in this session.`
+	},
+	/** The seat is the head of the stored turn order. */
+	holdsTurn(name: string): string {
+		return `It's ${name}'s turn. Move the seat once that turn is taken.`
+	},
+	/** 🚧 The other direction: the AI's seat to a person (owner rulings S2, MV1, MV2, 2026-11-17). */
+	ownerOnlyToPerson: "Only the session's owner can move a seat to a person.",
+	/** 🚧 A character seat with no cast member cannot become a player seat. */
+	noMember: "That seat has no cast member, so it can't move to a person.",
+	/** 🚧 A live player seat already holds the card or the member. */
+	alreadyPerson(name: string): string {
+		return `${name} already has a seat a person plays in this session.`
+	}
+}
+
 /** 🚧 A member a seat just minted in an attached book: its name waits for `syncMintedSeatMembers`. */
 export interface MintedSeatMember {
 	cardId: number
@@ -457,7 +480,7 @@ async function cardNameOf(tx: Db, cardId: number): Promise<string> {
  * book, the session's own book or an ancestor's. `characterId` is its linked
  * card (null: card-less).
  */
-async function checkSeatMember(
+export async function checkSeatMember(
 	tx: Db,
 	book: SeatBook,
 	castMemberId: number
@@ -914,6 +937,8 @@ export async function seatPlayer(
 		 * card-less member named by it in the session's own book.
 		 */
 		mintCardless?: boolean
+		/** The maker of the member `mintCardless` mints; null when no person acts. */
+		createdBy?: number | null
 		/** As `seatCast`'s: a revive brings the seat back in play (true unless given); 🚧 false seats it benched. */
 		isActive?: boolean
 	}
@@ -973,7 +998,8 @@ export async function seatPlayer(
 				lorebookId,
 				characterId: null,
 				binding: await deriveNextBindingToken(lorebookId, tx),
-				name: input.seatName.trim()
+				name: input.seatName.trim(),
+				createdBy: input.createdBy ?? null
 			})
 			memberId = member.id
 			minted = true
@@ -1088,6 +1114,8 @@ export async function seatPlayer(
 						removedAt: null,
 						removedName: null,
 						isActive: input.isActive ?? true,
+						// A revived row names the person who seats it.
+						...(input.userId !== undefined ? { userId: input.userId } : {}),
 						...(input.position !== undefined
 							? { position: input.position }
 							: {}),
@@ -1983,16 +2011,24 @@ export function parseSeatRef(
  * the lowest `position`, then the lowest `id` (two live seats can share a
  * member until the boot pass settles them). An envoy seat is never returned.
  *
+ * With `opts.kind` only that table is searched, in the same order (live, then
+ * departed; position; id): a line's seat is found among the seats of the
+ * line's own kind, departed ones included — a person's line among player
+ * seats, an AI line among character seats. A `player-seat:` ref with
+ * `kind: "character"` answers null.
+ *
  * `cardFormRefInCast` (`pipelines/prompt/seatCards.ts`) mirrors this order over
  * a `session_cast` read in hand — change both together.
  */
 export async function seatOf(
 	tx: Db,
 	sessionId: number,
-	ref: string
+	ref: string,
+	opts?: { kind?: "character" | "player" }
 ): Promise<ResolvedSeat | null> {
 	const parsed = parseSeatRef(ref)
 	if (!parsed) return null
+	const kind = opts?.kind
 	const cs = schema.sessionCharacters
 	const ps = schema.sessionPersonas
 
@@ -2066,28 +2102,97 @@ export async function seatOf(
 
 	for (const departed of [false, true]) {
 		if (parsed.form === "player-seat") {
+			if (kind === "character") return null
 			const found = await playerSeat(eq(ps.id, parsed.id), departed)
 			if (found) return found
 			continue
 		}
-		const found =
-			parsed.form === "character"
-				? ((await characterSeat(
-						eq(cs.characterId, parsed.id),
+		const byCharacter = async () =>
+			kind === "player"
+				? null
+				: await characterSeat(
+						parsed.form === "character"
+							? eq(cs.characterId, parsed.id)
+							: eq(cs.castMemberId, parsed.id),
 						departed
-					)) ??
-					(await playerSeat(eq(ps.personaId, parsed.id), departed)))
-				: ((await characterSeat(
-						eq(cs.castMemberId, parsed.id),
+					)
+		const byPlayer = async () =>
+			kind === "character"
+				? null
+				: await playerSeat(
+						parsed.form === "character"
+							? eq(ps.personaId, parsed.id)
+							: eq(ps.castMemberId, parsed.id),
 						departed
-					)) ??
-					(await playerSeat(
-						eq(ps.castMemberId, parsed.id),
-						departed
-					)))
+					)
+		const found = (await byCharacter()) ?? (await byPlayer())
 		if (found) return found
 	}
 	return null
+}
+
+/**
+ * 🚧 The ONE writer of a seat's person after it is seated (owner rulings S1,
+ * S2, 2026-11-17): a character seat's seater (`seated_by_user_id`) or a player
+ * seat's player (`user_id`), on that live row of that session, in place. The
+ * caller has checked (`resolveSeatHandovers`); the write still matches only
+ * while the seat is held by `fromUserId` (null: by no one) and, with
+ * `requireActive`, is in play, so a seat that moved between check and write is
+ * not overwritten. Returns whether a row changed.
+ */
+export async function handOverSeat(
+	tx: Db,
+	args: {
+		sessionId: number
+		kind: "character" | "player"
+		seatId: number
+		fromUserId: number | null
+		toUserId: number
+		requireActive?: boolean
+	}
+): Promise<boolean> {
+	const { sessionId, kind, seatId, fromUserId, toUserId, requireActive } =
+		args
+	const rows =
+		kind === "character"
+			? await tx
+					.update(schema.sessionCharacters)
+					.set({ seatedByUserId: toUserId })
+					.where(
+						and(
+							eq(schema.sessionCharacters.id, seatId),
+							eq(schema.sessionCharacters.sessionId, sessionId),
+							isNull(schema.sessionCharacters.removedAt),
+							fromUserId == null
+								? isNull(schema.sessionCharacters.seatedByUserId)
+								: eq(
+										schema.sessionCharacters.seatedByUserId,
+										fromUserId
+									),
+							requireActive
+								? eq(schema.sessionCharacters.isActive, true)
+								: undefined
+						)
+					)
+					.returning({ id: schema.sessionCharacters.id })
+			: await tx
+					.update(schema.sessionPersonas)
+					.set({ userId: toUserId })
+					.where(
+						and(
+							eq(schema.sessionPersonas.id, seatId),
+							eq(schema.sessionPersonas.sessionId, sessionId),
+							isNull(schema.sessionPersonas.removedAt),
+							fromUserId == null
+								? isNull(schema.sessionPersonas.userId)
+								: eq(schema.sessionPersonas.userId, fromUserId),
+							requireActive
+								? eq(schema.sessionPersonas.isActive, true)
+								: undefined
+						)
+					)
+					.returning({ id: schema.sessionPersonas.id })
+	return rows.length > 0
 }
 
 /**
@@ -2121,4 +2226,632 @@ export async function seatActorOf(
 		if (owner != null) return owner
 	}
 	return cardOwner(seat.cardId)
+}
+
+/** A player seat as a move to the AI reads it. */
+export interface MovingSeat {
+	personaId: number | null
+	castMemberId: number | null
+	seatName: string | null
+	isActive: boolean
+}
+
+/** The name a moving seat is shown by: its seat name, else its card's, else its member's. */
+async function movingSeatName(
+	tx: Db,
+	sessionId: number,
+	seat: MovingSeat
+): Promise<string> {
+	if (seat.seatName?.trim()) return seat.seatName.trim()
+	if (seat.personaId != null) {
+		const card = (await cardsNow(tx, [seat.personaId])).get(seat.personaId)
+		const shown = card ? resolveCharacterName(card, "") : ""
+		if (shown) return shown
+	}
+	if (seat.castMemberId != null) {
+		const shown = (
+			(await membersAsRead(tx, [seat.castMemberId], { sessionId })).get(
+				seat.castMemberId
+			)?.shownName ?? ""
+		).trim()
+		if (shown) return shown
+	}
+	return "That seat"
+}
+
+/**
+ * 🚧 Whether the player seat `playerSeatId` may move to the AI now (owner rulings
+ * S2, MV1, 2026-11-17). Reads only, through the handle given. Refused in words:
+ * a seat not live in the session; one with no card and no member; one whose
+ * card or member a live character seat already holds, benched or not (two seats
+ * are never merged); one at the head of the stored turn order; any counted run
+ * in progress in the session. Otherwise the seat as it stands.
+ */
+export async function seatMoveCheck(
+	tx: Db,
+	sessionId: number,
+	playerSeatId: number
+): Promise<{ ok: false; refusal: string } | { ok: true; seat: MovingSeat }> {
+	const sp = schema.sessionPersonas
+	const cs = schema.sessionCharacters
+	const R = SEAT_MOVE_REFUSALS
+	const [seat] = await tx
+		.select({
+			personaId: sp.personaId,
+			castMemberId: sp.castMemberId,
+			seatName: sp.seatName,
+			isActive: sp.isActive
+		})
+		.from(sp)
+		.where(
+			and(
+				eq(sp.id, playerSeatId),
+				eq(sp.sessionId, sessionId),
+				isNull(sp.removedAt)
+			)
+		)
+		.limit(1)
+	if (!seat) return { ok: false, refusal: R.seatGone }
+	if (seat.castMemberId == null && seat.personaId == null)
+		return { ok: false, refusal: R.noCast }
+	const holders = [
+		seat.personaId != null ? eq(cs.characterId, seat.personaId) : undefined,
+		seat.castMemberId != null
+			? eq(cs.castMemberId, seat.castMemberId)
+			: undefined
+	].filter((c) => c !== undefined)
+	const [heldByAi] = await tx
+		.select({ id: cs.id })
+		.from(cs)
+		.where(
+			and(
+				eq(cs.sessionId, sessionId),
+				isNull(cs.removedAt),
+				isNull(cs.envoySlug),
+				or(...holders)
+			)
+		)
+		.limit(1)
+	if (heldByAi)
+		return {
+			ok: false,
+			refusal: R.alreadyAi(await movingSeatName(tx, sessionId, seat))
+		}
+	const { readStoredTurnOrder } = await import("$lib/server/sessions/turnOrder")
+	const head = (await readStoredTurnOrder(tx, sessionId)).order[0]?.ref
+	if (head === `player-seat:${playerSeatId}`)
+		return {
+			ok: false,
+			refusal: R.holdsTurn(await movingSeatName(tx, sessionId, seat))
+		}
+	const { quietRefusal } = await import(
+		"$lib/server/pipelines/runtime/runsInProgress"
+	)
+	const busy = await quietRefusal(tx, sessionId)
+	if (busy) return { ok: false, refusal: busy }
+	return { ok: true, seat }
+}
+
+/** A character seat as a move to a person reads it. */
+export interface MovingCharacterSeat {
+	characterId: number | null
+	castMemberId: number
+	isActive: boolean
+	seatedByUserId: number | null
+}
+
+/** The name a moving character seat is shown by: its member as read, else its card's, else "That seat". */
+async function movingCharacterSeatName(
+	tx: Db,
+	sessionId: number,
+	seat: { characterId: number | null; castMemberId: number | null }
+): Promise<string> {
+	if (seat.castMemberId != null) {
+		const shown = (
+			(await membersAsRead(tx, [seat.castMemberId], { sessionId })).get(
+				seat.castMemberId
+			)?.shownName ?? ""
+		).trim()
+		if (shown) return shown
+	}
+	if (seat.characterId != null) {
+		const card = (await cardsNow(tx, [seat.characterId])).get(seat.characterId)
+		const shown = card ? resolveCharacterName(card, "") : ""
+		if (shown) return shown
+	}
+	return "That seat"
+}
+
+/**
+ * 🚧 Whether the character seat `characterSeatId` may move to `toUserId`'s
+ * Personas group now (owner rulings S2, MV1, MV2, 2026-11-17). Reads only,
+ * through the handle given. Refused in words, in this order: a seat not live in
+ * the session or an envoy seat; one with no cast member; a person who is not
+ * in the session or only watches; a card that is neither the session owner's
+ * nor `toUserId`'s (a guest's card goes only back to that guest, a card-less
+ * member and the owner's card to anyone who plays); a live player seat, in play
+ * or benched, already on the card or the member (two seats are never merged);
+ * a seat at the head of the stored turn order; any counted run in progress in
+ * the session. Otherwise the seat as it stands.
+ */
+export async function seatMoveToPersonCheck(
+	tx: Db,
+	sessionId: number,
+	characterSeatId: number,
+	toUserId: number
+): Promise<
+	{ ok: false; refusal: string } | { ok: true; seat: MovingCharacterSeat }
+> {
+	const sp = schema.sessionPersonas
+	const cs = schema.sessionCharacters
+	const R = SEAT_MOVE_REFUSALS
+	const [seat] = await tx
+		.select({
+			characterId: cs.characterId,
+			castMemberId: cs.castMemberId,
+			isActive: cs.isActive,
+			seatedByUserId: cs.seatedByUserId
+		})
+		.from(cs)
+		.where(
+			and(
+				eq(cs.id, characterSeatId),
+				eq(cs.sessionId, sessionId),
+				isNull(cs.removedAt),
+				isNull(cs.envoySlug)
+			)
+		)
+		.limit(1)
+	if (!seat) return { ok: false, refusal: R.seatGone }
+	if (seat.castMemberId == null) return { ok: false, refusal: R.noMember }
+	const castMemberId = seat.castMemberId
+
+	const { seatPersonRefusal, PLAYER_SEATS_FOR_REFUSALS } = await import(
+		"$lib/server/sessions/guestSeats"
+	)
+	const personRefusal = await seatPersonRefusal(tx, sessionId, toUserId)
+	if (personRefusal) return { ok: false, refusal: personRefusal }
+
+	const name = await movingCharacterSeatName(tx, sessionId, seat)
+	if (seat.characterId != null) {
+		const [card] = await tx
+			.select({ userId: schema.characters.userId })
+			.from(schema.characters)
+			.where(eq(schema.characters.id, seat.characterId))
+			.limit(1)
+		const [session] = await tx
+			.select({ userId: schema.sessions.userId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (
+			card?.userId != null &&
+			card.userId !== session?.userId &&
+			card.userId !== toUserId
+		)
+			return { ok: false, refusal: PLAYER_SEATS_FOR_REFUSALS.notYourCard(name) }
+	}
+
+	const holders = [
+		seat.characterId != null ? eq(sp.personaId, seat.characterId) : undefined,
+		eq(sp.castMemberId, castMemberId)
+	].filter((c) => c !== undefined)
+	const [heldByPerson] = await tx
+		.select({ id: sp.id })
+		.from(sp)
+		.where(
+			and(eq(sp.sessionId, sessionId), isNull(sp.removedAt), or(...holders))
+		)
+		.limit(1)
+	if (heldByPerson)
+		return { ok: false, refusal: R.alreadyPerson(name) }
+
+	const [{ readStoredTurnOrder }, { hostSeatRefOf }] = await Promise.all([
+		import("$lib/server/sessions/turnOrder"),
+		import("$lib/server/pipelines/prompt/seatCards")
+	])
+	const head = (await readStoredTurnOrder(tx, sessionId)).order[0]?.ref
+	const ref = hostSeatRefOf({
+		kind: "character",
+		seatId: characterSeatId,
+		castMemberId,
+		cardId: seat.characterId
+	})
+	if (ref != null && head === ref)
+		return { ok: false, refusal: R.holdsTurn(name) }
+
+	const { quietRefusal } = await import(
+		"$lib/server/pipelines/runtime/runsInProgress"
+	)
+	const busy = await quietRefusal(tx, sessionId)
+	if (busy) return { ok: false, refusal: busy }
+	return { ok: true, seat: { ...seat, castMemberId } }
+}
+
+/**
+ * 🚧 The ONE writer of a seat's move between the two groups (owner rulings S2,
+ * MV1, MV2, 2026-11-17), in either direction; the row it leaves is
+ * soft-removed (the row stays: its lines resolve it). It runs inside the
+ * caller's transaction, using only `tx`, and throws a sentence
+ * (`SEAT_MOVE_REFUSALS`, a seat refusal, a run in progress) so the transaction
+ * rolls back; the caller has checked (`resolveSeatMoves`), and `seen` is what
+ * the check saw.
+ *
+ * To the AI (`playerSeatId`): the player seat becomes a character seat of the
+ * same card or cast member. It is seated by the card's owner when that is not
+ * the session's owner (a guest's card stays the guest's), else by the session's
+ * owner; it copies the bench state and goes after the last character seat; a
+ * departed character seat of the card or member is revived.
+ *
+ * To a person (`characterSeatId`, `toUserId`): the character seat becomes a
+ * player seat of the member's linked card, or a card-less one, played by
+ * `toUserId`. It copies the bench state and goes after the last live player
+ * seat; a departed player seat of the card or member is revived, and a revived
+ * card-less one is handed to `toUserId` when it stored another person.
+ *
+ * Either way every ref of the seat moves to the other seat
+ * (`seatMoveTranslator`) except a line's stamp and blocks, and the seat leaves
+ * the stored turn order, which the member events the caller announces
+ * recompute.
+ */
+export async function moveSeatKind(
+	tx: Db,
+	input:
+		| {
+				sessionId: number
+				playerSeatId: number
+				seen: { personaId: number | null; castMemberId: number | null }
+		  }
+		| {
+				sessionId: number
+				characterSeatId: number
+				toUserId: number
+				seen: { characterId: number | null; castMemberId: number | null }
+		  }
+): Promise<
+	| {
+			ok: true
+			to: "character"
+			changes: SeatChange[]
+			mintedMembers: MintedSeatMember[]
+			characterSeatId: number
+			castMemberId: number
+	  }
+	| {
+			ok: true
+			to: "player"
+			changes: SeatChange[]
+			mintedMembers: MintedSeatMember[]
+			playerSeatId: number
+			castMemberId: number
+	  }
+> {
+	return "characterSeatId" in input
+		? moveCharacterSeatToPerson(tx, input)
+		: movePlayerSeatToAi(tx, input)
+}
+
+async function moveCharacterSeatToPerson(
+	tx: Db,
+	input: {
+		sessionId: number
+		characterSeatId: number
+		toUserId: number
+		seen: { characterId: number | null; castMemberId: number | null }
+	}
+): Promise<{
+	ok: true
+	to: "player"
+	changes: SeatChange[]
+	mintedMembers: MintedSeatMember[]
+	playerSeatId: number
+	castMemberId: number
+}> {
+	const { sessionId, characterSeatId, toUserId, seen } = input
+	const sp = schema.sessionPersonas
+	const cs = schema.sessionCharacters
+	const R = SEAT_MOVE_REFUSALS
+
+	const checked = await seatMoveToPersonCheck(
+		tx,
+		sessionId,
+		characterSeatId,
+		toUserId
+	)
+	if (!checked.ok) throw new Error(checked.refusal)
+	const { seat } = checked
+	if (
+		seat.characterId !== seen.characterId ||
+		seat.castMemberId !== seen.castMemberId
+	)
+		throw new Error(R.seatGone)
+
+	const live = await tx
+		.select({ position: sp.position })
+		.from(sp)
+		.where(and(eq(sp.sessionId, sessionId), isNull(sp.removedAt)))
+	const position = Math.max(-1, ...live.map((r) => r.position ?? 0)) + 1
+
+	const seated = await seatPlayer(tx, {
+		sessionId,
+		personaId: null,
+		castMemberId: seat.castMemberId,
+		userId: toUserId,
+		position,
+		isActive: seat.isActive
+	})
+	// A revived card-less row keeps its stored person: hand it over.
+	const [storedRow] = await tx
+		.select({ userId: sp.userId })
+		.from(sp)
+		.where(eq(sp.id, seated.seatId))
+		.limit(1)
+	if (storedRow?.userId !== toUserId) {
+		const handed = await handOverSeat(tx, {
+			sessionId,
+			kind: "player",
+			seatId: seated.seatId,
+			fromUserId: storedRow?.userId ?? null,
+			toUserId
+		})
+		if (!handed) throw new Error(R.seatGone)
+	}
+
+	// The moved seat leaves the order; the recompute fills it.
+	const [{ readStoredTurnOrder, writeTurnOrder }, { hostSeatRefOf }] =
+		await Promise.all([
+			import("$lib/server/sessions/turnOrder"),
+			import("$lib/server/pipelines/prompt/seatCards")
+		])
+	const ref = hostSeatRefOf({
+		kind: "character",
+		seatId: characterSeatId,
+		castMemberId: seat.castMemberId,
+		cardId: seat.characterId
+	})
+	const order = await readStoredTurnOrder(tx, sessionId)
+	const kept = (r: { ref: unknown }) => r.ref !== ref
+	if (!order.order.every(kept) || !order.candidates.every(kept))
+		await writeTurnOrder(tx, sessionId, {
+			...order,
+			order: order.order.filter(kept),
+			candidates: order.candidates.filter(kept)
+		})
+
+	const { rekeySessionRefs, seatMoveTranslator } = await import(
+		"$lib/server/sessions/seatKeys"
+	)
+	await rekeySessionRefs(
+		tx,
+		sessionId,
+		seatMoveTranslator({
+			playerSeatId: seated.seatId,
+			castMemberId: seat.castMemberId,
+			to: "player"
+		})
+	)
+
+	const removedName = await movingCharacterSeatName(tx, sessionId, seat)
+	await tx
+		.update(cs)
+		.set({ removedAt: new Date(), removedName })
+		.where(
+			and(
+				eq(cs.id, characterSeatId),
+				eq(cs.sessionId, sessionId),
+				isNull(cs.removedAt)
+			)
+		)
+
+	return {
+		ok: true,
+		to: "player",
+		changes: [
+			{
+				kind: "character",
+				change: "removed",
+				seatId: characterSeatId,
+				castMemberId: seat.castMemberId,
+				cardId: seat.characterId
+			},
+			...seated.changes
+		],
+		mintedMembers: seated.mintedMembers,
+		playerSeatId: seated.seatId,
+		castMemberId: seat.castMemberId
+	}
+}
+
+async function movePlayerSeatToAi(
+	tx: Db,
+	input: {
+		sessionId: number
+		playerSeatId: number
+		seen: { personaId: number | null; castMemberId: number | null }
+	}
+): Promise<{
+	ok: true
+	to: "character"
+	changes: SeatChange[]
+	mintedMembers: MintedSeatMember[]
+	characterSeatId: number
+	castMemberId: number
+}> {
+	const { sessionId, playerSeatId, seen } = input
+	const sp = schema.sessionPersonas
+	const cs = schema.sessionCharacters
+	const R = SEAT_MOVE_REFUSALS
+
+	const checked = await seatMoveCheck(tx, sessionId, playerSeatId)
+	if (!checked.ok) throw new Error(checked.refusal)
+	const { seat } = checked
+	if (
+		seat.personaId !== seen.personaId ||
+		seat.castMemberId !== seen.castMemberId
+	)
+		throw new Error(R.seatGone)
+
+	const { readStoredTurnOrder, writeTurnOrder } = await import(
+		"$lib/server/sessions/turnOrder"
+	)
+	const ref = `player-seat:${playerSeatId}`
+	const order = await readStoredTurnOrder(tx, sessionId)
+
+	const [session] = await tx
+		.select({ userId: schema.sessions.userId, turnTally: schema.sessions.turnTally })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) throw new Error(R.seatGone)
+	let seatedBy = session.userId
+	if (seat.personaId != null) {
+		const [card] = await tx
+			.select({ userId: schema.characters.userId })
+			.from(schema.characters)
+			.where(eq(schema.characters.id, seat.personaId))
+			.limit(1)
+		if (card?.userId != null && card.userId !== session.userId)
+			seatedBy = card.userId
+	}
+
+	const live = await tx
+		.select({ position: cs.position })
+		.from(cs)
+		.where(
+			and(eq(cs.sessionId, sessionId), isNull(cs.removedAt), isNull(cs.envoySlug))
+		)
+	const position = Math.max(-1, ...live.map((r) => r.position ?? 0)) + 1
+
+	const seated = await seatCast(tx, {
+		sessionId,
+		...(seat.castMemberId != null
+			? { castMemberId: seat.castMemberId }
+			: { cardId: seat.personaId }),
+		seatedBy,
+		position,
+		isActive: seat.isActive
+	})
+	if (!seated.ok) throw new Error(seated.refusal)
+	if (seated.castMemberId == null) throw new Error(R.noCast)
+	const castMemberId = seated.castMemberId
+
+	// The moved seat leaves the order and the tally; the recompute fills them.
+	const kept = (r: { ref: unknown }) => r.ref !== ref
+	if (!order.order.every(kept) || !order.candidates.every(kept))
+		await writeTurnOrder(tx, sessionId, {
+			...order,
+			order: order.order.filter(kept),
+			candidates: order.candidates.filter(kept)
+		})
+	const { readTurnTally, writeTurnTally } = await import(
+		"$lib/server/pipelines/routines/turnTally"
+	)
+	const tally = readTurnTally({ turnTally: session.turnTally })
+	let tallyMoved = false
+	for (const lane of Object.values(tally.lanes)) {
+		if (!lane.persons.includes(ref)) continue
+		lane.persons = lane.persons.filter((p) => p !== ref)
+		tallyMoved = true
+	}
+	if (tallyMoved) await writeTurnTally(tx, sessionId, tally)
+
+	const { rekeySessionRefs, seatMoveTranslator } = await import(
+		"$lib/server/sessions/seatKeys"
+	)
+	await rekeySessionRefs(
+		tx,
+		sessionId,
+		seatMoveTranslator({ playerSeatId, castMemberId })
+	)
+
+	const removedName = await movingSeatName(tx, sessionId, seat)
+	await tx
+		.update(sp)
+		.set({ removedAt: new Date(), removedName })
+		.where(
+			and(eq(sp.id, playerSeatId), eq(sp.sessionId, sessionId), isNull(sp.removedAt))
+		)
+
+	return {
+		ok: true,
+		changes: [
+			{
+				kind: "player",
+				change: "removed",
+				seatId: playerSeatId,
+				castMemberId: seat.castMemberId,
+				cardId: seat.personaId
+			},
+			...seated.changes
+		],
+		mintedMembers: seated.mintedMembers,
+		to: "character",
+		characterSeatId: seated.seatId,
+		castMemberId
+	}
+}
+
+/**
+ * 🚧 Who may speak as a card in a session (owner rulings PS1, S1, 2026-11-17).
+ * The person of a player seat is its `user_id`, and a row from before that
+ * column (`user_id` null) reads the card's owner. With a seat on the card here
+ * its person speaks as it, when they own the card or the card's owner is the
+ * session's owner and the seat is live — the owner's card seated for a guest.
+ * With no seat on it here, only the card's owner; so too when the seat is
+ * removed or its person is not a member of the session. A guest gains nothing over
+ * the card outside that seat: not its editor, its library row or another
+ * session. So the session's owner, whose card a guest holds, is refused; a
+ * guest's own card in their own seat is unchanged; a guest's card is never
+ * spoken by anyone else. A card with a removed player seat here and a live
+ * character seat, no live player seat, is spoken by no person: the AI plays it
+ * (★K-2: with both seats live, the player seat's person still speaks as it). A
+ * card that never had a player seat here stays its owner's.
+ */
+export async function maySpeakAsCard(
+	dbh: Db,
+	q: { sessionId: number; cardId: number; userId: number }
+): Promise<boolean> {
+	const sp = schema.sessionPersonas
+	const [row] = await dbh
+		.select({
+			cardOwner: schema.characters.userId,
+			sessionOwner: schema.sessions.userId,
+			seatId: sp.id,
+			seatUser: sp.userId,
+			removedAt: sp.removedAt,
+			aiHolds: sql<boolean>`exists (select 1 from ${schema.sessionCharacters} where ${schema.sessionCharacters.sessionId} = ${q.sessionId} and ${schema.sessionCharacters.characterId} = ${schema.characters.id} and ${schema.sessionCharacters.removedAt} is null and ${schema.sessionCharacters.envoySlug} is null)`,
+			personLive: sql<boolean>`exists (select 1 from ${sp} sp2 where sp2.session_id = ${q.sessionId} and sp2.persona_id = ${schema.characters.id} and sp2.removed_at is null)`,
+			personRemoved: sql<boolean>`exists (select 1 from ${sp} sp3 where sp3.session_id = ${q.sessionId} and sp3.persona_id = ${schema.characters.id} and sp3.removed_at is not null)`
+		})
+		.from(schema.characters)
+		.innerJoin(schema.sessions, eq(schema.sessions.id, q.sessionId))
+		.leftJoin(
+			sp,
+			and(eq(sp.personaId, schema.characters.id), eq(sp.sessionId, q.sessionId))
+		)
+		.where(eq(schema.characters.id, q.cardId))
+		.limit(1)
+	if (!row) return false
+	if (row.aiHolds && row.personRemoved && !row.personLive) return false
+	const ownsCard = row.cardOwner === q.userId
+	if (row.seatId == null) return ownsCard
+	// A removed seat, or one whose person has left the session, is the card's
+	// owner's again: the owner is never locked out of their own card.
+	let person = row.seatUser ?? row.cardOwner
+	if (row.removedAt != null) person = row.cardOwner
+	else if (person !== row.sessionOwner && person !== row.cardOwner) {
+		const [guest] = await dbh
+			.select({ userId: schema.sessionGuests.userId })
+			.from(schema.sessionGuests)
+			.where(
+				and(
+					eq(schema.sessionGuests.sessionId, q.sessionId),
+					eq(schema.sessionGuests.userId, person)
+				)
+			)
+			.limit(1)
+		if (!guest) person = row.cardOwner
+	}
+	if (person !== q.userId) return false
+	return ownsCard || (row.cardOwner === row.sessionOwner && row.removedAt == null)
 }

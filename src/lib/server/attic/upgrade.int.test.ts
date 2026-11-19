@@ -21,7 +21,7 @@ import path from "node:path"
 import { sql } from "drizzle-orm"
 import { rawRows } from "$lib/server/db/rawRows"
 import { splitKeys } from "$lib/server/pipelines/ranking/signals"
-import { bootFixture, fixtureManifest, placeFixture, runUpgradeTasks } from "./testFixture"
+import { bootFixture, fixtureManifest, placeFixture, runUpgradeTasks, sessionStepValues } from "./testFixture"
 import { ATTIC_SCHEMA, atticExists } from "./index"
 import { STRATEGY_REBINDS } from "./finish"
 
@@ -648,11 +648,16 @@ describe("connections and sampling (0096/0097/0105/0114/0127)", () => {
 	test("a chat's own sampling config is its session's sampling pick, the panel row on each text generate step", async () => {
 		// Named by its live row, so a config whose id moved in the restore is
 		// read through the id map.
-		const picks = await q(
-			`SELECT p.slug, o.node_key, o.value, o.path FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
-			 WHERE o.scope_kind = 'session' AND o.scope_id = $1 AND o.slot = 'sampling'`,
-			ids.chats.visibility
-		)
+		const picks = (await sessionStepValues(db, ids.chats.visibility, { slot: "sampling" })).map((p) => ({
+			slug: p.slug,
+			node_key: p.nodeKey,
+			value: p.value,
+			path: p.path
+		}))
+		// On the session's registration values, never an override row.
+		expect(
+			await count(`pipeline_node_overrides WHERE scope_kind = 'session' AND scope_id = ${Number(ids.chats.visibility)}`)
+		).toBe(0)
 		expect(picks.map((p) => p.slug)).toEqual(
 			expect.arrayContaining(["core:spec/story-respond", "core:spec/story-narrate"])
 		)

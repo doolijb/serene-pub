@@ -463,6 +463,13 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 		// Both roles survive independently — this pair is exactly why the
 		// unique index includes `role`.
 		expect(afterScene.mentionedCharacters).toEqual([bound.id])
+		// The merge remaps ids; the cast did not change, so no Edit history row.
+		expect(
+			await testDb
+				.select()
+				.from(schema.loreRedlines)
+				.where(eq(schema.loreRedlines.sceneId, scene.id))
+		).toEqual([])
 	})
 
 	test("appends the absorbed identity to absorbedAliases (not aliases) — survives a subsequent character sync", async () => {

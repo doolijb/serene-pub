@@ -108,9 +108,15 @@ export const starterKitsSaveFromBookHandler: Handler<
 		).catch(() => {
 			throw new Error(STARTER_KIT_SENTENCES.saveOwnBook)
 		})
-		// A primer row is read-only (m2e-F-D): its sentence, not "save one of your own books".
-		const primerProblem = await primerRowEditProblem(db as unknown as Db, book.id)
-		if (primerProblem) throw new Error(primerProblem)
+		// A pure copy writes nothing in the source, so a provided lorebook of kind book may be saved; a primer row keeps its sentence.
+		const [kindRow] = await db
+			.select({ kind: schema.lorebooks.kind })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, book.id))
+		if (kindRow?.kind !== "book") {
+			const primerProblem = await primerRowEditProblem(db as unknown as Db, book.id)
+			if (primerProblem) throw new Error(primerProblem)
+		}
 		const [row] = await db
 			.select({
 				kind: schema.lorebooks.kind,

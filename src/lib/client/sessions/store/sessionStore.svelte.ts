@@ -408,6 +408,14 @@ export function createSessionStore() {
 					return
 				}
 				const routine = frame.routine ?? held?.routine
+				// A registered run's frame (`since` set) carries all five fields afresh, so an
+				// absent `parked` clears; a relay frame leaves them as held.
+				const registered = frame.since !== undefined
+				const name = registered ? frame.name : (frame.name ?? held?.name)
+				const since = registered ? frame.since : held?.since
+				const readsMessageId = registered ? frame.readsMessageId : held?.readsMessageId
+				const parked = registered ? frame.parked : held?.parked
+				const mayStop = registered ? frame.mayStop : (frame.mayStop ?? held?.mayStop)
 				runs.set(frame.runId, {
 					sessionId: frame.sessionId,
 					runId: frame.runId,
@@ -415,7 +423,12 @@ export function createSessionStore() {
 					status: frame.status,
 					...(frame.reply ? { reply: frame.reply } : {}),
 					...(frame.lineBound ? { lineBound: true as const } : {}),
-					...(routine ? { routine } : {})
+					...(routine ? { routine } : {}),
+					...(name !== undefined ? { name } : {}),
+					...(since !== undefined ? { since } : {}),
+					...(readsMessageId !== undefined ? { readsMessageId } : {}),
+					...(parked ? { parked: true as const } : {}),
+					...(mayStop !== undefined ? { mayStop } : {})
 				})
 			})
 		},

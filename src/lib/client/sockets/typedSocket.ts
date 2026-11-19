@@ -1466,7 +1466,7 @@ export type SocketEventMap = {
 		response: Sockets.Sessions.ConvertRuleset.Response
 	}
 	// The session data panel: the whole annex against its declarations,
-	// for the session's owner and administrators. Request-only.
+	// for the session's owner alone (G6). Request-only.
 	"sessions:annexInspect": {
 		params: Sockets.Sessions.AnnexInspect.Params
 		response: Sockets.Sessions.AnnexInspect.Response
@@ -1475,6 +1475,12 @@ export type SocketEventMap = {
 	"sessions:annexInspect:error": {
 		params: Sockets.Sessions.AnnexInspect.Error
 		response: Sockets.Sessions.AnnexInspect.Error
+	}
+	// 🚧 The session's cast to take (G3, G4): the free card-less members a
+	// guest may take a seat for. Any member of the session; SCOPED.
+	"sessions:castToTake": {
+		params: Sockets.Sessions.CastToTake.Params
+		response: Sockets.Sessions.CastToTake.Response
 	}
 	// Server → client only (R56): a package's event, recorded in the session.
 	"sessions:recordedEvent": {
@@ -3762,6 +3768,10 @@ export type SocketEventMap = {
 		params: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params
 		response: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
 	}
+	"systemSettings:updateStepTimeLimitsOff": {
+		params: Sockets.SystemSettings.UpdateStepTimeLimitsOff.Params
+		response: Sockets.SystemSettings.UpdateStepTimeLimitsOff.Response
+	}
 	"systemSettings:updateDefaultLanguage": {
 		params: Sockets.SystemSettings.UpdateDefaultLanguage.Params
 		response: Sockets.SystemSettings.UpdateDefaultLanguage.Response
@@ -4444,6 +4454,23 @@ export type SocketEventMap = {
 	"characterVersions:restoreRedline:error": {
 		params: never
 		response: Sockets.CharacterVersions.RestoreRedline.ErrorResponse
+	}
+	// 🚧 A scene's Edit history: asked and restored; never pushed.
+	"scenes:redlines": {
+		params: Sockets.Scenes.Redlines.Params
+		response: Sockets.Scenes.Redlines.Response
+	}
+	"scenes:redlines:error": {
+		params: never
+		response: Sockets.Scenes.Redlines.ErrorResponse
+	}
+	"scenes:restoreRedline": {
+		params: Sockets.Scenes.RestoreRedline.Params
+		response: Sockets.Scenes.RestoreRedline.Response
+	}
+	"scenes:restoreRedline:error": {
+		params: never
+		response: Sockets.Scenes.RestoreRedline.ErrorResponse
 	}
 	"characterVersions:clearRedlines": {
 		params: Sockets.CharacterVersions.ClearRedlines.Params
@@ -5196,6 +5223,32 @@ export type SocketEventMap = {
 	"lorebookState:set:error": {
 		params: Sockets.LorebookState.Set.ErrorResponse
 		response: Sockets.LorebookState.Set.ErrorResponse
+	}
+	// 🚧 Who knows which entry (the mark and the hand ties): the lorebook
+	// row's owner only; every reply carries `lorebookId`.
+	"entryKnowledge:list": {
+		params: Sockets.EntryKnowledge.List.Params
+		response: Sockets.EntryKnowledge.List.Response
+	}
+	"entryKnowledge:list:error": {
+		params: Sockets.EntryKnowledge.List.ErrorResponse
+		response: Sockets.EntryKnowledge.List.ErrorResponse
+	}
+	"entryKnowledge:setCommonKnowledge": {
+		params: Sockets.EntryKnowledge.SetCommonKnowledge.Params
+		response: Sockets.EntryKnowledge.SetCommonKnowledge.Response
+	}
+	"entryKnowledge:setCommonKnowledge:error": {
+		params: Sockets.EntryKnowledge.SetCommonKnowledge.ErrorResponse
+		response: Sockets.EntryKnowledge.SetCommonKnowledge.ErrorResponse
+	}
+	"entryKnowledge:setTie": {
+		params: Sockets.EntryKnowledge.SetTie.Params
+		response: Sockets.EntryKnowledge.SetTie.Response
+	}
+	"entryKnowledge:setTie:error": {
+		params: Sockets.EntryKnowledge.SetTie.ErrorResponse
+		response: Sockets.EntryKnowledge.SetTie.ErrorResponse
 	}
 	// 🚧 A card's own stats, with no session (card dowry §B.4): the character
 	// form's Stats tab. `get`/`set`/`setSheets` answer with the card's read;

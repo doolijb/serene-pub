@@ -76,10 +76,13 @@ import {
 } from "@serene-pub/sdk"
 import {
 	cascadeSessionFields,
+	genreFieldsFor,
 	getSessionGenre,
 	STANDARD_GENRE_ID
 } from "$lib/server/pipelines/entities/sessionGenres"
+import type { CoreHostServices } from "$lib/server/pipelines/runtime/host.types"
 import { channelsOf } from "$lib/server/messages/channels"
+import { sessionTimelineOf } from "$lib/server/lorebooks/timeline"
 import {
 	resolvePlayerLabel,
 	storedPlayerLabel
@@ -93,7 +96,8 @@ import {
  */
 export async function resolveSessionSettings(
 	db: Db,
-	sessionId: number
+	sessionId: number,
+	opts: { host?: CoreHostServices } = {}
 ): Promise<SessionSettingsV1 | null> {
 	const [session] = await db
 		.select()
@@ -156,7 +160,7 @@ export async function resolveSessionSettings(
 				)
 			)
 			.orderBy(asc(schema.pipelineNodeOverrides.id)),
-		readCast(db, sessionId)
+		readCast(db, sessionId, opts.host)
 	])
 
 	/**
@@ -234,6 +238,8 @@ export async function resolveSessionSettings(
 		...(playerLabel ? { playerLabel } : {}),
 		scenario: session.scenario ?? null,
 		lorebookId: session.lorebookId ?? null,
+		// 🚧 R-F: the governing lorebook's Timeline switch (lorebooks/timeline.ts, the one reader).
+		timeline: await sessionTimelineOf(db, sessionId),
 		tags: tagRows.map((t) => t.name),
 		channels: channelsOf(shape),
 		cast,
@@ -300,9 +306,16 @@ async function laneRegisterOf(
  * asked about here, so `currentCharacterId` is null: nothing in the
  * document has been pooled or picked.
  */
-async function readCast(db: Db, sessionId: number): Promise<SessionCastV1> {
-	const { createHost } = await import("$lib/server/pipelines/runtime/host")
-	const host = createHost(db, { sessionId })
+async function readCast(
+	db: Db,
+	sessionId: number,
+	given?: CoreHostServices
+): Promise<SessionCastV1> {
+	const host =
+		given ??
+		(await import("$lib/server/pipelines/runtime/host")).createHost(db, {
+			sessionId
+		})
 	const raw = (await host.read!(
 		"session_cast",
 		{ sessionId },
@@ -313,13 +326,26 @@ async function readCast(db: Db, sessionId: number): Promise<SessionCastV1> {
 			kind: "query"
 		}
 	)) as (Record<string, unknown> & { lorebookBindings?: unknown }) | null
-	const { lorebookBindings: _roster, ...cast } = raw ?? {}
+	// The document is the session's, never the run's: a run's host adds its viewer and
+	// turn channel to the cast read, so whichever host reads it, the cast carries neither.
+	const {
+		lorebookBindings: _roster,
+		viewerUserId: _viewer,
+		turnChannelVoice: _voice,
+		...cast
+	} = raw ?? {}
 	return {
 		sessionCharacters: [],
 		sessionPersonas: [],
 		envoys: [],
 		sessionScenario: null,
 		isGroup: false,
+		// Only a read that returned nothing (the session row is gone) gets the default: a
+		// timeline that is on with nothing dated (`timelineOf`'s own default). A read that
+		// lacks `storyTime` stays lacking it.
+		...(raw == null
+			? { storyTime: { timeline: true, now: null, calendar: null, sessionStart: null } }
+			: {}),
 		...cast,
 		currentCharacterId: null
 	} as SessionCastV1
@@ -332,14 +358,13 @@ async function readCast(db: Db, sessionId: number): Promise<SessionCastV1> {
  * `undefined` when the session's genre does not declare it — nothing it gates
  * applies there; otherwise `true` exactly when it is on. The one read of it:
  * the turn delete (`turnDeleteVerdict`, `turnDeleteRefusedThrough`). Sheets
- * are no longer its business — that is sheet latitude (`state/handEdits.ts`).
+ * are not its business — that is sheet latitude (`state/handEdits.ts`).
  */
 export async function sessionKeepsEveryTurn(
 	db: Db,
 	sessionId: number
 ): Promise<boolean | undefined> {
-	const doc = await resolveSessionSettings(db, sessionId)
-	const keep = (doc?.fields as Record<string, unknown> | undefined)?.keepEveryTurn
+	const keep = (await genreFieldsFor(db, sessionId)).keepEveryTurn
 	return keep === undefined ? undefined : keep === true
 }
 

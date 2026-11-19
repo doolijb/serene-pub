@@ -15,6 +15,7 @@
  * pictures are its book owner's files, the book as provenance.
  */
 
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { fileForOwner, getMediaByUuid } from "$lib/server/media"
@@ -26,7 +27,13 @@ import {
 } from "$lib/server/sprites"
 import { normalizeSpriteName } from "$lib/shared/sprites"
 
-export class AttachSpriteRefusal extends Error {}
+export class AttachSpriteRefusal extends Error {
+	/** `forPeople` marks a message the people in the session can act on; unmarked messages are detail. */
+	constructor(message: string, opts?: { forPeople?: boolean }) {
+		super(message)
+		if (opts?.forPeople) forPeople(this, message)
+	}
+}
 
 export interface AttachSpritesInput {
 	/** The card to fill — name this or `castMemberId`, never both. */
@@ -100,11 +107,13 @@ export async function attachGeneratedSprites(
 	if (input.castMemberId != null) {
 		if (!member)
 			throw new AttachSpriteRefusal(
-				"only someone who can edit this cast member's lorebook can add sprites to it."
+				"only someone who can edit this cast member's lorebook can add sprites to it.",
+				{ forPeople: true }
 			)
 	} else if (!(await mayFillSprites(db, input.userId, input.characterId!)))
 		throw new AttachSpriteRefusal(
-			"only the card's owner or an admin can add sprites to it."
+			"only the card's owner or an admin can add sprites to it.",
+			{ forPeople: true }
 		)
 	const owner = member
 		? { castMemberId: member.id }
@@ -142,7 +151,8 @@ export async function attachGeneratedSprites(
 				file.lorebookId === member.lorebookId
 			if (file.userId !== input.userId && !isMembers)
 				throw new AttachSpriteRefusal(
-					"a picture handed to it is neither yours nor this cast member's."
+					"a picture handed to it is neither yours nor this cast member's.",
+					{ forPeople: true }
 				)
 			if (file.userId !== member.bookOwnerId)
 				// The run person is not the book's owner (a session's notes
@@ -166,7 +176,8 @@ export async function attachGeneratedSprites(
 		} else {
 			if (file.userId !== input.userId && file.characterId !== input.characterId)
 				throw new AttachSpriteRefusal(
-					"a picture handed to it is neither yours nor this card's."
+					"a picture handed to it is neither yours nor this card's.",
+					{ forPeople: true }
 				)
 			// Provenance: the picture becomes the card's file (its visibility,
 			// its gallery rule). Only a file nobody else claims is stamped.

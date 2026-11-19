@@ -78,13 +78,13 @@ describe("sessionPresets:list — effective included actions", () => {
 		expect(keysOf(rules)).toEqual(
 			expect.arrayContaining(["build-room", "file", "nudge", "reveal", "roll", "trap", "whisper"])
 		)
-		// Words only: the Castellan's verbs alone — no rooms built or filed, no rolls.
+		// Words only: the Castellan's verbs and the two speech verbs — no rooms built or filed, no rolls.
 		const wordsOnly = presets.find(
 			(p) => p.genreId === "core:genre/lair" && p.isImmutable && p.name === "Words only"
 		)!
 		expect(wordsOnly).toBeDefined()
 		expect(wordsOnly.includedActions).toBeNull()
-		expect(keysOf(wordsOnly)).toEqual(["nudge", "reveal", "trap", "whisper"])
+		expect(keysOf(wordsOnly)).toEqual(["nudge", "read-aloud", "reveal", "say-it-as", "trap", "whisper"])
 	}, 60_000)
 
 	test("the picker's cut carries it too", async () => {

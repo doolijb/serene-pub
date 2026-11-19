@@ -19,9 +19,7 @@
 		 *  signal per tab, and a fault outranks a state. */
 		hasActivity?: boolean
 		/** An optional count shown beside the label at 11px, muted — how
-		 *  many things the panel holds. Left off, nothing renders. It sits
-		 *  outside the truncating label so a trimmed label keeps its count,
-		 *  and it is part of the tab's accessible name ("Nodes 12"). */
+		 *  many things the panel holds. Left off, nothing renders. It is part of the tab's accessible name ("Nodes 12"). */
 		count?: number
 	}
 </script>
@@ -35,7 +33,8 @@
 	 * are a section list (`SectionList`), not tabs — the icon-only
 	 * `PanelTabList` + `PanelTab` rail was retired for it (2026-10-09). This
 	 * is for a detail whose tabs are few and whose labels are short enough to
-	 * spell out, and for panels that must all stay mounted: it renders the
+	 * spell out. Labels are never cut: when the tabs do not fit, the strip
+	 * scrolls sideways in its own box. It serves for panels that must all stay mounted: it renders the
 	 * tablist and nothing else, so the caller owns its panels and decides
 	 * what `hidden` means for each of them.
 	 *
@@ -74,8 +73,20 @@
 
 	let tabRefs: Record<string, HTMLButtonElement | null> = $state({})
 
-	function select(next: string) {
+	/** `scrollIntoView` scrolls every scrolling ancestor, with `nearest` moving
+	 *  each only as far as the tab needs. A selected tab is already in view
+	 *  vertically, so only the strip moves. */
+	function reveal(next: string) {
+		tabRefs[next]?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
+	}
+
+	function choose(next: string) {
 		value = next
+		reveal(next)
+	}
+
+	function select(next: string) {
+		choose(next)
 		tabRefs[next]?.focus()
 	}
 
@@ -93,7 +104,7 @@
 </script>
 
 <div
-	class="border-surface-200-800 flex shrink-0 border-b {className}"
+	class="border-surface-200-800 flex shrink-0 overflow-x-auto border-b {className}"
 	role="tablist"
 	aria-label={ariaLabel}
 >
@@ -108,21 +119,19 @@
 			aria-controls="{panelIdPrefix}-{tab.value}"
 			tabindex={selected ? 0 : -1}
 			bind:this={tabRefs[tab.value]}
-			class="flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-b-2 px-1 text-chip {selected
+			class="flex h-10 min-w-fit flex-1 items-center justify-center gap-2 whitespace-nowrap border-b-2 px-2 text-chip {selected
 				? 'border-primary-500 text-surface-950-50 font-medium'
 				: 'text-surface-600-400 hover:text-surface-800-200 border-transparent'}"
-			onclick={() => (value = tab.value)}
+			onclick={() => choose(tab.value)}
 			onkeydown={(e) => handleKeydown(e, i)}
 		>
 			<TabIcon size={16} class="shrink-0" aria-hidden="true" />
 			<!-- The dot rides the LABEL, not the tab: on a tab that fills a
 			     third of the row it would otherwise float in whitespace with
-			     nothing to attach it to. It hangs off the OUTER span, which
-			     has no overflow of its own — the truncating span clips
-			     anything outside its box, and the dot is outside it by
-			     design. -->
-			<span class="relative flex min-w-0 items-center">
-				<span class="min-w-0 truncate">{tab.label}</span>
+			     nothing to attach it to. The wrapping span is its positioning
+			     box, and the label inside it is what the dot hangs beside. -->
+			<span class="relative flex items-center">
+				<span>{tab.label}</span>
 				{#if tab.hasError}
 					<span
 						class="bg-error-500 absolute -top-0.5 -right-2 size-1.5 rounded-full"

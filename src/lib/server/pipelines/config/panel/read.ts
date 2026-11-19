@@ -26,6 +26,7 @@ import {
 import {
 	type Published,
 	declarations,
+	declarationsAndVariableKeys,
 	published,
 	subscription,
 	unplacedChainDecls
@@ -37,6 +38,13 @@ import {
 } from "$lib/server/pipelines/config/panel/groups"
 import { readingOf } from "$lib/server/pipelines/config/panel/provenance"
 import {
+	GANGED_PARAMS,
+	GANGED_PSEUDO_NODE,
+	gangedDifferenceWords,
+	gangedMembersOf,
+	gangedReading
+} from "$lib/server/pipelines/config/panel/ganged"
+import {
 	bestWithWords,
 	loadoutPanel,
 	needsWords,
@@ -47,6 +55,7 @@ import {
 } from "$lib/server/pipelines/config/panel/loadouts"
 import { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import { promptDefaultsOf } from "$lib/server/pipelines/entities/prompts"
 import {
 	acceptedEnginesOf,
 	CORE_TEMPLATE_ENGINE
@@ -103,18 +112,22 @@ export async function layers(db: Db, at: Published, viewer: Viewer) {
 	 * same functions the runtime uses (`world.ts applyPipelineLayer`): the
 	 * pipeline's declared defaults, the genre's defaults' registration values
 	 * over them, the session's preset's over those, and a session's own
-	 * registration values on top (the upgrade's home for a configuration a
-	 * session had selected), with the pipeline's instance values (R50) under
-	 * the genre layer. One map, highest last — the panel's `config` source.
+	 * registration values in the `session` map (the run's first layer), with the
+	 * pipeline's instance values (R50) under the genre layer. The `preset` map
+	 * is highest last — the panel's `config` source.
 	 * No configuration is read (retired, 0110).
 	 */
 	const { shippedConfigValues, shippedConfigValuesOf } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const { registrationValueLayers, addressedValues } = await import(
-		"$lib/server/pipelines/registrations/values"
-	)
-	const decls = await declarations(db, at.specVersionId)
+	const { registrationValueLayers, addressedValues, readStoredValue, referenceSlotsOf, settingLocksOf } =
+		await import("$lib/server/pipelines/registrations/values")
+	const { decls, variableKeys } = await declarationsAndVariableKeys(db, at.specVersionId)
+	const kinds = referenceSlotsOf(decls, variableKeys)
+	const readableAt = (key: string, value: unknown) => {
+		const [nodeKey, slot, path = ""] = key.split("\u0000") as [string, string, string?]
+		return readStoredValue(db, kinds, { nodeKey, slot, path }, value)
+	}
 	// The declared defaults where they depart from the declaration (a
 	// reference, a preset value) — what the shipped Default stored; a value
 	// equal to its declaration reads as the declaration's (`author`).
@@ -131,31 +144,50 @@ export async function layers(db: Db, at: Published, viewer: Viewer) {
 		specId: at.specId,
 		sessionId: viewer.sessionId ?? null
 	})
+	// A layer above the session's lock (`settingLocksOf`) hides what is below it.
+	const locks = settingLocksOf(layersOf, decls)
 	// 🚧 Which registration layer each value came from — the provenance
 	// label's words until lane 7 names the layers in the client.
 	const layerOf = new Map<string, "instance" | "genre" | "preset" | "session">()
+	const session = viewer.sessionId != null ? new Map<string, unknown>() : null
 	for (const [name, layer] of [
 		["instance", layersOf.instance],
 		["genre", layersOf.genre],
 		["preset", layersOf.preset],
 		["session", layersOf.session]
 	] as const) {
+		if (name === "session" && !session) continue
 		const stated = addressedValues(layer, decls)
 		if (!stated.size) continue
 		const resolved = await shippedConfigValues(db, at.specId, at.slug, decls, stated)
 		for (const key of stated.keys()) {
-			preset.set(key, resolved.has(key) ? resolved.get(key) : stated.get(key))
+			const value = resolved.has(key) ? resolved.get(key) : stated.get(key)
+			if (name === "preset" && locks.get(key)?.layer === "genre") continue
+			if (name === "session" && locks.has(key)) continue
+			if (name !== "session" && value === null && locks.has(key)) continue
+			if (name !== "session") {
+				preset.set(key, value)
+				layerOf.set(key, name)
+				continue
+			}
+			// The run skips a value it would not use (`readStoredValue`); so does this.
+			if (!(await readableAt(key, value))) continue
+			// A session names no connection, but the run reads its registration
+			// value at one: that value stays in the config map, as the run's
+			// session scope never reaches the panel's `session` source there.
+			if (declByKey.get(key)?.matrixSlot === "connection") preset.set(key, value)
+			else session!.set(key, value)
 			layerOf.set(key, name)
 		}
 	}
-	return {
-		session:
-			viewer.sessionId != null
-				? scoped("session", viewer.sessionId)
-				: null,
-		preset,
-		layerOf
+	// ⏳ A leftover override row (the boot fold could not move it) sits under the
+	// session's registration values: it counts only where they state nothing.
+	if (session) {
+		const leftovers = scoped("session", viewer.sessionId!)
+		for (const [key, value] of leftovers)
+			if (!locks.has(key) && !session.has(key) && (await readableAt(key, value))) session.set(key, value)
 	}
+	return { session, preset, layerOf }
 }
 
 export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
@@ -285,6 +317,7 @@ export async function namespaceView(
 	const { shippedConfigValuesOf } = await import("$lib/server/pipelines/config/named")
 	const { sameConfiguredValue } = await import("$lib/server/pipelines/config/deviations")
 	const shipped = await shippedConfigValuesOf(db, at.specId, at.slug, at.specVersionId, declared)
+	const promptDefaults = promptDefaultsOf(declared, shipped)
 	// A stored chain whose seam is gone stays visible (D4, *unplaced*): one
 	// synthetic option per such address, placed after its step's declared
 	// options, so the row can be seen and cleared rather than run silently
@@ -414,15 +447,23 @@ export async function namespaceView(
 				)
 			}
 	const docNode = new Map(doc.nodes.map((n) => [n.key, n]))
+	// 🚧 The ganged control (`ganged.ts`): the members' options are built as
+	// ever and held back; one option stands in for them at the home's place.
+	// One gang per ganged param (`GANGED_PARAMS`), each with its own home.
+	const gangs = Object.keys(GANGED_PARAMS).flatMap((path) => {
+		const g = gangedMembersOf(decls, doc.nodes, path)
+		return g ? [{ path, ...g, at: -1 }] : []
+	})
+	const gangOf = (d: Decl) => gangs.find((g) => g.members.includes(d))
+	const gangedHeld = new Map<Decl, ConfigOption>()
 	for (const d of decls) {
 		if (!visibleTo(d.matrixSlot, viewer)) continue
 		if (d.control === "loadout-ref" && (scope === "session" || !lp)) continue
 
 		const key = addr(d.nodeKey, d.slot, d.path)
-		// The same order the runtime resolves in: the session's override beats
-		// the selected config beats the author default — the whole chain,
-		// since the simplification. The two walks must agree or the panel
-		// shows a value the run does not use.
+		// The run's order: the session's own value (its registration values, then
+		// a leftover override row) beats the genre / preset / instance layers
+		// beats the author default.
 		let value: unknown = d.authorDefault
 		let source: OptionSource = "author"
 		// A session names no connection (ruled 2026-09-30): a session row at a
@@ -533,12 +574,12 @@ export async function namespaceView(
 			// list holds.
 			...(d.item ? { item: d.item } : {}),
 			...((c) => (c && !namesOnly ? { choices: c } : {}))(
-				((c) =>
-					// 🚧 R54: a member chooses among the prompts an administrator
-					// has not hidden — the one in force stays listed.
-					c && d.control === "prompts-ref" && !viewer.isAdmin
-						? c.filter((x) => !x.hidden || x.id === value)
-						: c)(choicesFor(d, sets, [value, d.authorDefault]))
+				choicesFor(d, sets, {
+					address: key,
+					defaults: promptDefaults,
+					inForce: value,
+					administrator: viewer.isAdmin
+				})
 			),
 			...(chainEntries ? { scripts: chainEntries } : {}),
 			// Where the chain runs and what can go there (D3): the seam
@@ -794,9 +835,46 @@ export async function namespaceView(
 			if (nl) option.valueLabel = nl.row.name
 			else if (value != null) option.valueLabel = "(no longer exists)"
 		}
-		placed.push({ d, option })
+		const gang = gangOf(d)
+		if (gang) {
+			gangedHeld.set(d, option)
+			if (d === gang.home) gang.at = placed.length
+		} else placed.push({ d, option })
 
 		byNode.set(d.nodeKey, [...(byNode.get(d.nodeKey) ?? []), option])
+	}
+
+	// Every member is shown to any viewer who sees one (`visibleTo` is per slot, and the same for all of them).
+	// Placed from the last home backwards, so an earlier insertion never moves a later index.
+	for (const ganged of [...gangs].sort((x, y) => y.at - x.at)) {
+		if (!ganged.members.every((m) => gangedHeld.has(m))) continue
+		const homeOption = gangedHeld.get(ganged.home)!
+		const readings = ganged.members.map((m) => {
+			const o = gangedHeld.get(m)!
+			return {
+				value: o.value,
+				source: o.source,
+				changed: o.changed,
+				overriddenHere: o.overriddenHere,
+				writable: o.writable
+			}
+		})
+		const r = gangedReading(readings, ganged.home.authorDefault ?? true)
+		const option: ConfigOption = {
+			...homeOption,
+			id: optionId(secret, GANGED_PSEUDO_NODE, ganged.home.slot, ganged.home.path),
+			label: GANGED_PARAMS[ganged.path]!.label,
+			description: GANGED_PARAMS[ganged.path]!.description,
+			value: r.value,
+			source: r.source as OptionSource,
+			changed: r.changed,
+			overriddenHere: r.overriddenHere,
+			writable: r.writable,
+			...(r.differing
+				? { provenance: { source: r.source as OptionSource, label: gangedDifferenceWords(r.differing) } }
+				: {})
+		}
+		placed.splice(ganged.at, 0, { d: ganged.home, option })
 	}
 
 	/**

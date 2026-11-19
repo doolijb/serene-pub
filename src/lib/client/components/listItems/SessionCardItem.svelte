@@ -192,8 +192,8 @@
 						onSelect: () => onclick?.(session)
 					},
 					onEdit && {
-						label: "Edit",
-						icon: Icons.Pencil,
+						label: session.isOwner ? "Edit" : "Participants",
+						icon: session.isOwner ? Icons.Pencil : Icons.UsersRound,
 						onSelect: () => onEdit?.(session.id!)
 					},
 					onToggleFavorite &&

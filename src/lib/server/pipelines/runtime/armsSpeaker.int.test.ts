@@ -546,7 +546,8 @@ describe("core:query/entity-link@1", () => {
 
 	const link = async (
 		speaker: Speaker,
-		currentCharacterId: number | null = null
+		currentCharacterId: number | null = null,
+		knownToSpeaker?: false
 	) => {
 		const r: any = await bindings["core:query/entity-link@1"]!(
 			{
@@ -554,7 +555,10 @@ describe("core:query/entity-link@1", () => {
 				candidates: pool(),
 				mentions: [{ text: "the one by the water", position: 0 }],
 				vectors: [[1, 0]],
-				params: { maxLinks: 10 },
+				params: {
+					maxLinks: 10,
+					...(knownToSpeaker === false ? { knownToSpeaker } : {})
+				},
 				...speakerPart(speaker)
 			},
 			ctxFor("core:query/entity-link") as any
@@ -580,13 +584,17 @@ describe("core:query/entity-link@1", () => {
 			expect(r.links).toEqual(["brask", "npc", "verity", "world"])
 			expect(r.enriched).toEqual(r.links)
 			expect(r.passed).toEqual(["brask", "history", "npc", "verity", "world"])
-			// The scope does not filter an unwired link either.
-			expect((await link(UNWIRED, verity)).links).toEqual([
+			// With the knowledge read off, the scope does not filter an unwired
+			// link.
+			expect((await link(UNWIRED, verity, false)).links).toEqual([
 				"brask",
 				"npc",
 				"verity",
 				"world"
 			])
+			// With it on (the default) the scope's speaker is the reader: the
+			// other cast member's and the NPC's lore are not linked.
+			expect((await link(UNWIRED, verity)).links).toEqual(["verity", "world"])
 		},
 		60_000
 	)
@@ -641,12 +649,21 @@ describe("core:query/entity-link@1", () => {
 			// scope's subject decided).
 			for (const speaker of [null, ""]) {
 				for (const scope of [verity, null])
-					expect((await link(speaker, scope)).links, String(speaker)).toEqual([
-						"brask",
-						"npc",
-						"verity",
-						"world"
-					])
+					expect(
+						(await link(speaker, scope, false)).links,
+						String(speaker)
+					).toEqual(["brask", "npc", "verity", "world"])
+				// With the knowledge read on, an unwired speaker is the scope's.
+				expect((await link(speaker, verity)).links, String(speaker)).toEqual([
+					"verity",
+					"world"
+				])
+				expect((await link(speaker, null)).links, String(speaker)).toEqual([
+					"brask",
+					"npc",
+					"verity",
+					"world"
+				])
 			}
 		},
 		60_000

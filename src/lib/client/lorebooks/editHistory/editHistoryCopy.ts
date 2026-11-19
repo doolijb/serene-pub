@@ -1,5 +1,5 @@
 /**
- * 🚧 The words of an entry's **Edit history** (`lore_redlines`): the fold,
+ * 🚧 The words of an entry's or a scene's **Edit history** (`lore_redlines`): the fold,
  * its rows, the three clear confirmations and the Admin › Data row. All
  * provisional copy (owner has not seen it). One file, so the fold, Book
  * settings and the admin row read alike.
@@ -16,7 +16,8 @@ export const REDLINE_CAUSE_LABELS: Readonly<Record<Cause, string>> =
 		apply: "Applied",
 		revert: "Reverted",
 		"take-back": "Took back",
-		restore: "Restored"
+		restore: "Restored",
+		"scene-compiler": "Listed who spoke"
 	})
 
 /** "1 edit", "3 edits". */
@@ -58,7 +59,7 @@ export const RESTORE_BLOCKED_UNSAVED = "Save or discard your changes first."
 
 export const CLEAR_BOOK_QUESTION = "Clear this lorebook's edit history?"
 export const clearBookSentence = (n: number): string =>
-	`Removes ${editsCount(n)} across its entries and cast. Every entry and cast member stays as it is now; what they said before can no longer be restored.`
+	`Removes ${editsCount(n)} across its entries, cast and scenes. Every entry, cast member and scene stays as it is now; what they said before can no longer be restored.`
 
 export const CLEAR_ALL_QUESTION = "Clear every edit history on this pub?"
 export const clearAllSentence = (n: number): string =>
@@ -66,7 +67,7 @@ export const clearAllSentence = (n: number): string =>
 
 /** Book settings' hint under its action. */
 export const CLEAR_BOOK_HINT =
-	"What this lorebook's entries and cast said before each edit."
+	"What this lorebook's entries, cast and scenes said before each edit."
 
 /** Admin › Data: the card, the row, and what clearing loses. */
 export const ADMIN_CARD_TITLE = "Edit history"

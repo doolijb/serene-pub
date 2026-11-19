@@ -13,8 +13,8 @@
  *   **Day-count clock** (a day with no month, 13c) dates by its year only —
  *   a day is stored only beside a month (`A day needs a month.`).
  * - No date (a scene with no clock): the newest dated entry the line reads,
- *   else the entry dated Year 1, Month 1, Day 1, as a session's other lore
- *   writes start (`historyDateOfSessionWrite`).
+ *   else (`create: true`) the day of the line's stored clock (`storyNowOf`);
+ *   a line with neither refuses, in words — Year 1 is never invented.
  * - `pickEntryOfDate` is the pure date-match over already-read rows (a caller
  *   that holds the book's history rows once asks it per line and day).
  * - `create: false` only reads, and answers null where no entry matches;
@@ -34,7 +34,11 @@
  */
 import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { assertDateLands, bookCalendarOf } from "$lib/server/state/storyTime"
+import {
+	assertDateLands,
+	bookCalendarOf,
+	storyNowOf
+} from "$lib/server/state/storyTime"
 import {
 	BranchRefusal,
 	historyEntryDate,
@@ -149,10 +153,19 @@ export async function historyEntryOfDate(
 	if (!opts.create) return null
 
 	// Nothing on the line is dated that day: make the entry, dated at it —
-	// or at Year 1, Month 1, Day 1 for a scene with no date on a line with no
-	// dated entry at all.
-	const target = at.date ? dayOnly(at.date) : null
-	const date = target ?? { year: 1, month: 1, day: 1 }
+	// or, for a scene with no date on a line with no dated entry, on the line's
+	// stored clock's day; with no clock either, refused.
+	let target = at.date ? dayOnly(at.date) : null
+	if (!target) {
+		const now = await storyNowOf(tx, lorebookId, branchId, { line })
+		if (!now)
+			// 🚧 Provisional copy: the owner has not seen this sentence.
+			throw new Error(
+				"These scenes have no date, and this line has no dated history entry or story clock to file them under. Set the story clock in the lorebook's Book settings, or date a history entry, then compile."
+			)
+		target = dayOnly(now)
+	}
+	const date = target
 	// 🚧 `calendarBookId`: the book whose calendar the new day's date must land
 	// in — a session's notes file a day dated in the calendar of the lorebook it
 	// reads. Absent, the book the entry is made in (as always).

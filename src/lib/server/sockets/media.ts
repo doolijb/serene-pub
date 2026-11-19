@@ -936,7 +936,8 @@ export const mediaSetCachePolicy: Handler<
 
 /**
  * Who may see or clear spoken audio: no session = the whole pub, admin only;
- * a session = its owner or an admin. Returns the scope filter.
+ * a session = its owner alone (an administrator is a guest in another
+ * person's session). Returns the scope filter.
  */
 async function spokenScope(
 	socket: { user?: { id: number; isAdmin?: boolean } | null },
@@ -953,7 +954,7 @@ async function spokenScope(
 		.select({ userId: schema.sessions.userId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
-	if (!session || (session.userId !== user.id && !user.isAdmin))
+	if (!session || (session.userId !== user.id))
 		throw new Error("Session not found.")
 	return { sessionId, filter: inSession(sessionId) }
 }

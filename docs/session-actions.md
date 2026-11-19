@@ -59,6 +59,7 @@ An action whose condition doesn't hold stays listed (the chip, the menu entry, t
 The reasons you'll meet most:
 
 - *wait for the reply to finish*: anything is running in the session, including an image or a summary.
+- *Wait for ‹name› to finish, or stop it first.*: a reply, an action or a routine is running in the session, so swipe, Regenerate, Back, Regenerate the last turn and delete wait; press **Stop** beside the run in the **Turn line** first. **Edit**, **Forward**, sending a line and **Continue** aren't held.
 - *only the newest reply can be regenerated*: Regenerate, Extend and Swipe act on the newest reply only. Rewriting an earlier one would change history mid-conversation.
 - *your own line is edited, not regenerated*: these never act on what you wrote.
 - *a greeting is swiped, not regenerated*.

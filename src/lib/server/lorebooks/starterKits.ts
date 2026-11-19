@@ -30,7 +30,7 @@
  */
 
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import {
 	attributeSlots,
 	getAttributeSlot,
@@ -43,7 +43,13 @@ import {
 	type PrimerDecl
 } from "@serene-pub/sdk"
 import { locationSlot } from "@serene-pub/core-catalog"
-import { isDisabledProvidedBook, markedBook } from "$lib/server/plugins/providedMarks"
+import {
+	isDisabledProvidedBook,
+	liveProvidedBookSql,
+	markedBook,
+	shownLorebook
+} from "$lib/server/plugins/providedMarks"
+import type { IdMap } from "$lib/server/lorebooks/tableRegistry"
 import { insertCastMember } from "$lib/server/characters/versions"
 import { makeMemberCardless } from "$lib/server/cast/cardless"
 import { duplicateLorebookRows } from "$lib/server/utils/lorebookDuplicate"
@@ -142,9 +148,10 @@ export const shippedKits = (): PrimerDecl[] =>
 const primerName = (p: PrimerDecl): string => i18nText(p.name) ?? p.id
 
 /**
- * The kit a ref names, or refused in words. A row must be of book kind
- * `starter_kit` (a lorebook is not a kit); a primer must hold something.
- * Anyone signed in may start from any kit.
+ * The kit a ref names, or refused in words. A row must be a starter lorebook
+ * (book kind `starter_kit`) or a live provided lorebook of any book kind (a
+ * lorebook kept at uninstall is not live, so not a kit); a primer must hold
+ * something. Anyone signed in may start from any kit.
  */
 export async function resolveKit(
 	db: Db,
@@ -166,8 +173,11 @@ export async function resolveKit(
 			.where(
 				and(
 					eq(schema.lorebooks.id, ref.lorebookId),
-					eq(schema.lorebooks.kind, STARTER_KIT_KIND),
-					isNull(schema.lorebooks.sessionId)
+					isNull(schema.lorebooks.sessionId),
+					or(
+						eq(schema.lorebooks.kind, STARTER_KIT_KIND),
+						liveProvidedBookSql()
+					)
 				)
 			)
 			.limit(1)
@@ -257,7 +267,8 @@ export function kitRules(kit: ResolvedKit): {
 /**
  * Why `lorebookId` may not be read into a session because it is a starter
  * kit, or null when it is not one (or is missing — the caller's own
- * not-found answers that).
+ * not-found answers that). A live provided lorebook of any kind is started
+ * from, never read; one switched off reads as absent, so it is not named here.
  */
 export async function kitReadRefusal(
 	db: Db,
@@ -265,11 +276,16 @@ export async function kitReadRefusal(
 ): Promise<string | null> {
 	if (!Number.isSafeInteger(lorebookId)) return null
 	const [row] = await db
-		.select({ name: schema.lorebooks.name, kind: schema.lorebooks.kind })
+		.select({
+			name: schema.lorebooks.name,
+			kind: schema.lorebooks.kind,
+			provided: liveProvidedBookSql(),
+			shown: shownLorebook()
+		})
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId as number))
 		.limit(1)
-	return row?.kind === STARTER_KIT_KIND
+	return row && (row.kind === STARTER_KIT_KIND || (row.provided && row.shown))
 		? kitIsNotReadSentence(row.name)
 		: null
 }
@@ -440,8 +456,21 @@ export async function bookFromKit(
 		name: string
 		kind: BookKind
 		sessionId?: number | null
+		/** The genre's `castFromLorebook` seating reads the starter copy; `excludeMembers` are the kit row's member ids. */
+		seatCast?: {
+			isAdmin: boolean
+			exclude: ReadonlySet<number>
+			excludeMembers: ReadonlySet<number>
+		}
 	}
-): Promise<KitCopy> {
+): Promise<
+	KitCopy & {
+		/** The kit row's member id → the copy's member id; empty for a primer with no row. */
+		members: IdMap
+		/** The copy's members the genre seats (`seatCast` given); else empty. */
+		seated: number[]
+	}
+> {
 	const rules = kitRules(kit)
 	const own = {
 		kind: opts.kind,
@@ -464,12 +493,17 @@ export async function bookFromKit(
 			userId: opts.userId,
 			primer: kit.primer
 		})
+		const seated = opts.seatCast
+			? await seatFromCopy(tx, row.id, opts, new Map())
+			: []
 		return {
 			lorebookId: row.id,
-			coverFrom: null
+			coverFrom: null,
+			members: new Map(),
+			seated
 		}
 	}
-	const { id } = await duplicateLorebookRows(
+	const { id, maps } = await duplicateLorebookRows(
 		tx,
 		kit.row.id,
 		opts.userId,
@@ -491,8 +525,38 @@ export async function bookFromKit(
 		.update(schema.lorebooks)
 		.set(extraJson ? { ...own, extraJson } : own)
 		.where(eq(schema.lorebooks.id, id))
+	const seated = opts.seatCast
+		? await seatFromCopy(tx, id, opts, maps.bindings)
+		: []
 	await makeCopyCardless(tx, id)
-	return { lorebookId: id, coverFrom: kit.row.id }
+	return {
+		lorebookId: id,
+		coverFrom: kit.row.id,
+		members: maps.bindings,
+		seated
+	}
+}
+
+/** The copy's members the genre seats, by `bookCastToSeat` on the copy (a session's notes, so its access check reads it as theirs). */
+async function seatFromCopy(
+	tx: Db,
+	copyId: number,
+	opts: { userId: number; seatCast?: { isAdmin: boolean; exclude: ReadonlySet<number>; excludeMembers: ReadonlySet<number> } },
+	members: IdMap
+): Promise<number[]> {
+	const { seatCast } = opts
+	if (!seatCast) return []
+	const { bookCastToSeat } = await import("$lib/server/sessions/seatBookCast")
+	const seated = await bookCastToSeat(tx, {
+		lorebookId: copyId,
+		userId: opts.userId,
+		isAdmin: seatCast.isAdmin,
+		exclude: seatCast.exclude,
+		excludeMembers: new Set(
+			[...seatCast.excludeMembers].map((id) => members.get(id) ?? id)
+		)
+	})
+	return seated.map((m) => m.castMemberId)
 }
 
 /**
@@ -505,16 +569,26 @@ export async function bookFromKit(
  * (`cast_member:<id>`, no `character_id`; a book links a card to one member at
  * most, `lorebook_bindings_character_unique`). Where an entry already holds a
  * row under the member's key, that row gives way to the card's (the key is the
- * table's primary key with the entry). Runs on `tx` only.
+ * table's primary key with the entry). `only` limits all of it to those
+ * members (a merge into notes that hold other members). Runs on `tx` only.
  */
-async function makeCopyCardless(tx: Db, lorebookId: number): Promise<void> {
+export async function makeCopyCardless(
+	tx: Db,
+	lorebookId: number,
+	only?: readonly number[]
+): Promise<void> {
 	const members = await tx
 		.select({
 			id: schema.lorebookBindings.id,
 			characterId: schema.lorebookBindings.characterId
 		})
 		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
+		.where(
+			and(
+				eq(schema.lorebookBindings.lorebookId, lorebookId),
+				only ? inArray(schema.lorebookBindings.id, [...only]) : undefined
+			)
+		)
 	for (const m of members)
 		await makeMemberCardless(tx, m.id, { cause: "starter" })
 	const entryIds = tx

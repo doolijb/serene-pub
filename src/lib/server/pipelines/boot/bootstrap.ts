@@ -159,6 +159,8 @@ export interface BootstrapReport {
 	registrations?: import("$lib/server/pipelines/registrations/project").RegistrationProjectionReport
 	/** 🚧 A11: every registration re-run through the door after the projection (`fit.ts`). */
 	registrationFit?: import("$lib/server/pipelines/registrations/fit").RefitReport
+	/** ⏳ 🚧 Session-scope overrides folded into the session's registration values (`sessionOverrideFold.ts`). */
+	sessionOverrideFold?: import("$lib/server/pipelines/boot/sessionOverrideFold").SessionOverrideFoldReport
 	/** Named-config values for `embed-text`'s retired connection slot, removed quietly. */
 	embedTextConnectionDropped?: number
 	/** ⏳ Story's retired reply tick: its stored settings, removed quietly. */
@@ -456,6 +458,8 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	//   projectRegistrations — session_presets, registrations
 	//     (registrations/project.ts:143,157; registrations/write.ts:73-83);
 	//   refitRegistrations — in-memory verdicts only;
+	//   foldSessionOverrides — registrations (values), pipeline_node_overrides
+	//     (boot/sessionOverrideFold.ts);
 	//   reconcilePresetBindings — session_preset_notices (presetReconcile.ts);
 	//   moveSpeakerRebinds — pipeline_node_rebinds (seed.ts:838,844,860);
 	//   reprojectBindingSubjects — pipeline_bindings (bindingSubjects.ts:82,97,101);
@@ -488,6 +492,16 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		// broken one is left out as stale, and the reconcile below says so.
 		const { refitRegistrations } = await import("$lib/server/pipelines/registrations/fit")
 		report.registrationFit = await refitRegistrations(db, undefined, docs)
+	}
+
+	// ⏳ 🚧 A session's step values live in its registration values alone: the
+	// older session-scope override rows are folded in. After the projection
+	// and the refit, which decide what is in force for each session.
+	{
+		const { foldSessionOverrides } = await import(
+			"$lib/server/pipelines/boot/sessionOverrideFold"
+		)
+		report.sessionOverrideFold = await foldSessionOverrides(db)
 	}
 
 	// Straight after the presets, and the order is the whole point: the seed

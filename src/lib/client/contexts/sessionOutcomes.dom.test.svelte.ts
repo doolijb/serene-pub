@@ -47,6 +47,24 @@ describe("session outcomes", () => {
 		expect(toasts).toEqual([])
 	})
 
+	test("Share that only dropped a superseded tie does not say nothing was waiting", () => {
+		fire("sessions:applyOverlay", { applied: [], supersededTies: [5] })
+		expect(toasts).toHaveLength(1)
+		expect(toasts[0]).toMatchObject({
+			title: "1 knowledge tie removed",
+			description: "Knows or Kept from is set by hand for it in the lorebook."
+		})
+	})
+
+	test("Several superseded ties are counted, beside what else Apply says", () => {
+		fire("sessions:applyOverlay", { applied: [3], supersededTies: [5, 6] })
+		expect(toasts).toHaveLength(1)
+		expect(toasts[0]).toMatchObject({
+			title: "2 knowledge ties removed",
+			description: "Knows or Kept from is set by hand for them in the lorebook."
+		})
+	})
+
 	test("Close out names one closing scene", () => {
 		fire("sessions:closeOut", { sceneIds: [5] })
 		expect(toasts[0]).toMatchObject({

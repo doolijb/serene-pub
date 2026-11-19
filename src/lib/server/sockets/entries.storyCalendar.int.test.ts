@@ -137,6 +137,27 @@ describe("lorebooks:setCalendar — round trip and the preflight", () => {
 		expect(cleared.calendar).toBeNull()
 	}, 60_000)
 
+	test("the leap rule's skipEvery and keepEvery are stored and read back", async () => {
+		const user = await makeUser("cal-leap-exceptions")
+		const book = await makeBook(user.id, "Ashfall")
+		const { lorebookSetCalendarHandler, lorebookStoryTimeHandler } =
+			await import("./lorebookStoryTime")
+		const { STORY_CALENDAR_PRESETS } = await import("@serene-pub/sdk")
+		const real = STORY_CALENDAR_PRESETS.find((p) => p.id === "real-calendar")!.calendar
+		const set = (await lorebookSetCalendarHandler.handler(
+			socketOf(user.id),
+			{ lorebookId: book.id, calendar: real },
+			() => {}
+		)) as any
+		expect(set.calendar.leap).toMatchObject({ skipEvery: 100, keepEvery: 400 })
+		const read = (await lorebookStoryTimeHandler.handler(
+			socketOf(user.id),
+			{ lorebookId: book.id },
+			() => {}
+		)) as any
+		expect(read.calendar.leap).toMatchObject({ skipEvery: 100, keepEvery: 400 })
+	}, 60_000)
+
 	test("a malformed calendar is refused, not repaired", async () => {
 		const user = await makeUser("cal-malformed")
 		const book = await makeBook(user.id, "Ashfall")

@@ -1,20 +1,24 @@
 /**
- * 🚧 sense-b2: the "This session only" card follows `mayApply` (never `isOwner`), lists what was
- * applied with Take back, and says when the lorebook applies by itself.
+ * 🚧 sense-b2: the "This session only" card is the session's owner's (never a guest's); Apply and
+ * Take back need `mayApply` too (the owner may write the lorebook). Where they may not, the card
+ * says so and offers Merge. It lists what was applied, and says when the lorebook applies by itself.
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
+import { FOLD_CONFIRM, FOLD_LABEL } from "$lib/shared/lorebooks/sessionNotes"
 
 vi.mock("$app/environment", () => ({ dev: true, building: false }))
 
-const { listeners, socket, panels } = vi.hoisted(() => {
+const { listeners, notesHandlers, socket, panels } = vi.hoisted(() => {
 	const listeners = new Map<string, (msg: any) => void>()
+	const notesHandlers: Array<(msg: any) => void> = []
 	const panels = {
 		digest: {} as any,
 		openPanel: vi.fn()
 	}
 	return {
 		listeners,
+		notesHandlers,
 		panels,
 		socket: { emit: vi.fn(), on: () => {}, off: () => {} }
 	}
@@ -28,7 +32,14 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 		listeners.set(key, handler)
 		return () => listeners.delete(key)
 	},
-	requestWithInterest: () => () => {}
+	requestWithInterest: (
+		_event: string,
+		_params: unknown,
+		handler: (msg: any) => void
+	) => {
+		notesHandlers.push(handler)
+		return () => {}
+	}
 }))
 import SessionViewPanel from "./SessionViewPanel.svelte"
 
@@ -69,6 +80,7 @@ afterEach(() => {
 	if (app) unmount(app)
 	app = null
 	listeners.clear()
+	notesHandlers.length = 0
 	socket.emit.mockClear()
 	panels.openPanel.mockClear()
 	panels.digest = {}
@@ -81,6 +93,8 @@ async function mountPanel(opts: {
 	batches?: unknown[]
 	mayApply: boolean
 	appliesItself?: boolean
+	/** Answer `appliedBatches` only; the test sends `overlayItems` itself. */
+	batchesOnly?: boolean
 }) {
 	app = mount(SessionViewPanel, {
 		target: document.body,
@@ -105,12 +119,13 @@ async function mountPanel(opts: {
 			tags: []
 		}
 	})
-	push("sessions:overlayItems", {
-		sessionId: 12,
-		items: opts.items ?? [ITEM],
-		mayApply: opts.mayApply,
-		appliesItself: !!opts.appliesItself
-	})
+	if (!opts.batchesOnly)
+		push("sessions:overlayItems", {
+			sessionId: 12,
+			items: opts.items ?? [ITEM],
+			mayApply: opts.mayApply,
+			appliesItself: !!opts.appliesItself
+		})
 	push("sessions:appliedBatches", {
 		sessionId: 12,
 		batches: opts.batches ?? [],
@@ -128,10 +143,13 @@ const buttons = () => [
 ]
 const byText = (t: string) => buttons().find((b) => b.textContent?.trim() === t)
 
-describe("Apply follows mayApply", () => {
-	test("shows with mayApply even when the reader does not own the session", async () => {
+describe("Apply needs the session's owner and mayApply", () => {
+	test("hidden for a reader who is not the session's owner, whatever mayApply says", async () => {
 		await mountPanel({ isOwner: false, mayApply: true })
-		expect(byText("Apply to the lorebook")).toBeTruthy()
+		expect(
+			document.querySelector('section[aria-label="This session only"]')
+		).toBeNull()
+		expect(byText("Apply to the lorebook")).toBeFalsy()
 	})
 	test("hidden without mayApply even for the session's owner", async () => {
 		await mountPanel({ isOwner: true, mayApply: false })
@@ -143,7 +161,7 @@ describe("Apply follows mayApply", () => {
 describe("What was applied", () => {
 	test("a row says count, cause and when; the toggle shows its items", async () => {
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: false,
 			items: [],
 			batches: [BATCH()]
@@ -153,7 +171,7 @@ describe("What was applied", () => {
 		expect(text).toContain("2 changes · as a scene closed · just now")
 		expect(document.body.textContent).not.toContain("new entry")
 		const toggle = document.querySelector<HTMLButtonElement>(
-			"button[aria-expanded]"
+			'section[aria-label="This session only"] button[aria-expanded]'
 		)!
 		expect(toggle.getAttribute("aria-expanded")).toBe("false")
 		toggle.click()
@@ -165,7 +183,7 @@ describe("What was applied", () => {
 	})
 	test("a press names who", async () => {
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: false,
 			items: [],
 			batches: [
@@ -193,7 +211,7 @@ describe("What was applied", () => {
 		listeners.clear()
 		document.body.innerHTML = ""
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: true,
 			items: [],
 			batches: [BATCH()]
@@ -210,7 +228,7 @@ describe("What was applied", () => {
 	})
 	test("a refusal is said under its row", async () => {
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: true,
 			items: [],
 			batches: [BATCH()]
@@ -243,7 +261,7 @@ describe("Applies by itself", () => {
 		listeners.clear()
 		document.body.innerHTML = ""
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: false,
 			appliesItself: true
 		})
@@ -254,7 +272,7 @@ describe("Applies by itself", () => {
 		listeners.clear()
 		document.body.innerHTML = ""
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: true,
 			appliesItself: true
 		})
@@ -275,7 +293,7 @@ describe("Applies by itself", () => {
 describe("Another session's payload", () => {
 	test("is ignored", async () => {
 		await mountPanel({
-			isOwner: false,
+			isOwner: true,
 			mayApply: true,
 			items: [],
 			batches: []
@@ -294,5 +312,126 @@ describe("Another session's payload", () => {
 		expect(document.body.textContent).not.toContain(
 			"Applied to the lorebook"
 		)
+	})
+})
+
+describe("Where the session's owner may not write the lorebook", () => {
+	const BOOK = "Brackenvale"
+	const nameBook = async () => {
+		for (const handler of notesHandlers)
+			handler({
+				books: [{ sessionId: 12, attached: { id: 5, name: BOOK } }]
+			})
+		flushSync()
+		await tick()
+	}
+	const openMenu = async () => {
+		document
+			.querySelector<HTMLButtonElement>(
+				"button[aria-label='Session options']"
+			)!
+			.click()
+		await tick()
+		flushSync()
+		return [
+			...document.querySelectorAll<HTMLElement>("[role=menuitem]")
+		].map((el) => el.textContent?.trim())
+	}
+
+	test("owned: Apply controls and Share to the book are offered, nothing closed", async () => {
+		await mountPanel({
+			isOwner: true,
+			mayApply: true,
+			items: [ITEM, { ...ITEM, entryId: 4, title: "Tamsin" }]
+		})
+		await nameBook()
+		expect(byText("Apply to the lorebook")).toBeTruthy()
+		expect(
+			buttons().some((b) => b.textContent?.trim().startsWith("Apply all"))
+		).toBe(true)
+		expect(document.querySelector("[data-apply-closed]")).toBeNull()
+		expect(await openMenu()).toContain(`Share to ${BOOK}`)
+	})
+
+	test("not writable: the card says so and offers Merge; no Apply, Take back or Share", async () => {
+		await mountPanel({
+			isOwner: true,
+			mayApply: false,
+			items: [ITEM, { ...ITEM, entryId: 4, title: "Tamsin" }],
+			batches: [BATCH()]
+		})
+		await nameBook()
+		const closed = document.querySelector("[data-apply-closed]")!
+		expect(closed.textContent).toContain(
+			`${BOOK} isn't yours to change, so what waits here stays in this session.`
+		)
+		expect(byText("Apply to the lorebook")).toBeFalsy()
+		expect(
+			buttons().some((b) => b.textContent?.trim().startsWith("Apply all"))
+		).toBe(false)
+		expect(byText("Take back")).toBeFalsy()
+		const labels = await openMenu()
+		expect(labels).not.toContain(`Share to ${BOOK}`)
+		expect(labels).toContain(FOLD_LABEL(BOOK))
+		// close the menu so the card link is reachable
+		document.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+		)
+		await new Promise((r) => setTimeout(r, 50))
+		const link = [...closed.querySelectorAll("button")].find(
+			(b) => b.textContent?.trim() === FOLD_LABEL(BOOK)
+		)!
+		link.click()
+		await new Promise((r) => setTimeout(r, 50))
+		flushSync()
+		await tick()
+		const dialog = document.querySelector("[data-action-confirm]")!
+		expect(dialog.textContent).toContain(FOLD_CONFIRM(BOOK))
+		const confirm = [...dialog.querySelectorAll("button")].find(
+			(b) => b.textContent?.trim() === FOLD_LABEL(BOOK)
+		)!
+		confirm.click()
+		expect(socket.emit).toHaveBeenCalledWith("sessions:foldInParent", {
+			sessionId: 12
+		})
+		expect(socket.emit).not.toHaveBeenCalledWith(
+			"sessions:applyOverlay",
+			expect.anything()
+		)
+	})
+})
+
+describe("the closed sentence waits for the server's answer", () => {
+	const closed = () => document.querySelector("[data-apply-closed]")
+	const itemsAnswer = (mayApply: boolean) =>
+		push("sessions:overlayItems", {
+			sessionId: 12,
+			items: [ITEM],
+			mayApply,
+			appliesItself: false
+		})
+
+	test("an owner who may write never sees it, whichever answer comes first", async () => {
+		await mountPanel({
+			isOwner: true,
+			mayApply: true,
+			batches: [BATCH()],
+			batchesOnly: true
+		})
+		expect(closed()).toBeNull()
+		await itemsAnswer(true)
+		expect(closed()).toBeNull()
+	})
+
+	test("an owner who may not write sees it once the items answer arrives", async () => {
+		await mountPanel({
+			isOwner: true,
+			mayApply: false,
+			batches: [BATCH()],
+			batchesOnly: true
+		})
+		expect(closed()).toBeNull()
+		await itemsAnswer(false)
+		expect(closed()).not.toBeNull()
 	})
 })

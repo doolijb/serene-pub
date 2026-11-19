@@ -258,7 +258,8 @@ export function rotationPersonas(cast: CastRead): RotationPersona[] {
 		.filter((cp) => cp.persona && inPlay(cp))
 		.map((cp) => ({
 			personaId: cp.persona!.id,
-			ownerUserId: cp.persona!.userId ?? null
+			// A seat's person is its `user_id`; a row from before that column reads its card's owner.
+			ownerUserId: cp.seatUserId ?? cp.persona!.userId ?? null
 		}))
 }
 

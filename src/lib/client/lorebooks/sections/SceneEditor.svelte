@@ -5,6 +5,9 @@
 	import type { EntryEditorProps } from "./types"
 	import SceneForm from "./SceneForm.svelte"
 	import { getLorePoolCtx } from "./poolContext"
+	import { bookReadOnly } from "../bookData.svelte"
+	import EditHistory from "../editHistory/EditHistory.svelte"
+	import { RESTORE_BLOCKED_UNSAVED } from "../editHistory/editHistoryCopy"
 
 	/**
 	 * A scene's page: what it is, and the one action that rewrites it.
@@ -14,10 +17,18 @@
 	 * from — a scene whose session is gone can be read and edited but never
 	 * re-summarized.
 	 */
-	let { draft = $bindable(), source, bindings }: EntryEditorProps = $props()
+	let {
+		draft = $bindable(),
+		source,
+		bindings,
+		lorebookId,
+		isNew
+	}: EntryEditorProps = $props()
 
 	const socket = useTypedSocket()
 	const pool = getLorePoolCtx()
+	// Edit history is for people who can edit the book.
+	const readOnly = bookReadOnly()
 	const sceneSummarizesCtx: SceneSummarizesCtx =
 		getContext("sceneSummarizesCtx")
 
@@ -27,6 +38,23 @@
 	let isProcessing = $derived(activity?.status === "running")
 	let pending = $derived(activity?.status === "review" ? activity : undefined)
 	let hasMessages = $derived((source?.selectedMessageIds?.length ?? 0) > 0)
+
+	// The draft differs from the saved scene when any of the four fields the
+	// form edits differs; the two lists compare as sorted ids.
+	const ids = (list: unknown): string =>
+		JSON.stringify(
+			[...((list as number[] | undefined) ?? [])].sort((a, b) => a - b)
+		)
+	let unsaved = $derived.by(() => {
+		if (!source) return false
+		const d = $state.snapshot(draft)
+		return (
+			(d.name ?? "") !== (source.name ?? "") ||
+			(d.summary ?? "") !== (source.summary ?? "") ||
+			ids(d.participantCharacters) !== ids(source.participantCharacters) ||
+			ids(d.mentionedCharacters) !== ids(source.mentionedCharacters)
+		)
+	})
 
 	function process() {
 		if (!source) return
@@ -97,3 +125,15 @@
 {/if}
 
 <SceneForm bind:draft {bindings} />
+
+{#if source && !isNew && !readOnly.value}
+	<EditHistory
+		{lorebookId}
+		sceneId={source.id}
+		updatedAt={source.updatedAt ?? null}
+		restoreBlocked={unsaved ? RESTORE_BLOCKED_UNSAVED : undefined}
+		onRestore={(phase) => {
+			if (phase === "done") pool.refreshScenes()
+		}}
+	/>
+{/if}

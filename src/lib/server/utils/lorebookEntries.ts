@@ -311,6 +311,7 @@ export function toEntryRow(
 		constant: row.constant,
 		enabled: row.enabled,
 		archived: row.archived,
+		entryLock: row.entryLock,
 		provenance: row.provenance,
 		derivedFrom: row.derivedFrom ?? null,
 		extraJson: row.extraJson,
@@ -373,11 +374,12 @@ export function beginningProblem(parts: {
  * a scene list, a compile heading, the graph's ordering — so they are read
  * together, with the type's own declared defaults standing in for absent keys,
  * exactly as `toEntryRow` does. Kept for the readers that hold a raw row rather
- * than a wire one and want only the date.
+ * than a wire one and want only the date. A legacy row with no year reads
+ * `year: null` (the type declares no default; Year 1 is never invented).
  */
 export const historyDateOf = (row: {
 	fields?: Record<string, any> | null
-}): { year: number; month: number | null; day: number | null } => {
+}): { year: number | null; month: number | null; day: number | null } => {
 	const stored = (row.fields ?? {}) as Record<string, unknown>
 	const of = (field: string) =>
 		(stored[field] ?? fieldDefault(HISTORY_TYPE_ID, field)) as any

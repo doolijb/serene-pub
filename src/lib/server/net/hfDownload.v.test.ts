@@ -2,12 +2,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 import * as http from "http"
 import * as fs from "fs"
+import * as os from "os"
 import * as path from "path"
 import type { AddressInfo } from "net"
 import { downloadFileInParallelChunks } from "./hfDownload"
 
-const SCRATCH =
-	"/tmp/claude-1000/-home-jody-github-serene-pub/564efcec-663a-419e-8efc-7e445249445f/scratchpad/vacpp/w3"
 const TOTAL = 8 * 64 * 1024 * 1024 // 8 chunks, 6 workers: two would start later if not aborted (file is sparse)
 
 let server: http.Server
@@ -16,7 +15,7 @@ let tmp: string
 let requests = 0
 
 beforeAll(async () => {
-	tmp = fs.mkdtempSync(path.join(SCRATCH, "hfv-"))
+	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hfv-"))
 	server = http.createServer((req, res) => {
 		requests++
 		if (req.url === "/boom") {
@@ -38,9 +37,11 @@ beforeAll(async () => {
 	base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 })
 afterAll(async () => {
-	server.closeAllConnections()
-	await new Promise((r) => server.close(r))
-	fs.rmSync(tmp, { recursive: true, force: true })
+	if (server) {
+		server.closeAllConnections()
+		await new Promise((r) => server.close(r))
+	}
+	if (tmp) fs.rmSync(tmp, { recursive: true, force: true })
 })
 
 describe("downloadFileInParallelChunks failure paths", () => {

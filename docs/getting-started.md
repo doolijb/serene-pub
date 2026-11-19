@@ -38,7 +38,7 @@ The first time you open Serene Pub, a short **setup wizard** fills the home page
 
 ### 1. Get started
 
-The first screen is headed **Welcome to Serene Pub**. Choose your **Language**: the rest of the app is shown in the language you pick. If you haven't given the app a name to call you yet, there's also **What should we call you?**: the name the characters will see, and the name of the character you play. It's optional. What you type becomes your display name, and the quickest persona on [Who are you in the story?](#5-who-are-you-in-the-story) is named with it too. Leave it empty to go by your username. Change your display name later in **Settings › User › User profile › Display name**; that doesn't rename a persona already made, which you edit in **Characters** like any character. Then press **Get started**.
+The first screen is headed **Welcome to Serene Pub** (just **Welcome** if someone else runs the pub). Choose your **Language**: the rest of the app is shown in the language you pick. If you haven't given the app a name to call you yet, there's also **What should we call you?**: the name the characters will see, and the name of the character you play. It's optional. What you type becomes your display name, and the quickest persona on [Who are you in the story?](#5-who-are-you-in-the-story) is named with it too. Leave it empty to go by your username. Change your display name later in **Settings › User › User profile › Display name**; that doesn't rename a persona already made, which you edit in **Characters** like any character. Then press **Get started**.
 
 Under every screen of the setup, **You can browse the entire documentation in the app at any time** opens these pages.
 

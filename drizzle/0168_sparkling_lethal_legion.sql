@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" ADD COLUMN "step_time_limits_off" boolean DEFAULT false NOT NULL;

@@ -49,12 +49,19 @@ import {
 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
-import { setStatus as setRegistryStatus } from "$lib/server/pipelines/runtime/runRegistry"
+import { active as activeRuns, setStatus as setRegistryStatus } from "$lib/server/pipelines/runtime/runRegistry"
+import {
+	announceRun,
+	forgetRunIo,
+	noteRunIo,
+	runFrameFacts
+} from "$lib/server/pipelines/runtime/runsInProgress"
 import type { RunKind } from "$lib/server/pipelines/runtime/runRegistry"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { LLMQueueStatus } from "$lib/server/utils/llmQueue"
 import { memberShownName } from "$lib/shared/lorebooks/memberIdentity"
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+import { RUN_WORKING_WORDS, runHoldsReruns } from "$lib/shared/sessions/runsInProgress"
 
 // db is the global Db — see db/types.d.ts
 
@@ -122,6 +129,16 @@ export interface RunStatusFrame {
 	 * relay's frames.
 	 */
 	routine?: { name: string }
+	/** 🚧 The run's shown name — what a person knows it by (a routine's label, an action's name, `the reply`); never a model, connection or prompt name. On the frames of a registered run. */
+	name?: string
+	/** 🚧 When the run started (ms since the epoch, `RunHandle.startedAt`). Present exactly on frames of a registered run: a page treats a frame with `since` as a run in progress. */
+	since?: number
+	/** 🚧 The line (message id) whose arrival caused the run — a routine woken by a reply's line. */
+	readsMessageId?: number
+	/** 🚧 The run waits at a review gate for a person to decide; such a run holds no re-run or remove action. Absent when it does not. */
+	parked?: true
+	/** 🚧 What every person who hears this frame may do: stop the run (`pipelines:cancelRun`). The first page's frames say it for the asker. */
+	mayStop?: boolean
 }
 
 export interface StatusRelayOptions {
@@ -301,6 +318,8 @@ export async function speakerDisplayName(
 
 export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 	const { db, io, sessionId, runId, live } = opts
+	// So a park or an unpark can announce this run (`announceRun`).
+	if (io) noteRunIo(runId, { io, sessionId, db })
 	/** The node's own status, filled — what `generating` restores. */
 	let current: StatusText | undefined
 	/** The last status shown, whoever set it — what a repeat is judged against. */
@@ -313,6 +332,19 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 	let queueShown = false
 	/** Whether the reasoning phase's status is the one showing. */
 	let reasoningShown = false
+	/** Does this run, as registered now, hold re-run actions? */
+	const holdsReruns = () => {
+		const handle = activeRuns().find((h) => h.runId === runId)
+		return (
+			!!handle &&
+			runHoldsReruns({
+				kind: handle.kind,
+				since: handle.startedAt,
+				lineBound: handle.lineBound,
+				parked: handle.parked
+			})
+		)
+	}
 	/** 🚧 Where the run shows, on every frame: on its line only, else a reply's channel when it is one. */
 	const placement: Pick<RunStatusFrame, "reply" | "lineBound"> = opts.lineBound
 		? { lineBound: true }
@@ -375,7 +407,8 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 				runId,
 				status: filled,
 				kind: opts.kind,
-				...placement
+				...placement,
+				...(await runFrameFacts(db, runId))
 			} satisfies RunStatusFrame).catch(() => {})
 		try {
 			opts.onStatus?.(nodeKey, filled)
@@ -388,21 +421,31 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 		chain = chain.then(work).catch(() => {})
 	}
 
-	/** The list hears `null`: nothing shown any more, whatever was. */
-	const clearShown = () =>
+	/**
+	 * Nothing shown any more, whatever was. The list hears `null` when the run
+	 * has ended; a run still holding re-run actions stays listed as working.
+	 */
+	const clearShown = (announced = false, ended = false) =>
 		enqueue(async () => {
-			if (!shown) return
+			if (!shown && !announced) return
 			shown = undefined
 			setRegistryStatus(runId, undefined)
 			if (io)
 				await broadcastToSessionUsers(io, sessionId, "sessions:runStatus", {
 					sessionId,
 					runId,
-					status: null,
+					status: !ended && holdsReruns() ? { i18n: { en: RUN_WORKING_WORDS } } : null,
 					kind: opts.kind,
-					...placement
+					...placement,
+					...(await runFrameFacts(db, runId))
 				} satisfies RunStatusFrame).catch(() => {})
 		})
+
+	// A run that holds re-run actions is announced as it starts, status or not.
+	// A routine shows itself (`showRoutineRun`), with its name on the frame; a
+	// reply shows on its own line in its channel, from its first status.
+	if (io && opts.kind !== "routine" && !opts.reply && holdsReruns())
+		enqueue(() => announceRun(runId))
 
 	return {
 		get current() {
@@ -498,7 +541,9 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 				clearTimeout(queueTimer)
 				queueTimer = undefined
 			}
-			clearShown()
+			// After the frames already queued, so the start announcement has left.
+			await chain
+			clearShown(forgetRunIo(runId), true)
 			await chain
 		}
 	}

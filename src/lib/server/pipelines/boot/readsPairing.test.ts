@@ -23,8 +23,15 @@ import path from "path"
 
 const FILES = [
 	"src/lib/server/pipelines/runtime/bindings.ts",
+	"src/lib/server/pipelines/runtime/bindings.shared.ts",
 	"src/lib/server/pipelines/runtime/bindings.relationships.ts",
-	"src/lib/server/pipelines/runtime/bindings.state.ts"
+	"src/lib/server/pipelines/runtime/bindings.state.ts",
+	"src/lib/server/pipelines/runtime/bindings.prompt.ts",
+	"src/lib/server/pipelines/runtime/bindings.retrieval.ts",
+	"src/lib/server/pipelines/runtime/bindings.turnOrder.ts",
+	"src/lib/server/pipelines/runtime/bindings.providers.ts",
+	"src/lib/server/pipelines/runtime/bindings.outlets.ts",
+	"src/lib/server/pipelines/runtime/bindings.summarize.ts"
 ]
 
 interface Site {

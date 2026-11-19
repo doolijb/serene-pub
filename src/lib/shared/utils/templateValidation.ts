@@ -129,7 +129,8 @@ export function validateTemplateContext(
 	engine: string,
 	source: string,
 	contract: Iterable<string> | TemplateScope,
-	untyped?: readonly string[]
+	untyped?: readonly string[],
+	options: { variableLayout?: boolean } = {}
 ): TemplateValidation {
 	if (!canValidateEngine(engine)) return clean(false)
 
@@ -143,12 +144,10 @@ export function validateTemplateContext(
 				)
 			: (contract as TemplateScope)
 
-	const report = checkTemplateSourceReport(
-		engine,
-		source,
-		scope,
-		templateCheckWith(untyped)
-	)
+	const report = checkTemplateSourceReport(engine, source, scope, {
+		...templateCheckWith(untyped),
+		...(options.variableLayout ? { variableLayout: true } : {})
+	})
 	if (!report.checked) return clean(false)
 
 	const syntax = report.findings.find((f) => f.kind === "syntax")

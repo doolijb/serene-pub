@@ -95,7 +95,7 @@
 	let adoptedId = $state<number | null>(null)
 	/** The entry compiled, or null while a by-date ask has not found its own. */
 	let entryId = $derived(historyEntry ? historyEntry.id : adoptedId)
-	/** The asked day, as a history entry's date reads (Year 1 for Undated). */
+	/** The asked day, as a history entry's date reads (none for Undated). */
 	const askedDate = untrack(() => byDate?.date ?? null)
 	const dateLabel = askedDate ? formatDate(askedDate) : "Undated"
 	// A display stand-in: it never decides where or what Save writes.
@@ -104,9 +104,9 @@
 			id,
 			lorebookId: untrack(() => byDate?.lorebookId ?? 0),
 			typeId: HISTORY_TYPE_ID,
-			year: askedDate?.year ?? 1,
-			month: askedDate ? (askedDate.month ?? null) : 1,
-			day: askedDate ? (askedDate.day ?? null) : 1,
+			year: askedDate?.year ?? null,
+			month: askedDate?.month ?? null,
+			day: askedDate?.day ?? null,
 			content: "",
 			isCompleted: false,
 			branchId: reading.branchId

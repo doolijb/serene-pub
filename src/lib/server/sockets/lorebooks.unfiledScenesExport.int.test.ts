@@ -207,6 +207,101 @@ describe("an unfiled scene in an export", () => {
 	})
 })
 
+describe("a history entry with no year", () => {
+	/** A book with no history entry at all, so an undated scene has no day to ride. */
+	async function makeBareBook() {
+		const user = await makeUser("undated")
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Undated Book", userId: user.id })
+			.returning()
+		return { user, lorebook, history: null, session: null } as any
+	}
+
+	test("an undated scene rides an entry that carries no year, month or day", async () => {
+		const b = await makeBareBook()
+		await unfiled(b, { name: "Undated" })
+		const history = historyOf(await exportBook(b))
+		expect(history).toHaveLength(1)
+		const ext = history[0].extensions.serenepub
+		expect(ext.scenes.map((s: any) => s.name)).toEqual(["Undated"])
+		for (const part of ["year", "month", "day"])
+			expect(ext[part] ?? null, part).toBeNull()
+	})
+
+	test("a dated entry still exports its year, month and day", async () => {
+		const b = await makeBook()
+		const history = historyOf(await exportBook(b))
+		expect(history[0].extensions.serenepub).toMatchObject({
+			year: 5,
+			month: 1,
+			day: 2
+		})
+	})
+
+	const importDoc = async (doc: any) => {
+		const { lorebookImportHandler } = await import("./lorebooks")
+		const importer = await makeUser("undated-importer")
+		const res = await lorebookImportHandler.handler(
+			fakeSocket(importer.id),
+			{ lorebookJson: JSON.stringify(doc) },
+			noopEmit
+		)
+		const book = res.lorebook!
+		const scenes = await testDb.query.scenes.findMany({
+			where: eq(schema.scenes.lorebookId, book.id)
+		})
+		const entries = await testDb.query.lorebookEntries.findMany({
+			where: eq(schema.lorebookEntries.lorebookId, book.id)
+		})
+		return { res, scenes, entries }
+	}
+
+	test("round trip: an undated unfiled scene arrives unfiled; its entry is skipped and reported", async () => {
+		const b = await makeBareBook()
+		await unfiled(b, { name: "Undated" })
+		const { res, scenes, entries } = await importDoc(await exportBook(b))
+		expect(scenes.map((s) => s.name)).toEqual(["Undated"])
+		expect(scenes[0].historyEntryId).toBeNull()
+		expect(entries.filter((e) => e.typeId === "core:entry/history")).toHaveLength(0)
+		expect((res as any).warnings).toContain(
+			"1 history entry had no year and was not imported."
+		)
+	})
+
+	test("several yearless entries: the rest imports, each is skipped, the sentence is plural", async () => {
+		const b = await makeBook()
+		await unfiled(b, { name: "Dated scene", openedStoryClockYear: 5, openedStoryClockMonth: 1, openedStoryClockDay: 2 })
+		const doc = await exportBook(b)
+		const template = historyOf(doc)[0]
+		const bare = (name: string, localId: number) => ({
+			...template,
+			extensions: {
+				...template.extensions,
+				serenepub: {
+					...Object.fromEntries(
+						Object.entries(template.extensions.serenepub).filter(
+							([k]) => !["year", "month", "day"].includes(k)
+						)
+					),
+					localId,
+					scenes: [{ name, localId: localId + 100 }]
+				}
+			}
+		})
+		doc.entries.push(bare("Orphan A", 901), bare("Orphan B", 902))
+		const { res, scenes, entries } = await importDoc(doc)
+		expect(entries.filter((e) => e.typeId === "core:entry/history")).toHaveLength(1)
+		const byName = Object.fromEntries(scenes.map((s) => [s.name, s]))
+		expect(byName["Dated scene"].historyEntryId).not.toBeNull()
+		expect(byName["Orphan A"].historyEntryId).toBeNull()
+		expect(byName["Orphan B"].historyEntryId).toBeNull()
+		expect((res as any).warnings).toContain(
+			"2 history entries had no year and were not imported."
+		)
+	})
+})
+
 describe("an unfiled scene in a copy", () => {
 	test("is copied unfiled with its display name, custom from here on", async () => {
 		const { lorebooksDuplicateHandler } = await import("./lorebooks")

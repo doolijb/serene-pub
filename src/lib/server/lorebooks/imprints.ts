@@ -51,6 +51,7 @@ import { i18nText } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { KeptImprint } from "$lib/shared/entries/types"
 import { formatDate } from "$lib/shared/lorebooks/storyDate"
+import { entryLockedAgainstRuns } from "$lib/shared/lorebooks/runLocks"
 import { assertRetractable, settledLineOf } from "$lib/server/sessions/settle"
 
 /** What an imprint is written on: its subject's kind. */
@@ -673,7 +674,27 @@ export async function retractImprints(db: Db, selection: ImprintSelection): Prom
 			taken.push({ act: "dropped", imprint })
 			continue
 		}
-		// Back never writes into a book its session no longer reads: a
+		// A locked entry is left as it is, whatever the book: kept, never reverted
+		// or removed. A version stands on its entry's lock.
+		const lockOf =
+			subject === "entry"
+				? row
+				: subject === "version"
+					? (
+							await db
+								.select({ entryLock: E.entryLock })
+								.from(E)
+								.where(eq(E.id, row.entryId as number))
+								.limit(1)
+						)[0]
+					: undefined
+		if (lockOf && entryLockedAgainstRuns(lockOf as { entryLock?: boolean | null })) {
+			await db.update(I).set({ status: "kept" }).where(eq(I.id, imprint.id))
+			keptNow.add(imprint.id)
+			taken.push({ act: "kept", imprint })
+			continue
+		}
+		// Back never writes into a book its session does not read: a
 		// version there stays as it is, and its record is kept.
 		if (subject === "version") {
 			if (!sessionBooks.has(imprint.sessionId)) {

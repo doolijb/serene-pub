@@ -265,7 +265,9 @@
 		graphBuildsCtx.reopenLorebookId = build.lorebookId
 	}
 
+	/** Only the person whose scene it is opens it from here; an administrator just reads. */
 	function navigateToScene(activity: SceneSummarizeState) {
+		if (activity.userId !== userCtx?.user?.id) return
 		// A scene is addressed under the history entry it was compiled into,
 		// so a scene with no entry yet is the History list and nothing more.
 		panelsCtx.digest.lore = activity.historyEntryId

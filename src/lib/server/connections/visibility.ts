@@ -117,7 +117,16 @@ export const CONNECTION_IDENTITY_KEYS: ReadonlySet<string> = new Set([
 	// key stays because this set is matched by NAME at any depth, so a payload
 	// from an older build, a restored export, or a plugin echoing its own state
 	// can still carry it — and a key that matches nothing costs nothing.
-	"activeEmbeddingConnectionId"
+	"activeEmbeddingConnectionId",
+	// `systemSettings:get`: the model the embedding star resolves to
+	// (`api::<baseUrl>::<model>` for a hosted one, so it names a base URL) and the
+	// two managers' settings rows (base URLs, model directories, binary paths,
+	// ports). A member reads the embedding mark from the `embeddingState` their
+	// message rows carry, and only administrator surfaces read the managers' rows.
+	// Each name means exactly that in every payload.
+	"activeEmbeddingModel",
+	"ollamaSettings",
+	"koboldCppSettings"
 ])
 
 /**

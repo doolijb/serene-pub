@@ -4,7 +4,10 @@
  *
  * A date value prints in the calendar's spelling when its parts carry names
  * (the same text as `formatStoryTime` gives that date) and numerically when
- * they do not. A delta prints as signed counts of its parts, `-0y 2m 3d`;
+ * they do not. A named year over a month with no name is a date the calendar
+ * could not place (`storyDateValueOf`): it prints `formatStoryTime`'s
+ * free-form fallback, `Year 412, Mo. 13, Day 5, 22:30` (a zero month or day
+ * is left out). A delta prints as signed counts of its parts, `-0y 2m 3d`;
  * 🚧 the form is provisional.
  */
 
@@ -38,6 +41,16 @@ export function storyDateText(value: unknown): string {
 		if (!day) return `${(month as { name: string }).name}, ${year.name}${clock}`
 		const weekday = typeof day.name === "string" && day.name ? `${day.name}, ` : ""
 		return `${weekday}${day.number} ${(month as { name: string }).name}, ${year.name}${clock}`
+	}
+
+	if (named(year) && month) {
+		// A date the calendar could not place: `formatStoryTime`'s free-form
+		// fallback, spelled from the value alone.
+		let out = year.name
+		if (month.number) out += `, Mo. ${month.number}`
+		if (day && day.number) out += `, Day ${day.number}`
+		if (time) out += `, ${pad2(time.hour)}:${pad2(time.minute)}`
+		return out
 	}
 
 	let out = month ? `${year.number}-${pad2(month.number)}` : `Year ${year.number}`

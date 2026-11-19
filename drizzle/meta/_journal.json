@@ -1177,6 +1177,27 @@
       "when": 1794797050715,
       "tag": "0167_entry_knowledge",
       "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1794855984695,
+      "tag": "0168_sparkling_lethal_legion",
+      "breakpoints": true
+    },
+    {
+      "idx": 169,
+      "version": "7",
+      "when": 1794969411760,
+      "tag": "0169_normal_gauntlet",
+      "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1794974160817,
+      "tag": "0170_scene_redlines",
+      "breakpoints": true
     }
   ]
 }

@@ -1,12 +1,16 @@
 /**
  * 🚧 The ONE server read of a session's speech settings (S7): through the
- * session settings cascade, so the genre's default and any preset apply;
- * falls back to the raw `sessions.genre_fields` when the document cannot be
- * resolved. Never throws — a missing session reads as the defaults.
+ * session fields cascade, so the genre's default and any preset apply;
+ * falls back to the raw `sessions.genre_fields` when the cascade cannot be
+ * read. Never throws — a missing session reads as the defaults.
  */
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { resolveSessionSettings } from "$lib/server/sessions/settings"
+import {
+	cascadeSessionFields,
+	getSessionGenre,
+	STANDARD_GENRE_ID
+} from "$lib/server/pipelines/entities/sessionGenres"
 import {
 	readEnvoySpeech,
 	readSpeechSessionSettings,
@@ -19,8 +23,24 @@ export async function sessionSpeechSettings(
 	sessionId: number
 ): Promise<SpeechSessionSettings> {
 	try {
-		const doc = await resolveSessionSettings(db, sessionId)
-		if (doc) return readSpeechSessionSettings(doc.fields)
+		const [session] = await db
+			.select({
+				genreId: schema.sessions.genreId,
+				presetId: schema.sessions.presetId,
+				genreFields: schema.sessions.genreFields
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (session) {
+			const genre = await getSessionGenre(
+				db,
+				session.genreId ?? STANDARD_GENRE_ID
+			)
+			return readSpeechSessionSettings(
+				await cascadeSessionFields(db, session, genre)
+			)
+		}
 	} catch {
 		// fall through to the stored fields
 	}

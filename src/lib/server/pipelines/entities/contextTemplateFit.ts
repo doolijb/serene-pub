@@ -412,6 +412,38 @@ export async function scanContextTemplateFits(
 				"$lib/server/pipelines/registrations/genreValues"
 			)
 			const genreValues = await genreStoredValues(db, spec.slug)
+			// The session-scope registration values of this spec's template slots,
+			// read once: a row belongs to this pipeline by its own spec, else by
+			// its base key's (`config/library.ts`).
+			const { registrationValueRefs } = await import(
+				"$lib/server/pipelines/registrations/values"
+			)
+			const { baseKeyOf } = await import(
+				"$lib/server/pipelines/registrations/rows"
+			)
+			const regRows = await db
+				.select({
+					id: schema.registrations.id,
+					key: schema.registrations.key,
+					specSlug: schema.registrations.specSlug
+				})
+				.from(schema.registrations)
+			const slugOfKey = new Map<string, string>()
+			for (const r of regRows)
+				if (r.specSlug && !slugOfKey.has(r.key))
+					slugOfKey.set(r.key, r.specSlug)
+			const slugOfRow = new Map(
+				regRows.map((r) => [
+					r.id,
+					r.specSlug ?? slugOfKey.get(baseKeyOf(r.key)) ?? null
+				])
+			)
+			const sessionValues = (
+				await registrationValueRefs(db, [...new Set(slots.map((d) => d.slot))])
+			).filter(
+				(r) =>
+					r.scopeKind === "session" && slugOfRow.get(r.rowId) === spec.slug
+			)
 
 			for (const d of slots) {
 				// templateId → the configurations selecting it.
@@ -453,6 +485,14 @@ export async function scanContextTemplateFits(
 					))
 					if (typeof o.value === "number" && !selected.has(o.value))
 						selected.set(o.value, new Set())
+				for (const r of sessionValues)
+					if (
+						r.nodeKey === d.nodeKey &&
+						r.slot === d.slot &&
+						typeof r.value === "number" &&
+						!selected.has(r.value)
+					)
+						selected.set(r.value, new Set())
 				// 🚧 And the genre's defaults' values (PLAN-layering D5) — where an
 				// instance-wide selection of a pipeline registrations run lives.
 				// Reported like an override: no configuration to notice it on.

@@ -36,6 +36,16 @@ export interface SessionRunRecord {
 	lineBound?: true
 	/** 🚧 The routine's name (`RunStatusFrame.routine`): on a routine run's own frames; a relay frame leaves it as held. */
 	routine?: { name: string }
+	/** 🚧 The run's shown name (`RunStatusFrame.name`). */
+	name?: string
+	/** 🚧 When the run began (epoch ms); set exactly on a registered run's frames. */
+	since?: number
+	/** 🚧 The line whose arrival caused the run. */
+	readsMessageId?: number
+	/** 🚧 Waiting at a review gate. */
+	parked?: true
+	/** 🚧 Whether the viewer may stop it. */
+	mayStop?: boolean
 }
 /** 🚧 The session's genre row as `sessions:genreOf` answered; null = answered, not offered here. */
 export type SessionGenreRecord = Sockets.Sessions.GenreOf.Response["genre"]

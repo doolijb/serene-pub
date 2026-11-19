@@ -23,6 +23,8 @@ export interface BulkRow {
 	archived: boolean
 	branchId: number | null
 	listed: boolean
+	/** Marked not common knowledge; the bar fills it from the book's knowledge store. */
+	notCommon?: boolean
 }
 
 export type BulkAction =
@@ -35,6 +37,8 @@ export type BulkAction =
 	| "archive"
 	| "unarchive"
 	| "delete"
+	| "notCommon"
+	| "common"
 
 /** An entry left as it was, and the sentence that says why. */
 export interface BulkNote {
@@ -55,7 +59,9 @@ const alreadyAsked = (action: BulkAction, r: BulkRow): boolean =>
 	(action === "off" && r.off) ||
 	(action === "on" && !r.off) ||
 	(action === "archive" && r.archived) ||
-	(action === "unarchive" && !r.archived)
+	(action === "unarchive" && !r.archived) ||
+	(action === "notCommon" && !!r.notCommon) ||
+	(action === "common" && !r.notCommon)
 
 /**
  * Which selected entries an action is sent for. A *could exist here* row takes only Move down the tree; a
@@ -120,6 +126,7 @@ export function toggleActions(rows: readonly BulkRow[]): {
 	pin: "pin" | "unpin"
 	off: "off" | "on"
 	archive: "archive" | "unarchive"
+	knowledge: "notCommon" | "common"
 } {
 	const listed = rows.filter((r) => r.listed)
 	return {
@@ -131,7 +138,11 @@ export function toggleActions(rows: readonly BulkRow[]): {
 		archive:
 			listed.some((r) => !r.archived) || listed.length === 0
 				? "archive"
-				: "unarchive"
+				: "unarchive",
+		knowledge:
+			listed.length > 0 && listed.every((r) => r.notCommon)
+				? "common"
+				: "notCommon"
 	}
 }
 
@@ -139,6 +150,8 @@ export const BULK_LABELS: Record<
 	Exclude<BulkAction, "beginning" | "decay" | "delete">,
 	string
 > = {
+	notCommon: "Mark not common knowledge…",
+	common: "Mark common knowledge",
 	pin: "Pin",
 	unpin: "Unpin",
 	off: "Switch off",
@@ -228,6 +241,24 @@ export function bulkDeleteCopy(o: {
 		title: o.count === 1 ? "Delete 1 entry?" : `Delete ${o.count} entries?`,
 		message: parts.join(" ")
 	}
+}
+
+/** 🚧 The one confirmation of a bulk Mark not common knowledge (owner rule 6, 2026-11-14: it warns with the count). */
+export function bulkNotCommonCopy(count: number): {
+	title: string
+	message: string
+} {
+	return count === 1
+		? {
+				title: "Mark 1 entry not common knowledge?",
+				message:
+					"Only the cast members tied to it will read it when they speak; every other cast member stops reading it."
+			}
+		: {
+				title: `Mark ${count} entries not common knowledge?`,
+				message:
+					"Only the cast members tied to them will read them when they speak; every other cast member stops reading them."
+			}
 }
 
 /** How many loaded entries are filed (at any depth) under the sent ones and are not themselves selected. */

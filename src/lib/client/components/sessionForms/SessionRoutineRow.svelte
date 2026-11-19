@@ -131,12 +131,12 @@
 				{/each}
 			</div>
 		{:else if modeField}
-			<p class="text-sm">{ROUTINE_MODES.find((m) => m.key === mode)?.label ?? mode}</p>
+			<p class="text-sm" aria-describedby={modeField.readOnlyReason ? `${fieldDomId(modeField)}-reason` : undefined}>{ROUTINE_MODES.find((m) => m.key === mode)?.label ?? mode}</p>
 		{/if}
 	</div>
 
 	{#if modeField && !modeField.editable && modeField.readOnlyReason}
-		<p class="text-surface-600-400 text-xs">{modeField.readOnlyReason}</p>
+		<p id="{fieldDomId(modeField)}-reason" class="text-surface-600-400 text-xs">{modeField.readOnlyReason}</p>
 	{/if}
 	{#if modeField && refusal(modeField)}
 		<p class="text-error-600-400 text-xs" role="alert">{refusal(modeField)}</p>

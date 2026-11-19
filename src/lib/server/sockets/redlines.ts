@@ -1,13 +1,17 @@
 /**
- * 🚧 An entry's **Edit history** on the wire (`lore_redlines`, record module
- * `lorebooks/redlines.ts`): list, Restore, count and clear, and the admin's
- * size and clear. Replies only; nothing is pushed.
+ * 🚧 An entry's, a version's and a scene's **Edit history** on the wire
+ * (`lore_redlines`, record module `lorebooks/redlines.ts`): list, Restore,
+ * count and clear, and the admin's size and clear. Replies only; nothing is
+ * pushed.
  *
  * - The list names a session only to a viewer who may open it, and never
  *   sends a run id, a model or a connection.
  * - Restore goes through the same save a person's save takes (`saveEntry`,
  *   `updateAmendment`), so every check of that save applies, and is itself
  *   recorded (cause `restore`).
+ * - A scene's history is read and restored by whoever may edit its lorebook;
+ *   Restore goes through the scene's own save. A scene has no clear of its
+ *   own: the book's clear covers it.
  * - Clearing and counting are the lorebook owner's alone.
  */
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
@@ -29,6 +33,7 @@ import { profileOf } from "$lib/shared/characters/profile"
 import type { CharacterProfileV1 } from "$lib/shared/characters/profile"
 import { cardColumnsOfProfile } from "$lib/server/characters/cardIO"
 import { updateCastVersion } from "$lib/server/characters/versions"
+import { readSceneCast } from "$lib/server/utils/sceneCast"
 import { providedBookKeepsCast } from "$lib/server/lorebooks/castOwnNames"
 import { retoldUpdateProblem } from "$lib/server/lorebooks/retold"
 import { validateTimbre } from "$lib/server/characters/timbre"
@@ -820,6 +825,169 @@ export const characterVersionClearRedlinesHandler: Handler<
 	versionEcho
 )
 
+// ── A scene's edit history ──────────────────────────────────────────────────
+
+const NOT_THE_SCENE = "Scene not found or access denied."
+const GONE_MEMBER = "a cast member no longer in this lorebook"
+const SCENE_LABELS: Record<string, string> = {
+	participantCharacters: "Present",
+	mentionedCharacters: "Mentioned"
+}
+
+/** The scene and its lorebook when `userId` may edit it, or a refusal. */
+async function sceneAccess(sceneId: unknown, userId: number) {
+	if (!Number.isInteger(sceneId)) throw new Error(NOT_THE_SCENE)
+	const [scene] = await db
+		.select({ id: schema.scenes.id, lorebookId: schema.scenes.lorebookId })
+		.from(schema.scenes)
+		.where(eq(schema.scenes.id, sceneId as number))
+		.limit(1)
+	if (!scene || !(await findOwnedBook(db, userId, scene.lorebookId)))
+		throw new Error(NOT_THE_SCENE)
+	return scene
+}
+
+const idList = (v: unknown): number[] =>
+	Array.isArray(v) ? v.filter((n): n is number => Number.isInteger(n)) : []
+
+/** A scene's Edit history as `asker` reads it, newest first; member ids shown as names. */
+async function buildSceneRedlines(
+	sceneId: number,
+	asker: number
+): Promise<Sockets.Scenes.Redlines.Response> {
+	const scene = await sceneAccess(sceneId, asker)
+	const rows = (await db
+		.select()
+		.from(schema.loreRedlines)
+		.where(eq(schema.loreRedlines.sceneId, sceneId))
+		.orderBy(desc(schema.loreRedlines.id))) as RedlineRow[]
+	const whoOf = await whoReader(rows, asker)
+
+	const ids = new Set<number>()
+	for (const r of rows)
+		for (const c of Object.values(r.changes))
+			for (const side of [c.before, c.after])
+				for (const id of idList(side?.v)) ids.add(id)
+	const members = ids.size
+		? await db
+				.select({
+					id: schema.lorebookBindings.id,
+					name: schema.lorebookBindings.name,
+					binding: schema.lorebookBindings.binding
+				})
+				.from(schema.lorebookBindings)
+				.where(
+					and(
+						eq(schema.lorebookBindings.lorebookId, scene.lorebookId),
+						inArray(schema.lorebookBindings.id, [...ids])
+					)
+				)
+		: []
+	const nameOf = new Map(members.map((m) => [m.id, m.name || m.binding]))
+	const names = (v: unknown): string[] =>
+		idList(v).map((id) => nameOf.get(id) ?? GONE_MEMBER)
+
+	return {
+		sceneId,
+		lorebookId: scene.lorebookId,
+		canRestore: !(await primerRowEditProblem(db, scene.lorebookId)),
+		redlines: rows.map((r) => ({
+			id: r.id,
+			amendmentId: null,
+			version: null,
+			cause: r.cause as Sockets.RedlineView["cause"],
+			who: whoOf(r),
+			mine: r.userId === asker,
+			at: (r.createdAt instanceof Date
+				? r.createdAt
+				: new Date(r.createdAt)
+			).toISOString(),
+			changes: Object.entries(r.changes).map(([key, c]) => ({
+				key,
+				label: SCENE_LABELS[key] ?? key,
+				before: names(c.before?.v),
+				after: names(c.after?.v),
+				wasAbsent: c.before == null,
+				nowAbsent: c.after == null
+			}))
+		}))
+	}
+}
+
+export const sceneRedlinesHandler: Handler<
+	Sockets.Scenes.Redlines.Params,
+	Sockets.Scenes.Redlines.Response
+> = refusable(
+	"scenes:redlines",
+	async (socket, params: Sockets.Scenes.Redlines.Params, emitToUser) => {
+		const res = await buildSceneRedlines(params?.sceneId, socket.user!.id)
+		emitToUser("scenes:redlines", res)
+		return res
+	},
+	"The edit history could not be read.",
+	undefined,
+	(params) => ({ sceneId: (params as { sceneId?: unknown } | null)?.sceneId })
+)
+
+export const sceneRestoreRedlineHandler: Handler<
+	Sockets.Scenes.RestoreRedline.Params,
+	Sockets.Scenes.RestoreRedline.Response
+> = refusable(
+	"scenes:restoreRedline",
+	async (
+		socket,
+		params: Sockets.Scenes.RestoreRedline.Params,
+		emitToUser
+	) => {
+		const userId = socket.user!.id
+		if (!Number.isInteger(params?.redlineId)) throw new Error(NOT_KEPT)
+		const [row] = (await db
+			.select()
+			.from(schema.loreRedlines)
+			.where(eq(schema.loreRedlines.id, params.redlineId))
+			.limit(1)) as RedlineRow[]
+		if (!row || row.sceneId == null) throw new Error(NOT_KEPT)
+		const scene = await sceneAccess(row.sceneId, userId)
+
+		// A role the row holds goes back to its earlier list; the other keeps its current one.
+		const current = await readSceneCast(scene.id)
+		const cast = {
+			participantCharacters: row.changes.participantCharacters
+				? idList(row.changes.participantCharacters.before?.v)
+				: current.participantCharacters,
+			mentionedCharacters: row.changes.mentionedCharacters
+				? idList(row.changes.mentionedCharacters.before?.v)
+				: current.mentionedCharacters
+		}
+
+		// Loaded at call time: `scenes.ts` is a large module of its own.
+		const { saveSceneSummary } = await import("./scenes")
+		const { scene: saved } = await saveSceneSummary({
+			by: "person",
+			userId,
+			params: { scene: { id: scene.id, ...cast } } as Sockets.Scenes.Update.Params,
+			io: socket.io,
+			emitToUser,
+			cause: "restore"
+		})
+
+		emitToUser("scenes:update", { scene: saved })
+		const res: Sockets.Scenes.RestoreRedline.Response = {
+			redlineId: row.id,
+			sceneId: scene.id,
+			lorebookId: scene.lorebookId
+		}
+		emitToUser("scenes:restoreRedline", res)
+		emitToUser("scenes:redlines", await buildSceneRedlines(scene.id, userId))
+		return res
+	},
+	"That edit could not be restored.",
+	undefined,
+	(params) => ({
+		redlineId: (params as { redlineId?: unknown } | null)?.redlineId
+	})
+)
+
 export function registerRedlineHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -836,6 +1004,8 @@ export function registerRedlineHandlers(
 	register(socket, characterVersionRedlinesHandler, emitToUser)
 	register(socket, characterVersionRestoreRedlineHandler, emitToUser)
 	register(socket, characterVersionClearRedlinesHandler, emitToUser)
+	register(socket, sceneRedlinesHandler, emitToUser)
+	register(socket, sceneRestoreRedlineHandler, emitToUser)
 }
 
 // ── Admin → Data ────────────────────────────────────────────────────────────

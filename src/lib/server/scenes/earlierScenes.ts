@@ -7,7 +7,10 @@
  * the prompt, oldest first, each under its scene's name. A scene is eligible
  * only with a usable summary (`summaryStatus = 'done'`, a person's or the
  * routine's, not blank) that has not been compiled into a history entry
- * (`history_entry_id IS NULL`), and only when it is closed (a range scene) or
+ * (`history_entry_id IS NULL`) — unless the session's lorebook keeps no
+ * timeline: there no history day carries the compiled scene, so it is
+ * eligible again with its own summary (owner 2026-11-16, D60; dates null) —
+ * and only when it is closed (a range scene) or
  * a tick selection. An open scene is never eligible. Which of them show —
  * those that lost a line to the cut, and fit the block's share of the
  * budget — is the fit's call (`transcriptFit.earlierScenesShown`); this read
@@ -22,6 +25,7 @@ import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 import { sceneStartOf } from "$lib/server/scenes/historyEntryOfDate"
+import { sessionTimelineSql, timelineOf } from "$lib/server/lorebooks/timeline"
 
 /** 🚧 The most eligible scenes the read returns: the newest 200. */
 export const EARLIER_SCENES_MOST = 200
@@ -34,7 +38,7 @@ export interface EarlierScene {
 	summary: string
 	/** Where the scene starts (`sceneStartOf`). */
 	firstLineId: number
-	/** The scene's story clock when it opened (`opened_story_clock_*`); null when it recorded none. */
+	/** The scene's story clock when it opened (`opened_story_clock_*`); null when it recorded none, and always null when the session's lorebook keeps no timeline (a stale stored clock never reaches a run). */
 	openedStoryClock: StoryClock | null
 }
 
@@ -56,7 +60,8 @@ export async function earlierScenesOf(
 				eq(s.sessionId, sessionId),
 				eq(s.channel, "main"),
 				eq(s.summaryStatus, "done"),
-				isNull(s.historyEntryId),
+				// A compiled scene is out (its day arrives as history) only while the timeline is on; a null switch reads as on.
+				sql`(${isNull(s.historyEntryId)} OR NOT coalesce((select ${sessionTimelineSql()} from sessions where sessions.id = ${sessionId}), true))`,
 				sql`btrim(coalesce(${s.summary}, '')) <> ''`,
 				sql`(${isNotNull(s.closedAtMessageId)} OR (${isNull(s.openedAtMessageId)} AND coalesce(json_array_length(${s.selectedMessageIds}), 0) > 0))`
 			)
@@ -82,7 +87,9 @@ export async function earlierScenesOf(
 			openedStoryClockMonth: s.openedStoryClockMonth,
 			openedStoryClockDay: s.openedStoryClockDay,
 			openedStoryClockHour: s.openedStoryClockHour,
-			openedStoryClockMinute: s.openedStoryClockMinute
+			openedStoryClockMinute: s.openedStoryClockMinute,
+			// The governing book's switch, folded into this select: no extra statement.
+			timelineEnabled: sql<boolean | null>`(select ${sessionTimelineSql()} from sessions where sessions.id = ${sessionId})`
 		})
 		.from(s)
 		.where(
@@ -92,6 +99,7 @@ export async function earlierScenesOf(
 			)
 		)
 	const { sceneDisplayNames, sceneClockOf } = await import("$lib/server/scenes/liveScenes")
+	const { timelessNull } = await import("$lib/server/state/storyTime")
 	const names = await sceneDisplayNames(db, rows)
 	const byId = new Map(rows.map((r) => [r.id, r]))
 	return started.map((c) => ({
@@ -99,6 +107,9 @@ export async function earlierScenesOf(
 		name: names.get(c.id) ?? "",
 		summary: (byId.get(c.id)?.summary ?? "").trim(),
 		firstLineId: c.start,
-		openedStoryClock: sceneClockOf(byId.get(c.id) as never, "opened")
+		openedStoryClock: timelessNull(
+			!timelineOf(byId.get(c.id) as { timelineEnabled: boolean | null }),
+			sceneClockOf(byId.get(c.id) as never, "opened")
+		)
 	}))
 }

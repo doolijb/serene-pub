@@ -24,11 +24,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -204,7 +204,7 @@ describe("characterRowsPage: who may see what", () => {
 				}
 			})
 			.where(eq(schema.characters.id, copy.id))
-		// A guest's view of a session's notes.
+		// A guest's view of a session's notes: none (G2).
 		const { session, notes } = await mkSession(other.id)
 		await mkMember(notes.id, { name: `${p} story note` })
 		await testDb
@@ -240,9 +240,14 @@ describe("characterRowsPage: who may see what", () => {
 		})
 
 		const withStories = await page(me.id, p, { inMyStories: true })
-		expect(withStories.rows.map((r) => r.shownName)).toContain(
+		// A guest has no access to the session's notes (G2): even in "my stories" they are not there.
+		expect(withStories.rows.map((r) => r.shownName)).not.toContain(
 			`${p} story note`
 		)
+		// The session's owner reads them there.
+		expect(
+			(await page(other.id, p, { inMyStories: true })).rows.map((r) => r.shownName)
+		).toContain(`${p} story note`)
 
 		// An administrator sees no one else's private book.
 		const adminSees = (await page(admin.id, p)).rows.map((r) => r.shownName)
@@ -519,6 +524,29 @@ describe("characterRowsPage: filters", () => {
 			(await page(me.id, p, { sessionId: strangerSession.session.id }))
 				.rows
 		).toEqual([])
+	})
+
+	test("a guest filtering by a session they are in gets no notes member, and still the readable attached book's member (G2)", async () => {
+		const p = uniq("gs")
+		const owner = await mkUser()
+		const guest = await mkUser()
+		const { session, notes } = await mkSession(owner.id)
+		await mkMember(notes.id, { name: `${p} Note` })
+		const attached = await mkBook(owner.id)
+		const att = await mkMember(attached.id, { name: `${p} Attached` })
+		await testDb
+			.update(schema.sessions)
+			.set({ lorebookId: attached.id })
+			.where(eq(schema.sessions.id, session.id))
+		await testDb.insert(schema.sessionGuests).values({ sessionId: session.id, userId: guest.id })
+		// Not shared with the guest: the attached book's member is not theirs to read either.
+		expect((await page(guest.id, p, { sessionId: session.id })).rows).toEqual([])
+		await testDb.insert(schema.lorebookShares).values({ lorebookId: attached.id, userId: guest.id })
+		const seen = await page(guest.id, p, { sessionId: session.id })
+		expect(keys(seen)).toEqual([`member:${att.id}`])
+		expect(JSON.stringify(seen)).not.toContain(`${p} Note`)
+		// The owner twin: both.
+		expect(keys(await page(owner.id, p, { sessionId: session.id })).length).toBe(2)
 	})
 
 	test("follows: card and own", async () => {

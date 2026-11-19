@@ -245,3 +245,64 @@ describe("the prompt dialog", () => {
 		expect(document.body.textContent).toContain("Loading the wording")
 	})
 })
+
+describe("the prompt dialog, asked by a settings form's field", () => {
+	const fieldOption = {
+		id: "field-1",
+		value: 11,
+		choices: [
+			{ id: 11, label: "Plain story" },
+			{ id: 12, label: "Close third person" }
+		]
+	}
+	const fieldAnswer = (fieldId: string, promptId: number, rest: Record<string, unknown>) => {
+		for (const h of listeners.get("pipelines:promptWording") ?? [])
+			h({ slug: "core:spec/story-respond", fieldId, promptId, ...rest })
+		flushSync()
+	}
+	const sent = () =>
+		emitted.filter(([e]) => e === "pipelines:promptWording").map(([, p]) => p)
+
+	test("both requests carry fieldId and no optionId", async () => {
+		render({ option: fieldOption, fieldId: "field-1" })
+		await tick()
+		button(/^Close third person$/)!.click()
+		flushSync()
+		await tick()
+		expect(sent()).toEqual([
+			{ slug: "core:spec/story-respond", fieldId: "field-1", promptId: 11, sessionId: 7 },
+			{ slug: "core:spec/story-respond", fieldId: "field-1", promptId: 12, sessionId: 7 }
+		])
+		expect(sent().some((p) => "optionId" in p)).toBe(false)
+	})
+
+	test("a reply with the matching fieldId is shown; another field's is ignored", async () => {
+		render({ option: fieldOption, fieldId: "field-1" })
+		await tick()
+		fieldAnswer("field-2", 11, { name: "Elsewhere", declared: [], fields: {} })
+		expect(document.body.textContent).toContain("Loading the wording")
+		fieldAnswer("field-1", 11, {
+			name: "Plain story",
+			declared: ["systemPrompt"],
+			fields: { systemPrompt: "Tell it plainly." }
+		})
+		expect(document.querySelector("p.whitespace-pre-wrap")?.textContent).toBe("Tell it plainly.")
+	})
+
+	test("an optionId reply is not taken for a field's answer", async () => {
+		render({ option: fieldOption, fieldId: "field-1" })
+		await tick()
+		answer(11, { optionId: "field-1", name: "Wrong", declared: [], fields: {} })
+		expect(document.body.textContent).toContain("Loading the wording")
+	})
+
+	test("choices with no group draw one list and no group label", async () => {
+		render({ option: fieldOption, fieldId: "field-1" })
+		await tick()
+		const text = document.body.textContent ?? ""
+		expect(text.includes("Also fits")).toBe(false)
+		expect(text.includes("Serene Pub ships")).toBe(false)
+		expect(document.querySelectorAll("nav ul").length).toBe(1)
+		expect(document.querySelectorAll("nav li").length).toBe(2)
+	})
+})

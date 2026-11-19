@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, test } from "vitest"
 import { flushSync, mount, tick, unmount } from "svelte"
 import KeywordChips from "./KeywordChips.svelte"
+import KeywordChipsFixture from "./KeywordChipsFixture.svelte"
 
 const REGEX_KEY = String.raw`\w{2,4}`
 
@@ -96,5 +97,38 @@ describe("KeywordChips", () => {
 			.click()
 		await settle()
 		expect(props.keys).toEqual(["b"])
+	})
+})
+
+describe("KeywordChips in a read-only book", () => {
+	let app: ReturnType<typeof mount> | null = null
+	afterEach(() => {
+		if (app) unmount(app)
+		app = null
+		document.body.innerHTML = ""
+	})
+
+	function mountIn(bookAccess: "owner" | "shared") {
+		const host = document.createElement("div")
+		document.body.append(host)
+		app = mount(KeywordChipsFixture, {
+			target: host,
+			props: { bookAccess, keys: ["umber", "ochre"] }
+		})
+		flushSync()
+		return host
+	}
+
+	test("the keywords read as plain chips: no remove button, no Add", () => {
+		const host = mountIn("shared")
+		expect(host.textContent).toContain("umber")
+		expect(host.textContent).toContain("ochre")
+		expect(host.querySelectorAll("button")).toHaveLength(0)
+	})
+
+	test("an editable book keeps them", () => {
+		const host = mountIn("owner")
+		expect(host.querySelectorAll('button[aria-label^="Remove"]')).toHaveLength(2)
+		expect(host.textContent).toContain("Add…")
 	})
 })

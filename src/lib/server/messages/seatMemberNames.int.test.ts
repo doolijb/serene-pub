@@ -24,11 +24,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -417,28 +417,6 @@ describe("a live scene's cast proposal", () => {
 		// vocabulary's key); only a soft-deleted card's seat is `cast_member:`.
 		expect(names[`character:${c.id}`]).toBe("Vee")
 		expect(names[`character:${bare.id}`]).toBe("Bare")
-	})
-})
-
-describe("the scene cast list", () => {
-	test("a character seat is listed by its member's name", async () => {
-		const { buildSceneCastList } = await import(
-			"$lib/server/utils/summarizer/availableSceneCast"
-		)
-		const u = await user()
-		const c = await card(u.id, "Wren")
-		const attached = await book(u.id)
-		const s = await session(u.id, attached.id)
-		const ownBook = await ownBookOfSession(s.id, u.id)
-		const m = await member(ownBook.id, c.id, {
-			ownName: "Wren of the Notes"
-		})
-		await characterSeat(s.id, c.id, m.id)
-		const cast = await buildSceneCastList(null, attached.id, s.id, db())
-		const entry = cast.find((e) => e.name === "Wren of the Notes")
-		expect(entry).toBeTruthy()
-		// The card's bare name is not listed as a second person.
-		expect(cast.filter((e) => e.name === "Wren")).toHaveLength(0)
 	})
 })
 

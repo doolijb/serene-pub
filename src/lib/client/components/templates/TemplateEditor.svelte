@@ -75,6 +75,8 @@
 		untyped?: readonly string[]
 		/** No step in view — scope findings are warnings (the library). */
 		lenient?: boolean
+		/** The source is a variable layout: only then are shape findings shown. */
+		variableLayout?: boolean
 		/** One sentence above the tree saying what the scope is checked against. */
 		scopeNote?: string
 		/** Show "Variables available here". Default: when there is a scope. */
@@ -108,6 +110,7 @@
 		declarers,
 		untyped,
 		lenient = false,
+		variableLayout = false,
 		scopeNote,
 		showTree,
 		engine = CORE_TEMPLATE_ENGINE,
@@ -209,6 +212,7 @@
 		return templateDiagnostics(engine, value, checkScope, {
 			untyped,
 			lenient,
+			variableLayout,
 			variableLayoutOffers: layoutOffers
 		}).diagnostics
 	})
@@ -268,6 +272,7 @@
 			options: { engine, declarers, layoutOffers },
 			untyped,
 			lenient,
+			variableLayout,
 			readonly
 		}
 		if (language && !readonly) {
@@ -298,6 +303,7 @@
 						{
 							untyped: assist.untyped,
 							lenient: assist.lenient,
+							variableLayout: assist.variableLayout,
 							variableLayoutOffers: assist.options.layoutOffers
 						}
 					)

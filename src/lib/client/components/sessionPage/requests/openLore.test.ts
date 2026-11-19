@@ -5,11 +5,17 @@ import { answerOpenLore, type LoreTarget } from "./openLore"
 import { guardWidgetRequests } from "./askers"
 import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
 
-function page() {
+function page(who: { owner?: boolean; own?: number | null; book?: number | null } = {}) {
 	const did: Array<LoreTarget | "open"> = []
 	return {
 		did,
-		deps: { showLore: (t: LoreTarget) => did.push(t), openLorebooksPanel: () => did.push("open") }
+		deps: {
+			showLore: (t: LoreTarget) => did.push(t),
+			openLorebooksPanel: () => did.push("open"),
+			isSessionOwner: () => who.owner ?? true,
+			ownBookId: () => (who.own === undefined ? 9 : who.own),
+			sessionBookId: () => (who.book === undefined ? 9 : who.book)
+		}
 	}
 }
 
@@ -26,7 +32,27 @@ describe("answerOpenLore", () => {
 		expect(did).toEqual([{ lorebookId: 3, scope: "places", entryId: 12, sceneId: undefined }, "open"])
 	})
 
-	test("refuses nothing: fields of the wrong shape are dropped, and any scope but scenes or places is history", () => {
+	test("a guest asking for the session's notes is refused and the panel never opens", () => {
+		const { did, deps } = page({ owner: false })
+		expect(() => answerOpenLore({ lorebookId: 9, scope: "scenes", sceneId: 1 }, deps)).toThrow(
+			"the session's notes are the session owner's"
+		)
+		// No book named: the page would open its own book.
+		expect(() => answerOpenLore({ scope: "history" }, deps)).toThrow("the session's notes are the session owner's")
+		expect(did).toEqual([])
+	})
+
+	test("the owner opens the notes; a guest opens an attached lorebook", () => {
+		const owner = page({ owner: true })
+		answerOpenLore({ lorebookId: 9, scope: "history" }, owner.deps)
+		expect(owner.did.at(-1)).toBe("open")
+		const guest = page({ owner: false, book: 4 })
+		answerOpenLore({ lorebookId: 4, scope: "history" }, guest.deps)
+		answerOpenLore({ scope: "history" }, guest.deps)
+		expect(guest.did.filter((d) => d === "open")).toHaveLength(2)
+	})
+
+	test("fields of the wrong shape are dropped, and any scope but scenes or places is history", () => {
 		const { did, deps } = page()
 		answerOpenLore({ lorebookId: "3", scope: "nowhere", entryId: "x", sceneId: null }, deps)
 		expect(did).toEqual([

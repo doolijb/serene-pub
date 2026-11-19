@@ -12,9 +12,19 @@ vi.mock("$app/environment", () => ({
 	building: false,
 	browser: true
 }))
-const { socket } = vi.hoisted(() => ({
-	socket: { emit: () => {}, on: () => {}, off: () => {} }
+const { socket, listeners } = vi.hoisted(() => ({
+	socket: { emit: () => {}, on: () => {}, off: () => {} },
+	listeners: new Map<string, (msg: any) => void>()
 }))
+vi.mock("$lib/client/sockets/interest.svelte", () => {
+	const declareInterest = (key: string, handler: (msg: any) => void) => {
+		listeners.set(key, handler)
+		return () => {
+			if (listeners.get(key) === handler) listeners.delete(key)
+		}
+	}
+	return { declareInterest, useInterest: declareInterest, requestWithInterest: declareInterest }
+})
 vi.mock("$lib/client/sockets/loadSockets.client", () => ({
 	useTypedSocket: () => socket
 }))
@@ -28,6 +38,7 @@ let app: ReturnType<typeof mount> | null = null
 afterEach(() => {
 	if (app) unmount(app)
 	app = null
+	listeners.clear()
 	document.body.innerHTML = ""
 })
 
@@ -84,4 +95,52 @@ describe("SessionLorebookReading › timeline", () => {
 			)
 		}
 	)
+})
+
+describe("SessionLorebookReading › an own clock's first value", () => {
+	const reply = (start: unknown) => ({
+		lorebookId: 7,
+		calendar: null,
+		clocks: { main: null, branches: [] },
+		presents: { main: null, branches: [] },
+		start
+	})
+	async function chooseOwn() {
+		const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input[role='combobox']")]
+		const input = inputs.find((i) => i.value.includes("Follow"))!
+		input.focus()
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }))
+		await tick()
+		await new Promise((r) => setTimeout(r, 20))
+		flushSync()
+		const option = [...document.body.querySelectorAll<HTMLElement>("[role='option']")].find((o) =>
+			o.textContent?.includes("own clock")
+		)!
+		option.click()
+		await tick()
+		await new Promise((r) => setTimeout(r, 20))
+		flushSync()
+	}
+	const inputs = () => [...document.body.querySelectorAll<HTMLInputElement>('[data-testid="session-story-clock"] input')]
+
+	test("with no present it starts at the book's start date, never Year 1", async () => {
+		await render({})
+		listeners.get("lorebooks:storyTime#7")!(
+			reply({ branchId: null, date: { year: 2026, month: 11, day: 16, hour: 12, minute: 30 }, cause: "today" })
+		)
+		flushSync()
+		await chooseOwn()
+		expect(inputs()[0]?.value).toBe("2026")
+		expect(inputs()[1]?.value).toBe("11")
+	})
+
+	test("with no present and no start date the inputs are empty and ask for a year", async () => {
+		await render({})
+		listeners.get("lorebooks:storyTime#7")!(reply({ branchId: null, date: null, cause: "asks" }))
+		flushSync()
+		await chooseOwn()
+		// The five clock fields (year, month, day, hour, minute), not Step by and its unit.
+		expect(inputs().slice(0, 5).map((i) => i.value)).toEqual(["", "", "", "", ""])
+		expect(document.body.querySelector("#session-story-clock-hint")?.textContent?.trim()).toBe("The clock needs a year.")
+	})
 })

@@ -271,7 +271,10 @@ export function datesThatDoNotLand<T extends DatedRow>(
  * `{ number, name? }`, an absent part `null`. Names exist only under a declared
  * calendar and only when the date lands in it: the year as the calendar spells
  * it (label and era), the month's name, the weekday for a full date. A
- * free-form book, or a date the calendar cannot place, carries numbers alone.
+ * free-form book carries numbers alone. Under a declared calendar a date it
+ * cannot place carries the year's fallback spelling only (`Year 412`, the
+ * truncated year) and no month or day name: that is the cue `storyDateText`
+ * prints as the free-form text `formatStoryTime` gives such a date.
  */
 export function storyDateValueOf(
 	time: StoryClock,
@@ -288,6 +291,10 @@ export function storyDateValueOf(
 			time.hour != null
 				? { hour: time.hour, minute: time.minute ?? 0 }
 				: null
+	}
+	if (calendar && !named) {
+		value.year.name = `Year ${Math.trunc(time.year)}`
+		return value
 	}
 	if (!named || !calendar) return value
 	value.year.name = formatStoryTime({ year: time.year }, calendar)

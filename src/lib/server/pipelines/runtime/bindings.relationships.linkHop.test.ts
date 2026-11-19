@@ -113,6 +113,39 @@ describe("the link hop runs only when the band can spend", () => {
 	})
 })
 
+describe("the link hop's lore read names the speaker and asks for the knowledge filter", () => {
+	async function readQuery(params: Record<string, unknown>, scope: Record<string, unknown>) {
+		const bind: any = relationshipSearchBindings()["core:query/relationship-search@1"]
+		let query: any
+		const ctx = {
+			countTokens: (t: string) => t.length,
+			log: () => {},
+			async read(table: string, q: any) {
+				if (table === "lorebook_entries") {
+					query = q
+					return [entry(1, "Umber Room"), entry(2, "Salt Tunnel")]
+				}
+				if (table === "session_messages")
+					return [{ id: 1, role: "user", content: "we open the umber room" }]
+				if (table === "graph_entry_links") return [link(10, 2, "Salt Tunnel")]
+				return null
+			}
+		}
+		const run = typeof bind === "function" ? bind : bind.run
+		await run({ scope, params }, ctx)
+		return query
+	}
+
+	it("is on unless the pipeline says false, and carries the card-less seat", async () => {
+		const scope = { sessionId: 1, currentCharacterId: null, currentCastMemberId: 9 }
+		const on = await readQuery({ share: 0.1 }, scope)
+		expect(on.knownToSpeaker).toBe(true)
+		expect(on.currentCastMemberId).toBe(9)
+		const off = await readQuery({ share: 0.1, knownToSpeaker: false }, scope)
+		expect(off.knownToSpeaker).toBe(false)
+	})
+})
+
 describe("the link hop offers only ends the speaker may see", () => {
 	it("keeps a visible end and drops one the lore read withheld, switched off or shelved", async () => {
 		const visible = [

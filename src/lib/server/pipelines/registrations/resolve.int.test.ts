@@ -246,6 +246,144 @@ describe("what a session runs", () => {
 		expect(await sessionRoutineMode(db as any, sessionId, ASSISTANT_MEMORY_SPEC_ID)).toBeNull()
 	}, 60_000)
 
+	it("a setting lock holds for the host doors: a stale session value, a leftover row and no value at all read as the lock states", async () => {
+		const sessionId = await sessionOn("core-story-living")
+		const { sessionDutiesOf, dutyParamsOf, sessionReplyChangesMode } = await import(
+			"$lib/server/pipelines/routines/sessionRoutines"
+		)
+		const { effectiveRegistrations, invalidateRegistrations } = await import("./resolve")
+		const { rowOfChange, genreChangeKey } = await import("./rows")
+		const { upsertRow, deleteRow } = await import("./write")
+		const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+		const { reckoningDuties, replyDuties } = await import("@serene-pub/contracts")
+		const { STORY_RESPOND_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+		const effective = (await effectiveRegistrations(db as any, sessionId))!.effective
+		const stepOf = async (pipeline: string, contract: string) => {
+			const doc = await loadPublished(db as any, pipeline)
+			const n = ((doc?.nodes ?? []) as Array<{ key: string; definitionId: string; definitionVersion: number }>).find(
+				(x) => `${x.definitionId}@${x.definitionVersion}` === contract
+			)
+			return { node: n!.key, contract }
+		}
+		const reckoning = await (async () => {
+			for (const reg of effective.filter((r) => r.trigger.family === "routine")) {
+				const doc = await loadPublished(db as any, reg.pipeline)
+				if (((doc?.nodes ?? []) as any[]).some((x) => `${x.definitionId}@${x.definitionVersion}` === reckoningDuties.id))
+					return { reg, at: await stepOf(reg.pipeline, reckoningDuties.id) }
+			}
+			throw new Error("no reckoning routine")
+		})()
+		const reply = effective.find((r) => r.pipeline === STORY_RESPOND_SPEC_ID)!
+		const replyAt = await stepOf(reply.pipeline, replyDuties.id)
+		const sessionScope = { kind: "session" as const, sessionId }
+		const presetScope = { kind: "preset" as const, presetId: session!.presetId! }
+
+		const withLock = async (
+			reg: { key: string },
+			node: string,
+			param: string,
+			layer: "genre" | "preset",
+			body: () => Promise<void>
+		) => {
+			const values = { [node]: { params: { [param]: { value: true, lock: true } } } }
+			let genreRowId: number | null = null
+			let presetHad: typeof schema.registrations.$inferSelect | null = null
+			if (layer === "genre") {
+				const [row] = await db
+					.insert(schema.registrations)
+					.values({
+						scopeKind: "genre",
+						scopeRef: session!.genreId,
+						key: genreChangeKey(reg.key),
+						dropped: false,
+						origin: "test:lock",
+						values: values as never
+					} as any)
+					.returning()
+				genreRowId = row!.id
+			} else {
+				const [had] = await db
+					.select()
+					.from(schema.registrations)
+					.where(and(eq(schema.registrations.scopeKind, "preset"), eq(schema.registrations.scopeRef, String(presetScope.presetId)), eq(schema.registrations.key, reg.key)))
+				presetHad = had ?? null
+				await upsertRow(db as any, rowOfChange({ key: reg.key, values }, presetScope, "test"))
+			}
+			invalidateRegistrations()
+			try {
+				await body()
+			} finally {
+				if (genreRowId != null) await db.delete(schema.registrations).where(eq(schema.registrations.id, genreRowId))
+				else {
+					await deleteRow(db as any, presetScope, reg.key)
+					if (presetHad) await db.insert(schema.registrations).values(presetHad as any)
+				}
+				invalidateRegistrations()
+			}
+		}
+		const stale = async (reg: { key: string }, node: string, param: string) => {
+			await upsertRow(
+				db as any,
+				rowOfChange({ key: reg.key, values: { [node]: { params: { [param]: false } } } }, sessionScope, "owner")
+			)
+			invalidateRegistrations()
+		}
+		const modeNow = async () => (await sessionDutiesOf(db as any, sessionId, reckoningDuties.id))!["timed-expiry"]
+		const paramNow = async () => {
+			const reg = (await effectiveRegistrations(db as any, sessionId))!.effective.find((r) => r.key === reckoning.reg.key)!
+			return (await dutyParamsOf(db as any, sessionId, reg, reckoning.at)).timedExpiry
+		}
+		const [spec] = await db.select().from(schema.pipelineSpecs).where(eq(schema.pipelineSpecs.slug, reckoning.reg.pipeline))
+		const leftover = () =>
+			db.insert(schema.pipelineNodeOverrides).values({
+				specId: spec!.id,
+				scopeKind: "session",
+				scopeId: sessionId,
+				nodeKey: reckoning.at.node,
+				slot: "params",
+				path: "timedExpiry",
+				value: false
+			} as any)
+
+		const node = reckoning.at.node
+		// no session value: a lock held as a `{ value, lock }` object read as off.
+		for (const layer of ["genre", "preset"] as const)
+			await withLock(reckoning.reg, node, "timedExpiry", layer, async () => {
+				expect(await modeNow(), `${layer} lock, no session value`).toBe("full")
+				expect(await paramNow()).toBe(true)
+			})
+		// a stale session value under the lock.
+		await stale(reckoning.reg, node, "timedExpiry")
+		expect(await modeNow(), "unlocked: the session's false").toBe("off")
+		for (const layer of ["genre", "preset"] as const)
+			await withLock(reckoning.reg, node, "timedExpiry", layer, async () => {
+				expect(await modeNow(), `${layer} lock over a stale session value`).toBe("full")
+				expect(await paramNow()).toBe(true)
+			})
+		expect(await modeNow(), "lock lifted: the session's false is back").toBe("off")
+		// a leftover row under the lock, the session stating nothing.
+		await deleteRow(db as any, sessionScope, reckoning.reg.key)
+		invalidateRegistrations()
+		await leftover()
+		expect(await modeNow(), "unlocked: the leftover row's false").toBe("off")
+		await withLock(reckoning.reg, node, "timedExpiry", "genre", async () => {
+			expect(await modeNow()).toBe("full")
+			expect(await paramNow()).toBe(true)
+		})
+		await db
+			.delete(schema.pipelineNodeOverrides)
+			.where(and(eq(schema.pipelineNodeOverrides.scopeId, sessionId), eq(schema.pipelineNodeOverrides.scopeKind, "session")))
+
+		// the reply's `changes` duty.
+		await stale(reply, replyAt.node, "changes")
+		expect(await sessionReplyChangesMode(db as any, sessionId)).toBe("off")
+		await withLock(reply, replyAt.node, "changes", "genre", async () => {
+			expect(await sessionReplyChangesMode(db as any, sessionId)).toBe("full")
+		})
+		expect(await sessionReplyChangesMode(db as any, sessionId)).toBe("off")
+	}, 60_000)
+
 	it("caches until something it read changes", async () => {
 		const sessionId = await sessionOn("core-story-living")
 		const { effectiveRegistrations, setRegistrationCacheEnabled } = await import("./resolve")

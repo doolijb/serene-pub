@@ -141,14 +141,17 @@ export async function resolveTaskConfig(params: {
 }
 
 /**
- * The session's own sampling pick: the session-scope pipeline panel row on the
- * `sampling` slot of the model call (`oracleNodeKeyOf`) of the pipeline
- * serving its turns (`sessionPipeline`), or null when it set none.
+ * The session's own sampling pick: its registration value on the `sampling`
+ * slot of the model call (`oracleNodeKeyOf`) of the pipeline serving its turns
+ * (`sessionPipeline`); only where that states none, a ⏳ leftover session
+ * override row at the same address. Null when it set none. Under a lock from
+ * a layer above (`settingLocksOf`, the run's rule) the lock's value is the
+ * pick, and the session's value and leftover row are not read.
  *
- * The one session layer — the same row the executor projects at `session`
- * scope (`world.ts`, `applyPipelineLayer`), so a run outside the executor
- * samples with the pick the session's Pipelines card shows. The panel stores
- * the id as a JSON number; a value that is not a whole id is no pick.
+ * The order the executor reads at `session` scope (`world.ts`,
+ * `applyPipelineLayer`), so a run outside the executor samples with the pick
+ * the session's Pipelines card shows. The value is a JSON number; one that is
+ * not a whole id is no pick.
  */
 async function sessionSamplingPick(sessionId: number): Promise<number | null> {
 	const [session] = await db
@@ -165,6 +168,24 @@ async function sessionSamplingPick(sessionId: number): Promise<number | null> {
 	if (!pipeline) return null
 	// The pipeline's own reply call, read off its document (`buildWorld`'s rule).
 	const oracle = (await oracleNodeKeyOf(db, { id: pipeline.specId })) ?? ORACLE_NODE_KEY
+	const { registrationValueLayers, addressedValues, settingLocksOf } = await import(
+		"$lib/server/pipelines/registrations/values"
+	)
+	const layers = await registrationValueLayers(db, {
+		specSlug: pipeline.specSlug,
+		specId: pipeline.specId,
+		sessionId
+	})
+	const decls = [{ nodeKey: oracle, slot: "sampling", path: "", control: "sampling-ref" }]
+	const key = `${oracle}\u0000sampling\u0000`
+	const stated = addressedValues(layers.session, decls).get(key)
+	const wholeId = (v: unknown): number | null => {
+		const id = Number(v)
+		return v != null && Number.isInteger(id) && id > 0 ? id : null
+	}
+	const lock = settingLocksOf(layers, decls).get(key)
+	if (lock) return wholeId(lock.value)
+	if (stated != null) return wholeId(stated)
 	const [row] = await db
 		.select({ value: schema.pipelineNodeOverrides.value })
 		.from(schema.pipelineNodeOverrides)
@@ -179,6 +200,5 @@ async function sessionSamplingPick(sessionId: number): Promise<number | null> {
 			)
 		)
 		.limit(1)
-	const id = Number(row?.value)
-	return row?.value != null && Number.isInteger(id) && id > 0 ? id : null
+	return wholeId(row?.value)
 }

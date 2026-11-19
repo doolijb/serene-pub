@@ -12,6 +12,8 @@ import type { InspectorTab } from "../sections/types"
 export interface InspectorCounts {
 	references: number
 	contains: number
+	/** Members who know the entry by any tie; absent while not loaded. */
+	knownBy?: number
 }
 
 export function inspectorTabsFor(
@@ -20,6 +22,14 @@ export function inspectorTabsFor(
 ): InspectorTab[] {
 	const out: InspectorTab[] = []
 	for (const tab of declared) {
+		if (tab.id === "known-by") {
+			out.push(
+				counts.knownBy === undefined
+					? tab
+					: { ...tab, label: `${tab.label} ${counts.knownBy}` }
+			)
+			continue
+		}
 		if (tab.id !== "references") {
 			out.push(tab)
 			continue

@@ -686,6 +686,110 @@ button[data-widget-part~="messages.turn-line-status"]:focus-visible {
 		max-inline-size: 22ch;
 	}
 }
+/* Background runs (`turn-line.runs`, STYLE-GUIDE §6.16): one item each —
+   name, status, elapsed, Stop — wrapping inside its own box, never wider
+   than the row; a finished run stays a moment, dimmed. Nothing animates. */
+[data-widget-part~="turn-line.runs"] {
+	display: flex;
+	flex: 0 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+	min-width: 0px;
+	margin-block: calc(var(--spacing) * 2);
+}
+[data-widget-part~="turn-line.runs"]:empty {
+	display: none;
+}
+[data-widget-part~="turn-line.run-item"] {
+	display: inline-flex;
+	min-width: 0px;
+	max-inline-size: 100%;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	border-radius: var(--sp-w-chip-radius);
+	padding: calc(var(--spacing) * 0.5) calc(var(--spacing) * 2.5);
+	background: var(--sp-w-chip-bg);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+[data-widget-part~="turn-line.run-item"][data-finished] {
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="turn-line.run-name"] {
+	min-width: 0px;
+	max-inline-size: 28ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="turn-line.run-status"],
+[data-widget-part~="turn-line.run-since"] {
+	min-width: 0px;
+	max-inline-size: 28ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="turn-line.run-since"] {
+	font-variant-numeric: tabular-nums;
+}
+/* Stop, tonal error as the reply's (STYLE-GUIDE §6.1). */
+[data-widget-part~="turn-line.run-stop"] {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	gap: var(--spacing);
+	min-height: calc(var(--spacing) * 6);
+	border-radius: var(--sp-w-chip-radius);
+	padding-inline: calc(var(--spacing) * 2);
+	background-color: var(--color-error-50-950);
+	color: var(--color-error-950-50);
+	white-space: nowrap;
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="turn-line.runs-more"] {
+	flex: none;
+	min-height: calc(var(--spacing) * 6);
+	border-radius: var(--sp-w-chip-radius);
+	padding-inline: calc(var(--spacing) * 2.5);
+	white-space: nowrap;
+	font-size: calc(0.75rem * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+@media (hover: hover) {
+	[data-widget-part~="turn-line.runs-more"]:hover {
+		color: light-dark(var(--color-surface-900), var(--color-surface-50));
+	}
+}
+[data-widget-part~="turn-line.run-stop"]:focus-visible,
+[data-widget-part~="turn-line.runs-more"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+@media (pointer: coarse) {
+	[data-widget-part~="turn-line.run-stop"],
+	[data-widget-part~="turn-line.runs-more"] {
+		min-height: 44px;
+		min-width: 44px;
+	}
+}
+/* The reserved notice place: drawn only when something fills it. */
+[data-widget-part~="turn-line.notice"] {
+	display: flex;
+	min-width: 0px;
+	align-items: center;
+}
+@container sp-widget (width < 40rem) {
+	[data-widget-part~="turn-line.run-name"],
+	[data-widget-part~="turn-line.run-status"] {
+		max-inline-size: 16ch;
+	}
+}
 /* Right: who is typing, then who is due next — or Stop, or Try again. */
 [data-widget-part~="messages.turn-line-next"] {
 	display: flex;

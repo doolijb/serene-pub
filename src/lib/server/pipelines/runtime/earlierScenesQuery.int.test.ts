@@ -108,9 +108,19 @@ async function query(input: Record<string, unknown>) {
 	const { coreBindings } = await import(
 		"$lib/server/pipelines/runtime/bindings"
 	)
+	const { createHost } = await import("$lib/server/pipelines/runtime/host")
+	const sessionId = (input as any)?.scope?.sessionId
+	const host = createHost(testDb as unknown as Db, {
+		sessionId,
+		userId: ownerId
+	})
 	return (await coreBindings()["core:query/earlier-scenes@1"]!(
 		input as never,
-		{} as never
+		// The host answers what the speaker's cast did (`speakerInCast`, on by default).
+		{
+			log: () => {},
+			read: (t: string, q?: unknown) => (host as any).read(t, q)
+		} as never
 	)) as any
 }
 

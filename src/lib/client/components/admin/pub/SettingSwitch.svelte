@@ -13,10 +13,12 @@
 		/** The label for a screen reader only: a setting card's title says it
 		 *  on screen (STYLE-GUIDE §6.4). */
 		labelHidden?: boolean
+		/** The id of the help text that describes the switch. */
+		describedBy?: string
 		onCheckedChange: (event: { checked: boolean }) => void
 	}
 
-	let { name, label, checked, disabled, labelHidden = false, onCheckedChange }: Props =
+	let { name, label, checked, disabled, labelHidden = false, describedBy, onCheckedChange }: Props =
 		$props()
 </script>
 
@@ -29,7 +31,7 @@
 		>
 			<Switch.Thumb />
 		</Switch.Control>
-		<Switch.HiddenInput />
+		<Switch.HiddenInput aria-describedby={describedBy} />
 		<Switch.Label class={labelHidden ? "sr-only" : "text-sm font-medium"}>
 			{label}
 		</Switch.Label>

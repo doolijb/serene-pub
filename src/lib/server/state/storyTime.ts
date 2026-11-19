@@ -42,27 +42,31 @@
  * 2026-09-24, §7): "now" still applies every dated amendment. The clock is what
  * `age` is measured against and what the prompt's current date says.
  */
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import type { ClockTargetV1 } from "@serene-pub/contracts"
 import { and, eq, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm"
 import { getAttributeSlot, i18nText, parseStoryTime, slotField } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { attachedOrOwnBookOf, ownBookOf } from "$lib/server/lorebooks/ownBook"
-import { TIMELINE_OFF_SENTENCES, bookTimelineSql, timelineOf, timelineOfBook } from "$lib/server/lorebooks/timeline"
+import { TIMELINE_OFF_SENTENCES, bookTimelineSql, sessionTimelineOf, timelineOf, timelineOfBook } from "$lib/server/lorebooks/timeline"
 import { HISTORY_TYPE_ID, LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	datedOnReading,
 	historyEntryDate,
 	lineOfBook,
-	sessionReadingOf
+	sessionReadingOf,
+	writeDatingAt
 } from "$lib/server/state/reading"
 import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
 import { memberFormOn } from "$lib/server/state/memberForm"
+import { takesBeginning } from "$lib/server/utils/lorebookEntries"
 import {
 	advanceStoryTime,
 	compareDates,
 	dateProblem,
 	clockSpanWords,
 	datesThatDoNotLand,
+	dayOnly,
 	formatDate,
 	readStoryCalendar,
 	type DatedRow,
@@ -384,11 +388,88 @@ export async function sessionStoryNowOf(db: Db, sessionId: number): Promise<Stor
 	})
 }
 
-/** 🚧 Where a clock starts when its story has neither a clock nor a present: Year 1, month 1, day 1, 00:00. */
-const FIRST_STORY_DAY: StoryClock = { year: 1, month: 1, day: 1, hour: 0, minute: 0 }
+/**
+ * **What date a write of play carries**: the one answer every
+ * pipeline lore write asks. Callers switch on the kind; no caller reads a
+ * nullable date and decides for itself.
+ *
+ * - `dated`: the session's lorebook keeps a timeline and the story has a now.
+ *   `date` is that now's day (year, month|null, day|null) — never null.
+ *   `hangsOn` is the history entry a write hangs on (`writeDatingAt`); it may
+ *   be null before the line's first dated history entry, and that is legal
+ *   (plan A22, 2026-09-30). It is for rows that store only `history_entry_id`.
+ * - `timeless`: the session's lorebook keeps no timeline.
+ * - `undatable`: a timeline and no date at all (an existing, never-dated
+ *   lorebook): a history write is refused, every other write is stored undated.
+ */
+export type LoreWriteDate =
+	| { kind: "dated"; date: StoryDate; hangsOn: number | null }
+	| { kind: "timeless" }
+	| { kind: "undatable" }
+
+async function readLoreWriteDate(db: Db, sessionId: number): Promise<LoreWriteDate> {
+	const reading = await sessionReadingOf(db, sessionId)
+	if (!reading) return (await sessionTimelineOf(db, sessionId)) ? { kind: "undatable" } : { kind: "timeless" }
+	if (reading.timelineOff) return { kind: "timeless" }
+	const now = await sessionStoryNowOf(db, sessionId)
+	if (!now) return { kind: "undatable" }
+	return {
+		kind: "dated",
+		date: dayOnly(now),
+		hangsOn: (await writeDatingAt(db, reading))?.historyEntryId ?? null
+	}
+}
+
+/** The date a write of play carries; see `LoreWriteDate`. */
+export async function loreWriteDateOf(db: Db, sessionId: number): Promise<LoreWriteDate> {
+	return readLoreWriteDate(db, sessionId)
+}
+
+/**
+ * 🚧 ★ name. **The one rule for story time in what a run reads** (owner D56,
+ * 2026-11-16): on a lorebook that keeps no timeline every story-time value a
+ * run can read — a date, a clock, a calendar, a day mark — is `null`, whatever
+ * is stored (stored values are ignored, never cleared). Pure: `timelineOff` is
+ * a fact the read already holds (`reading.timelineOff`, or the same switch read
+ * in its own select through `timelineOf`), so it costs no statement. Each
+ * host read and binding that hands a run a time field passes it through here
+ * (`pipelines/runtime/storyTimeRead.guard.test.ts`). ⚠ Not `loreWriteDateOf`
+ * (the date a write carries), and not what a person sees on the client.
+ */
+export function timelessNull<T>(timelineOff: boolean | undefined, value: T | null | undefined): T | null {
+	return timelineOff === true ? null : (value ?? null)
+}
+
+/** ★ copy: why a write of play that must carry the story's date, and arrived without one, is refused. */
+export const UNDATED_LORE_WRITE_SENTENCE =
+	"This lorebook keeps a timeline, so this write needs the story's date, and it arrived without one. Nothing was written."
+
+/**
+ * The backstop: the sentence when the session's write must be dated and `date`
+ * is missing; else null. Reads the kind through `readLoreWriteDate`, not
+ * `loreWriteDateOf`, so a test that mocks the latter still meets the truth here.
+ */
+export async function undatedLoreWriteRefusal(
+	db: Db,
+	sessionId: number,
+	date: StoryDate | null | undefined
+): Promise<string | null> {
+	if (date != null) return null
+	return (await readLoreWriteDate(db, sessionId)).kind === "dated" ? UNDATED_LORE_WRITE_SENTENCE : null
+}
+
+/** Why a clock move on a story with neither a clock nor a present is refused. */
+export const UNDATED_MOVE_SENTENCE =
+	"This story has no date yet, so its clock can't move. Set the story clock in the lorebook's Book settings first."
 
 /** A refusal to move a session's clock, as a sentence a person can read. */
-export class StoryClockRefusal extends Error {}
+export class StoryClockRefusal extends Error {
+	/** `forPeople` marks a message the people in the session can act on; unmarked messages are detail. */
+	constructor(message: string, opts?: { forPeople?: boolean }) {
+		super(message)
+		if (opts?.forPeople) forPeople(this, message)
+	}
+}
 
 /** A refusal to move a clock because the governing book's timeline is off. */
 export class TimelineOffRefusal extends StoryClockRefusal {}
@@ -397,8 +478,8 @@ export class TimelineOffRefusal extends StoryClockRefusal {}
  * **Advance a session's story clock** by `by` of `unit` (§5 `advance(n, unit)`):
  * through the book's calendar, by the smallest-part rule in a free-form book
  * (`advanceStoryTime`). A session with no clock of its own starts from its
- * line's present; a story with neither a clock nor a present starts on its
- * first day (`FIRST_STORY_DAY`) and the clock is stored. Writes the session's
+ * line's present; a story with neither a clock nor a present is refused
+ * (`UNDATED_MOVE_SENTENCE`) and nothing is written. Writes the session's
  * clock only — never the book's.
  *
  * Throws `StoryClockRefusal` — and writes nothing — with no session or a
@@ -423,11 +504,9 @@ export async function advanceSessionStoryClock(
  * has passed; `tomorrow` is always tomorrow's; `today` is a no-op (`by: 0`, nothing
  * written) when the clock stands at the moment and refused with a sentence when it is past it. A clock with
  * no time of day reads as 00:00. Same refusals and locks as
- * `advanceSessionStoryClock`. A story with no clock and no present starts on
- * its first day (`FIRST_STORY_DAY`) and the clock is stored, as any later move
- * from a present stores it (M1 E-fix T-4: a genre's create move set no clock,
- * and every later move began from a dated entry's 00:00 instead); a move by an
- * amount starts it the same way.
+ * `advanceSessionStoryClock`. A story with no clock and no present is refused
+ * (`UNDATED_MOVE_SENTENCE`), nothing written; a move from a present stores the
+ * session's clock (M1 E-fix T-4).
  */
 export async function advanceSessionStoryClockTo(
 	db: Db,
@@ -458,18 +537,18 @@ export async function advanceSessionStoryClockTo(
 
 /**
  * Where a session's clock move starts: its own clock, else its line's present,
- * else the story's first day. `present` is null when the first day is the
- * start, so the caller knows the story had no clock. The one reader: the move
- * itself and the dry run (`clockMoveProblem`) both ask here.
+ * else null: a story with neither is refused, never started at a first day.
+ * The one reader: the move itself and the dry run (`clockMoveProblem`) both
+ * ask here.
  */
 export async function storyMoveStartOf(
 	db: Db,
 	sessionId: number,
 	row: ClockColumns
-): Promise<{ start: StoryClock; present: StoryClock | null }> {
-	const present =
+): Promise<StoryClock | null> {
+	return (
 		clockOf(row) ?? (await sessionStoryNowOf(db, sessionId).then((n) => (n ? clockOfNow(n) : null)))
-	return { start: present ?? FIRST_STORY_DAY, present }
+	)
 }
 
 async function moveSessionStoryClock(
@@ -499,13 +578,14 @@ async function moveSessionStoryClock(
 				"This session's lorebook changed while its clock was being advanced. Try again."
 			)
 		if (!(await timelineOfBook(tx, lorebookId))) throw new TimelineOffRefusal(TIMELINE_OFF_SENTENCES.clock)
-		const { start, present } = await storyMoveStartOf(tx, sessionId, row)
+		const start = await storyMoveStartOf(tx, sessionId, row)
+		if (!start) throw new StoryClockRefusal(UNDATED_MOVE_SENTENCE, { forPeople: true })
 		const calendar = await bookCalendarOf(tx, lorebookId)
 		const planned = step(compactClock(start))
 		// 🚧 A `to` move that does not move (`today` at this very minute): nothing written.
 		if (planned.noop) {
 			// … but a clock that starts here is stored: the story has one from now on.
-			if (!present) await tx.update(schema.sessions).set(clockColumns(start)).where(eq(schema.sessions.id, sessionId))
+			if (!clockOf(row)) await tx.update(schema.sessions).set(clockColumns(start)).where(eq(schema.sessions.id, sessionId))
 			return { clock: compactClock(start), label: formatDate(start, calendar), from: compactClock(start), by: 0, unit: planned.unit }
 		}
 		const { by, unit } = planned
@@ -835,4 +915,150 @@ export async function sessionStatsThatDoNotLand(
 		sessions: new Map([[session.id, session.name || `#${session.id}`]])
 	})
 	return datesThatDoNotLand(rows, calendar)
+}
+
+/**
+ * **Today** — the date and time of day of instant `at` in IANA zone
+ * `timeZone`, else the server's own zone. An unknown zone falls back to the
+ * server's. Injectable through `at` (no module-level setter).
+ *
+ * 🚧 "Today's real date" is the lead's reading of the owner's "default to
+ * real calendar" (DISCUSS-LATER D49b), not yet ruled.
+ */
+export function storyToday(timeZone: string | null, at: Date = new Date()): StoryClock {
+	const parts = (zone: string | undefined) =>
+		new Intl.DateTimeFormat("en-US", {
+			...(zone ? { timeZone: zone } : {}),
+			hourCycle: "h23",
+			year: "numeric",
+			month: "numeric",
+			day: "numeric",
+			hour: "numeric",
+			minute: "numeric"
+		}).formatToParts(at)
+	let formatted: Intl.DateTimeFormatPart[]
+	try {
+		formatted = parts(timeZone || undefined)
+	} catch (err) {
+		if (!(err instanceof RangeError)) throw err
+		formatted = parts(undefined)
+	}
+	const part = (type: Intl.DateTimeFormatPartTypes) =>
+		Number(formatted.find((p) => p.type === type)?.value)
+	return {
+		year: part("year"),
+		month: part("month"),
+		day: part("day"),
+		hour: part("hour"),
+		minute: part("minute")
+	}
+}
+
+/** The session owner's `users.timeZone`, else null (the server's zone) — as `pipelines/routines/tick.ts` reads it. */
+export async function ownerTimeZoneOf(db: Db, userId: number): Promise<string | null> {
+	const [owner] = await db
+		.select({ timeZone: schema.users.timeZone })
+		.from(schema.users)
+		.where(eq(schema.users.id, userId))
+		.limit(1)
+	return owner?.timeZone || null
+}
+
+/** Where a new session on a lorebook line starts (`storyStartOf`). */
+export type StoryStart =
+	| { cause: "undated" }
+	| { cause: "present"; clock: StoryClock }
+	| { cause: "latest"; clock: StoryClock }
+	| { cause: "today"; clock: StoryClock }
+	| { cause: "asks" }
+
+/**
+ * 🚧 **Where a NEW session on a lorebook line starts**: the line's most
+ * recently active point, else today.
+ *
+ * 1. Timeline off → `undated`.
+ * 2. The line's present (`storyNowOf`: its clock, else its newest history
+ *    entry it reads) → `present`; the session stores nothing and follows it.
+ * 3. Else the latest dated row the line reads (unheld entry amendments, cast
+ *    versions, cast amendments, entry Beginnings, presence arrivals) →
+ *    `latest`. Never read from sessions' clocks, scenes or message stamps.
+ * 4. Else today's date, with no time of day (`storyToday`): `today` when the book is free-form or its
+ *    calendar places that date, `asks` when it does not.
+ */
+export async function storyStartOf(
+	db: Db,
+	args: {
+		lorebookId: number
+		branchId: number | null
+		line?: Line | null
+		timeZone?: string | null
+		at?: Date
+	}
+): Promise<StoryStart> {
+	const { lorebookId, branchId } = args
+	if (!(await timelineOfBook(db, lorebookId))) return { cause: "undated" }
+	const line: Line =
+		args.line ?? (branchId == null ? MAIN_LINE : await lineOfBook(db, lorebookId, branchId))
+	const now = await storyNowOf(db, lorebookId, branchId, { line })
+	if (now) return { cause: "present", clock: clockOfNow(now) }
+
+	const reading = { branchId, moment: null, forkedAt: null, line }
+	let best: StoryDate | null = null
+	const consider = (row: { branchId: number | null }, date: StoryDate | null) => {
+		if (!date || !datedOnReading(row, date, reading)) return
+		if (!best || compareDates(date, best) > 0) best = date
+	}
+	const dateOf = (r: { year: number | null; month: number | null; day: number | null }): StoryDate | null =>
+		r.year == null ? null : { year: r.year, month: r.month, day: r.day }
+
+	const entries = await db
+		.select({
+			typeId: schema.lorebookEntries.typeId,
+			fields: schema.lorebookEntries.fields,
+			branchId: schema.lorebookEntries.branchId
+		})
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
+	for (const e of entries) if (takesBeginning(e.typeId)) consider(e, historyEntryDate(e.fields))
+	const amendments = await db
+		.select()
+		.from(schema.entryAmendments)
+		.where(and(eq(schema.entryAmendments.lorebookId, lorebookId), sql`${schema.entryAmendments.base} IS NULL`))
+	for (const a of amendments) consider(a, dateOf(a))
+	const versions = await db
+		.select()
+		.from(schema.characterVersions)
+		.where(
+			and(
+				eq(schema.characterVersions.lorebookId, lorebookId),
+				isNotNull(schema.characterVersions.castMemberId),
+				isNotNull(schema.characterVersions.year)
+			)
+		)
+	for (const v of versions) consider(v, dateOf(v))
+	const castAmendments = await db
+		.select()
+		.from(schema.castAmendments)
+		.where(eq(schema.castAmendments.lorebookId, lorebookId))
+	for (const a of castAmendments) consider(a, dateOf(a))
+	const presences = await db
+		.select()
+		.from(schema.castPresences)
+		.where(eq(schema.castPresences.lorebookId, lorebookId))
+	for (const p of presences)
+		consider(p, { year: p.fromYear, month: p.fromMonth, day: p.fromDay })
+	if (best) {
+		const d = best as StoryDate
+		return {
+			cause: "latest",
+			clock: { year: d.year, month: d.month ?? null, day: d.month != null ? (d.day ?? null) : null, hour: null, minute: null }
+		}
+	}
+
+	// Today's date alone, no time of day: a genre's own move sets the hour.
+	const todayNow = storyToday(args.timeZone ?? null, args.at)
+	const today: StoryClock = { year: todayNow.year, month: todayNow.month, day: todayNow.day, hour: null, minute: null }
+	const calendar = await bookCalendarOf(db, lorebookId)
+	if (!calendar || clockProblem(today, calendar) == null) return { cause: "today", clock: today }
+	return { cause: "asks" }
 }

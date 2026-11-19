@@ -1,7 +1,8 @@
 /**
  * 🚧 A routine run says it is running: one `sessions:runStatus` start frame
- * once the run has lasted past `QUEUE_STATUS_DELAY_MS`, one clearing frame at
- * its end or when it parks; the session list's row status is never touched.
+ * at once, one clearing frame at
+ * its end (a run that parks keeps showing until then); the session list's row
+ * status is never touched. Every frame carries the run's facts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -68,7 +69,7 @@ vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
 import { QUEUE_STATUS_DELAY_MS } from "$lib/server/pipelines/runtime/runStatus"
 import { _resetRoutineRuns } from "./runs"
-import { routineRunFramesOf, routineRunStatus, runRoutineFiring } from "./run"
+import { routineRunStatus, runRoutineFiring } from "./run"
 import type { RoutineFiringEntry } from "./queue"
 
 const firing = (sessionId = 1): RoutineFiringEntry =>
@@ -110,14 +111,22 @@ afterEach(() => {
 })
 
 describe("a routine run's frames", () => {
-	it("a run longer than the delay sends one start frame and, at its end, one clearing frame", async () => {
+	it("a run sends its start frame at once and, at its end, one clearing frame", async () => {
 		const { done, run } = await start()
-		expect(ctl.frames).toEqual([])
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS)
+		await vi.advanceTimersByTimeAsync(0)
 		expect(ctl.frames).toEqual([
-			{ sessionId: 1, runId: expect.any(String), status: routineRunStatus("Recap"), kind: "routine", routine: { name: "Recap" } }
+			{
+				sessionId: 1,
+				runId: expect.any(String),
+				status: routineRunStatus(),
+				kind: "routine",
+				routine: { name: "Recap" },
+				name: "Recap",
+				since: expect.any(Number),
+				mayStop: true
+			}
 		])
-		expect(routineRunStatus("Recap")).toEqual({ i18n: { en: "Recap is running" } })
+		expect(routineRunStatus()).toEqual({ i18n: { en: "working" } })
 		run.resolve()
 		await settle()
 		await done
@@ -126,14 +135,13 @@ describe("a routine run's frames", () => {
 		expect(ctl.frames[1].runId).toBe(ctl.frames[0].runId)
 	})
 
-	it("a run that ends before the delay sends no frame", async () => {
+	it("a run that ends at once sends its start frame and its end frame", async () => {
 		const { done, run } = await start()
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS - 50)
 		run.resolve()
 		await settle()
 		await done
 		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS * 2)
-		expect(ctl.frames).toEqual([])
+		expect(ctl.frames.map((f) => f.status === null)).toEqual([false, true])
 	})
 
 	it("with nothing to send on, a run is never marked as shown", async () => {
@@ -141,31 +149,42 @@ describe("a routine run's frames", () => {
 		// could ever clear it there.
 		const { showRoutineRun } = await import("./run")
 		const fact: any = {}
-		const shown = showRoutineRun({ sessionId: 1, runId: "no-io", name: "Recap", fact })
+		const shown = showRoutineRun({ db: {} as never, sessionId: 1, runId: "no-io", name: "Recap", fact })
 		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS * 2)
 		expect(fact.shownAs).toBeUndefined()
 		shown.clear()
 		expect(fact.shownAs).toBeUndefined()
 	})
 
-	it("a run that parks clears at onParked, and its later end sends nothing more", async () => {
+	it("a run that parks keeps showing; its end sends the one clearing frame", async () => {
 		const { done, run } = await start()
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS)
+		await vi.advanceTimersByTimeAsync(0)
 		expect(ctl.frames).toHaveLength(1)
 		run.park()
 		await settle()
 		await done
-		expect(ctl.frames).toHaveLength(2)
-		expect(ctl.frames[1]).toMatchObject({ status: null, routine: { name: "Recap" } })
+		expect(ctl.frames).toHaveLength(1)
 		run.resolve()
 		await settle()
 		expect(ctl.frames).toHaveLength(2)
+		expect(ctl.frames[1]).toMatchObject({ status: null, routine: { name: "Recap" }, name: "Recap" })
+	})
+
+	it("the registry handle carries the routine's name and the line that caused it", async () => {
+		const called = new Promise<void>((r) => (ctl.onCall = r))
+		const done = runRoutineFiring({ ...firing(), cause: { moment: "turn-ended", at: 0, messageId: 41 } } as RoutineFiringEntry)
+		await called
+		const handle = runRegistry.active().find((h) => h.kind === "routine")
+		expect(handle).toMatchObject({ name: "Recap", readsMessageId: 41 })
+		ctl.runs.at(-1)!.resolve()
+		await settle()
+		await done
 	})
 
 	it("a failed run clears", async () => {
 		vi.spyOn(console, "warn").mockImplementation(() => undefined)
 		const { done, run } = await start()
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS)
+		await vi.advanceTimersByTimeAsync(0)
 		run.reject(new Error("boom"))
 		await settle()
 		await done
@@ -174,32 +193,10 @@ describe("a routine run's frames", () => {
 
 	it("never sets the registry status: the session list's row status has no entry", async () => {
 		const { run } = await start()
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS)
+		await vi.advanceTimersByTimeAsync(0)
 		expect(ctl.frames).toHaveLength(1)
 		expect(runRegistry.statusesBySession().has(1)).toBe(false)
 		run.resolve()
 		await settle()
-	})
-})
-
-describe("routineRunFramesOf", () => {
-	it("is empty before the delay, the start frame after it, empty after park or end, empty for another session", async () => {
-		const { done, run } = await start()
-		expect(routineRunFramesOf(1)).toEqual([])
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS)
-		expect(routineRunFramesOf(1)).toEqual([ctl.frames[0]])
-		expect(routineRunFramesOf(2)).toEqual([])
-		run.park()
-		await settle()
-		await done
-		expect(routineRunFramesOf(1)).toEqual([])
-
-		const second = await start()
-		await vi.advanceTimersByTimeAsync(QUEUE_STATUS_DELAY_MS)
-		expect(routineRunFramesOf(1)).toHaveLength(1)
-		second.run.resolve()
-		await settle()
-		await second.done
-		expect(routineRunFramesOf(1)).toEqual([])
 	})
 })

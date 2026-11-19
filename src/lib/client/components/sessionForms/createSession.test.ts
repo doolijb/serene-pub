@@ -65,6 +65,48 @@ function preset(over: Partial<PresetRow> & { id: number }): PresetRow {
 	} as PresetRow
 }
 
+describe("buildCreatePayload › a provided lorebook", () => {
+	const base = {
+		name: "x",
+		genreId: STANDARD_GENRE_ID,
+		presetId: null,
+		characterIds: [],
+		personaIds: []
+	}
+	it("is sent as starterKit with no lorebookId, and keeps the picked members", () => {
+		const params = buildCreatePayload({
+			...base,
+			lorebookId: 8,
+			lorebookIsProvided: true,
+			castMemberIds: [3, 4]
+		})
+		expect(params.starterKit).toEqual({ lorebookId: 8 })
+		expect(params.session.lorebookId).toBeNull()
+		expect(params.castMemberIds).toEqual([3, 4])
+	})
+	it("is unchanged when the flag is false or absent", () => {
+		for (const flag of [false, undefined]) {
+			const params = buildCreatePayload({
+				...base,
+				lorebookId: 8,
+				lorebookIsProvided: flag
+			})
+			expect(params.starterKit).toBeUndefined()
+			expect(params.session.lorebookId).toBe(8)
+		}
+	})
+	it("yields to a starter lorebook already chosen", () => {
+		const params = buildCreatePayload({
+			...base,
+			lorebookId: 8,
+			lorebookIsProvided: true,
+			starterKit: { primerId: "drowned-coast" }
+		})
+		expect(params.starterKit).toEqual({ primerId: "drowned-coast" })
+		expect(params.session.lorebookId).toBeNull()
+	})
+})
+
 describe("buildCreatePayload", () => {
 	it("sends the exact sessions:create shape the server reads", () => {
 		const params = buildCreatePayload({

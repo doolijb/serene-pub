@@ -57,8 +57,12 @@ const instance = (over: Partial<PanelInstance>): PanelInstance => ({
 	...over
 })
 
-function open(inst: PanelInstance, requests?: unknown) {
-	const session = $state({ id: 7, name: "S", sessionMessages: [{ id: 1, content: "Hel" }] })
+function open(inst: PanelInstance, requests?: unknown, storyDates = true) {
+	const session = $state({
+		id: 7,
+		name: "S",
+		sessionMessages: [{ id: 1, content: "Hel", storyClockYear: 412, storyClockMonth: 3 } as Record<string, unknown>]
+	})
 	const target = document.createElement("div")
 	document.body.appendChild(target)
 	const app = mount(Fixture, {
@@ -67,7 +71,8 @@ function open(inst: PanelInstance, requests?: unknown) {
 			instance: inst,
 			session,
 			supplies: { state: sessionStateV1, dossier: { dossier: 1 }, characters: charactersV1 },
-			requests
+			requests,
+			storyDates
 		}
 	})
 	flushSync()
@@ -86,13 +91,15 @@ afterEach(() => {
 })
 
 describe("a remote widget", () => {
-	async function remote(over: Partial<PanelInstance>) {
+	async function remote(over: Partial<PanelInstance>, storyDates = true) {
 		const p = open(
 			instance({
 				surface: { kind: "remote", owner: "acme", component: "w" },
 				src: "/plugin-ui/acme/w.js",
 				...over
-			})
+			}),
+			undefined,
+			storyDates
 		)
 		const mounted = posted.find((m) => m.k === "mount") as { port: MessagePort }
 		const got: Array<Record<string, unknown>> = []
@@ -172,6 +179,21 @@ describe("a remote widget", () => {
 		mounted.port.close()
 		unmount(app)
 		target.remove()
+	})
+
+	test("with no timeline is posted a log without story dates; with one it keeps them", async () => {
+		const off = await remote({}, false)
+		const offLog = off.got.find((m) => m.t === "messages") as { messages: Array<Record<string, unknown>> }
+		expect(offLog.messages[0].storyClockYear ?? null).toBeNull()
+		expect(offLog.messages[0].storyClockMonth ?? null).toBeNull()
+		off.port.close()
+		off.close()
+		posted.length = 0
+		const on = await remote({}, true)
+		const onLog = on.got.find((m) => m.t === "messages") as { messages: Array<Record<string, unknown>> }
+		expect(onLog.messages[0].storyClockYear).toBe(412)
+		on.port.close()
+		on.close()
 	})
 
 	test("that reads messages still streams: the token arrives", async () => {

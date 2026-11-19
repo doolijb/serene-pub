@@ -89,8 +89,12 @@ const TRAY_BUSY_DROPPED =
 	"The server was too busy to finish this upload. Attach the file again."
 
 /** A refusal whose message is a sentence for the person. Anything else
- *  thrown in here is an internal fault and is reworded before it leaves. */
-export class TrayRefusal extends Error {}
+ *  thrown in here is an internal fault and is reworded before it leaves.
+ *  `namesPlumbing` is set by the raise site when the sentence quotes a
+ *  connection's or model's own words: an administrator reads it, no one else. */
+export class TrayRefusal extends Error {
+	namesPlumbing = false
+}
 
 const STORE_FAILED = "This file couldn't be stored. Try attaching it again."
 

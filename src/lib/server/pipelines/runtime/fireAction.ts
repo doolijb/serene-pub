@@ -966,6 +966,12 @@ export async function fireAction(
 		if (fault) return refused(`'${chosen.name}' ${fault}`)
 		const step = req.clockStep as { by: number; unit: string }
 		clockStep = { by: step.by, unit: step.unit }
+		// A person's own press on a story with no date is refused in words; a
+		// pipeline's skipped move keeps its ledger line (`onRefusal: 'skip'`).
+		const { clockMoveProblem } = await import("$lib/server/state/clockProposal")
+		const { UNDATED_MOVE_SENTENCE } = await import("$lib/server/state/storyTime")
+		if ((await clockMoveProblem(db, req.sessionId, step.by, step.unit as never)) === UNDATED_MOVE_SENTENCE)
+			return refused(UNDATED_MOVE_SENTENCE)
 	}
 
 	/**
@@ -1059,6 +1065,8 @@ export async function fireAction(
 		kind: req.kind ?? (lineBound ? "maintenance" : "action"),
 		// 🚧 What a declared boundary trigger's `actionKey` reads (★9).
 		action: actionId,
+		// The action's shown name, for the sentence a held button says.
+		...(typeof chosen.name === "string" && chosen.name.trim() ? { name: chosen.name.trim() } : {}),
 		...(lineBound ? { lineBound: true as const } : {})
 	})
 	// A parent's stop is this run's stop: the fact crosses in the shape this

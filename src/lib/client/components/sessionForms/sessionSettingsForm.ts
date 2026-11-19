@@ -107,3 +107,30 @@ export function splitAdvanced(fields: readonly Field[]): { front: Field[]; advan
 /** A stable DOM id for a field (its address id is JSON). */
 export const fieldDomId = (field: Pick<Field, "id">, prefix = "setting"): string =>
 	`${prefix}-${field.id.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}`
+
+/**
+ * A pipeline field that picks a prompt (an enum on the prompts slot). The
+ * server builds a pipeline field only from the `params`, `settings` and
+ * prompts slots, so an enum on any other slot is the prompt row: that is the
+ * one the owner may read the wording of (owner ruling D58, 2026-11-16).
+ */
+export function isPromptRow(field: Pick<Field, "address" | "control">): boolean {
+	return (
+		field.address.kind === "pipeline" &&
+		field.control === "enum" &&
+		field.address.slot !== "params" &&
+		field.address.slot !== "settings"
+	)
+}
+
+/** A declared field name in words: `postHistoryInstructions` reads as `Post History Instructions` (the settings panel says it the same way). */
+export function humanizeFieldName(key: string): string {
+	return key
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.replace(/[_-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.split(" ")
+		.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+		.join(" ")
+}

@@ -65,6 +65,7 @@ async function mountPanel(opts: {
 	items?: unknown[]
 	batches?: unknown[]
 	mayApply: boolean
+	isOwner?: boolean
 }) {
 	app = mount(SessionViewPanel, {
 		target: document.body,
@@ -74,7 +75,7 @@ async function mountPanel(opts: {
 			onOpen: () => {},
 			onEdit: () => {},
 			canEdit: true,
-			isOwner: true
+			isOwner: opts.isOwner ?? true
 		}
 	})
 	flushSync()
@@ -172,5 +173,13 @@ describe("link and paragraph items", () => {
 		expect(document.body.textContent).toContain(
 			"Wren knows Old Marl · link"
 		)
+	})
+})
+
+describe("the review is the session owner's", () => {
+	test("a guest has no card at all, not even an empty one", async () => {
+		await mountPanel({ items: [LINK], mayApply: false, isOwner: false })
+		expect(document.querySelector('[aria-label="This session only"]')).toBeNull()
+		expect(apply()).toEqual([])
 	})
 })

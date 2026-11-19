@@ -5,7 +5,11 @@ import {
 	resolveOrCreateBindingRow,
 	syncLorebookBindingsForCharacter
 } from "$lib/server/utils/characterBindingSync"
-import { canViewCharacter, checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import {
+	canViewCharacter,
+	canViewCharacterThroughSessions,
+	checkSessionAccess
+} from "$lib/server/utils/sessionAccess"
 import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
 import { seatMembersAsRead } from "$lib/server/pipelines/prompt/seatCards"
 import { memberAsRead } from "$lib/server/cast/memberAsRead"
@@ -178,7 +182,11 @@ import { rulesetFitReader } from "$lib/server/rulesets/genreFit"
 import { keptRulesetDocument } from "$lib/server/rulesets/versions"
 import { adoptedBookRules } from "$lib/shared/rulesets/rulesOffer"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
-import { lorebookFileFindings } from "@serene-pub/sdk"
+import {
+	lorebookFileFindings,
+	parseStoryCalendar,
+	STORY_CALENDAR_PRESETS
+} from "@serene-pub/sdk"
 import { serverFailureAs } from "$lib/server/imports/importFailure"
 import {
 	getAttributeSlot,
@@ -214,6 +222,7 @@ import {
 import { pushToUser } from "./utils/userPush"
 import { bookShownNames, writtenNotesOf } from "$lib/server/lorebooks/notesShown"
 import { tellMemberSessions } from "$lib/server/sessions/memberSessions"
+import { bookDeleteRefusal } from "$lib/server/sessions/bookLock"
 import type {
 	LorebooksShareParams,
 	LorebooksShareResponse
@@ -518,10 +527,8 @@ export async function buildLorebooksList(
 							disabled: providedBy.disabled === true,
 							pluginName
 						},
-						// A primer row (m2e-F-D): every edit is refused; clone it.
-						...(book.kind === "starter_kit"
-							? { readOnly: { pluginName } }
-							: {})
+						// A live provided lorebook: every edit is refused; make your own copy.
+						readOnly: { pluginName }
 					}
 				: {}),
 			entryCount: Object.values(entryCounts).reduce((a, b) => a + b, 0),
@@ -573,6 +580,8 @@ export async function buildLorebooksList(
 					...b,
 					sessionId: b.sessionId!,
 					sessionName: session.name ?? null,
+					// A session's own notes are read by that session.
+					readBy: [{ id: b.sessionId!, name: session.name ?? null }],
 					notesWritten: writtenSet.has(b.id),
 					attached:
 						b.overlayOf != null && overlayName.has(b.overlayOf)
@@ -705,6 +714,17 @@ export const lorebooksLibraryHandler: Handler<
 	"The book's rules library could not be read."
 )
 
+/** A fresh copy of the SDK's "The real calendar" preset, as `ownBook.ts` copies its own. */
+function realCalendarCopy() {
+	return parseStoryCalendar(
+		JSON.parse(
+			JSON.stringify(
+				STORY_CALENDAR_PRESETS.find((p) => p.id === "real-calendar")!.calendar
+			)
+		)
+	)
+}
+
 export const lorebooksCreateHandler: Handler<
 	Sockets.Lorebooks.Create.Params,
 	Sockets.Lorebooks.Create.Response
@@ -753,6 +773,11 @@ export const lorebooksCreateHandler: Handler<
 						...(primaryRuleset ? { primaryRuleset } : {}),
 						...(params.timelineEnabled !== undefined
 							? { timelineEnabled: params.timelineEnabled }
+							: {}),
+						// A dated book is born on the real calendar; an undated
+						// one stays free-form (NULL).
+						...(params.timelineEnabled !== false
+							? { storyCalendar: realCalendarCopy() }
 							: {})
 					})
 					.returning()
@@ -835,19 +860,15 @@ async function buildLorebookGet(
 		...(providedBy && providedOwnerHere
 			? {
 					provided: { disabled: providedBy.disabled === true },
-					// A primer row (m2e-F-D): every edit is refused; clone it.
-					...(book.kind === "starter_kit"
-						? {
-								readOnly: {
-									pluginName:
-										providedBy.plugin === "core"
-											? null
-											: ((
-													await providedOwnerNames(db as unknown as Db, [providedBy.plugin])
-												).get(providedBy.plugin) ?? providedBy.plugin)
-								}
-							}
-						: {})
+					// A live provided lorebook: every edit is refused; make your own copy.
+					readOnly: {
+						pluginName:
+							providedBy.plugin === "core"
+								? null
+								: ((
+										await providedOwnerNames(db as unknown as Db, [providedBy.plugin])
+									).get(providedBy.plugin) ?? providedBy.plugin)
+					}
 				}
 			: {}),
 		tags: lorebookTags?.map((lt) => lt.tag.name) || [],
@@ -1214,9 +1235,11 @@ export const lorebooksDeleteHandler: Handler<
 			// overwrite uses (`purgeLorebook`): stat owner ids carry no
 			// foreign key, so a row on main would outlive the book.
 			const deleted = await db.transaction(async (tx) => {
+				// A session's own notes (`session_id` set) go with their session, never through here.
 				const mine = and(
 					eq(schema.lorebooks.id, params.id),
-					eq(schema.lorebooks.userId, userId)
+					eq(schema.lorebooks.userId, userId),
+					isNull(schema.lorebooks.sessionId)
 				)
 				const [book] = await tx
 					.select({ id: schema.lorebooks.id, uuid: schema.lorebooks.uuid, extraJson: schema.lorebooks.extraJson })
@@ -1228,6 +1251,9 @@ export const lorebooksDeleteHandler: Handler<
 				const mark = markedBook(book.extraJson, book.uuid)
 				if (mark && (await providedOwnerPresent(tx as unknown as Db, mark.plugin)))
 					throw new Error(PROVIDED_BOOK_DELETE_REFUSAL)
+				// 🚧 (D50) A book a session plays on is not deleted: its link and notes would go.
+				const refusal = await bookDeleteRefusal(tx as unknown as Db, book.id, userId)
+				if (refusal) throw new Error(refusal)
 				await purgeLorebook(tx, book.id)
 				const gone = await tx
 					.delete(schema.lorebooks)
@@ -2000,9 +2026,15 @@ export async function buildLorebookBindingList(
 	if (!book) throw new Error(LOREBOOK_NOT_FOUND)
 
 	const present = (await bookPresentOf(db, lorebookId))?.date
+	const rows = await castMemberRowsOf(db, book.lorebookBindings)
+	const yours = await cardsTheAskerPlays(db, userId, lorebookId, rows)
 	return {
 		lorebookId: book.id,
-		lorebookBindingList: await castMemberRowsOf(db, book.lorebookBindings),
+		lorebookBindingList: rows.map((row) =>
+			row.character && row.character.isPersona !== yours.has(row.character.id)
+				? { ...row, character: { ...row.character, isPersona: yours.has(row.character.id) } }
+				: row
+		),
 		present: present
 			? {
 					year: present.year,
@@ -2011,6 +2043,73 @@ export async function buildLorebookBindingList(
 				}
 			: null
 	}
+}
+
+/**
+ * The cards of `rows` the asker plays: the asker holds a live player seat on
+ * the card, or on the member, in a session that reads the book (it is that
+ * session's lorebook, or its own notes). A cast row reads "your persona" only
+ * for these; the card's own `isPersona` (a library fact, set when it was
+ * seated as anyone's persona) never makes a card the asker's. A removed seat
+ * is kept for old lines and plays nothing.
+ */
+async function cardsTheAskerPlays(
+	h: Db,
+	userId: number,
+	lorebookId: number,
+	rows: readonly {
+		id: number
+		character?: { id: number; isPersona?: boolean | null } | null
+	}[]
+): Promise<Set<number>> {
+	const cardIds = [
+		...new Set(rows.flatMap((r) => (r.character ? [r.character.id] : [])))
+	]
+	if (!cardIds.length) return new Set()
+	const readers = h
+		.select({ id: schema.sessions.id })
+		.from(schema.sessions)
+		.where(
+			or(
+				eq(schema.sessions.lorebookId, lorebookId),
+				inArray(
+					schema.sessions.id,
+					h
+						.select({ id: schema.lorebooks.sessionId })
+						.from(schema.lorebooks)
+						.where(eq(schema.lorebooks.id, lorebookId))
+				)
+			)
+		)
+	const mine = await h
+		.select({
+			cardId: schema.sessionPersonas.personaId,
+			memberId: schema.sessionPersonas.castMemberId
+		})
+		.from(schema.sessionPersonas)
+		.innerJoin(
+			schema.characters,
+			eq(schema.characters.id, schema.sessionPersonas.personaId)
+		)
+		.where(
+			and(
+				inArray(schema.sessionPersonas.sessionId, readers),
+				isNull(schema.sessionPersonas.removedAt),
+				eq(
+					sql`coalesce(${schema.sessionPersonas.userId}, ${schema.characters.userId})`,
+					userId
+				)
+			)
+		)
+	const heldCards = new Set(mine.map((r) => r.cardId))
+	const heldMembers = new Set(mine.flatMap((r) => (r.memberId != null ? [r.memberId] : [])))
+	return new Set(
+		rows.flatMap((r) =>
+			r.character && (heldCards.has(r.character.id) || heldMembers.has(r.id))
+				? [r.character.id]
+				: []
+		)
+	)
 }
 
 /**
@@ -2307,8 +2406,10 @@ export async function verifyBindingTargetAccess(
 		if (!character || character.isDeleted) return false
 		if (character.userId === userId) return true
 		// Checks BOTH member tables, so a character somebody else voices in a
-		// session the caller is in is bindable too.
-		return await canViewCharacter(binding.characterId, userId)
+		// session the caller is in is bindable too. A card shared with the
+		// caller is read and copy only (owner ruling Q3, 2026-10-12): it enters
+		// a cast only as an unlinked copy, so a share alone is not enough here.
+		return await canViewCharacterThroughSessions(binding.characterId, userId)
 	}
 	return true
 }
@@ -2409,6 +2510,9 @@ export const createLorebookBindingHandler: Handler<
 			absorbedAliases: _ignoredAbsorbedAliases,
 			createdAt: _ignoredCreatedAt,
 			updatedAt: _ignoredUpdatedAt,
+			// Who made the member is the server's; the cast member lock has no door here.
+			createdBy: _ignoredCreatedBy,
+			castMemberLock: _ignoredCastMemberLock,
 			...rest
 		} = params.lorebookBinding
 		const safeInsert = isBound
@@ -2505,6 +2609,11 @@ export const createLorebookBindingHandler: Handler<
 						})
 					})
 				}
+				// The person who made the member; never a value the client sent.
+				await db
+					.update(schema.lorebookBindings)
+					.set({ createdBy: userId })
+					.where(eq(schema.lorebookBindings.id, id))
 			}
 			// Re-read rather than trust the insert's own .returning(): the
 			// sync above writes name/aliases after it, so the returned values
@@ -2524,7 +2633,7 @@ export const createLorebookBindingHandler: Handler<
 				const member = await insertBackgroundBinding(
 					tx,
 					params.lorebookBinding.lorebookId,
-					values,
+					{ ...values, createdBy: userId },
 					{ writtenBy: `user:${userId}` }
 				)
 				// The base is built from the row, which has no column for the
@@ -2617,6 +2726,32 @@ export const updateLorebookBindingHandler: Handler<
 		const primerProblem = await primerRowEditProblem(db, lorebookOwner.id)
 		if (primerProblem) throw new Error(primerProblem)
 
+		// The cast member lock is its own door: a payload of the lock alone sets
+		// that one column. Locking is no content change, so it writes no version,
+		// redline or history row.
+		const sentKeys = Object.entries(params.lorebookBinding)
+			.filter(([, v]) => v !== undefined)
+			.map(([k]) => k)
+		if (
+			typeof params.lorebookBinding.castMemberLock === "boolean" &&
+			sentKeys.length === 2 &&
+			sentKeys.includes("id")
+		) {
+			const [locked] = await db
+				.update(schema.lorebookBindings)
+				.set({ castMemberLock: params.lorebookBinding.castMemberLock })
+				.where(eq(schema.lorebookBindings.id, existingBinding.id))
+				.returning()
+			if (emitToUser)
+				await relistBindings(socket, existingBinding.lorebookId, emitToUser)
+			const lockRes: Sockets.Lorebooks.UpdateBinding.Response = {
+				lorebookBinding: (await castMemberRowsOf(db, [locked]))[0],
+				laterVersions: { changed: 0, kept: 0 }
+			}
+			if (emitToUser) emitToUser("lorebooks:updateBinding", lockRes)
+			return lockRes
+		}
+
 		if (
 			!(await verifyBindingTargetAccess(params.lorebookBinding, userId))
 		) {
@@ -2666,6 +2801,9 @@ export const updateLorebookBindingHandler: Handler<
 			absorbedAliases: _ignoredAbsorbedAliases,
 			createdAt: _ignoredCreatedAt,
 			updatedAt: _ignoredUpdatedAt,
+			// Who made the member is the server's; the cast member lock is set only by a payload of the lock alone (above).
+			createdBy: _ignoredCreatedBy,
+			castMemberLock: _ignoredCastMemberLock,
 			...restUpdate
 		} = params.lorebookBinding
 		const safeUpdate = willBeBound
@@ -4000,6 +4138,7 @@ async function restoreBoundEntities(
 				lorebookId,
 				characterId: l.boundCharacterId,
 				binding: l.tag,
+				createdBy: userId,
 				spriteSet: l.spriteSet,
 				ownName: l.ownName,
 				ownNickname: l.ownNickname
@@ -4234,6 +4373,9 @@ interface RestoredEntryRefs {
 	// space, carrying whichever entries the document points at: an edge
 	// endpoint of kind `entry`, and an entry's own parent.
 	entryLocalIdToRealId: Map<number, number>
+	// History entries the file carried with no year: not imported (a history
+	// entry with no year is never stored), reported as a warning.
+	skippedHistoryEntries: number
 }
 
 /**
@@ -4262,6 +4404,10 @@ async function insertLorebookEntries(
 	const historyEntryLocalIdToRealId = new Map<number, number>()
 	const sceneLocalIdToRealId = new Map<number, number>()
 	const entryLocalIdToRealId = new Map<number, number>()
+	// A history entry with no year is skipped; the scenes nested under it still
+	// come in, unfiled, which is what they were in the book that exported them.
+	let skippedHistoryEntries = 0
+	const unfiledNestedScenes: any[] = []
 	// An entry's parent is written after every entry exists: a district can be
 	// filed before its city is inserted.
 	const pendingAnchors: Array<{
@@ -4290,7 +4436,6 @@ async function insertLorebookEntries(
 		// A ruleset's own entry type (M2c b4) is not among core's, so its count
 		// starts at zero the first time the import meets it.
 		const position = positions.get(typeId) ?? 0
-		positions.set(typeId, position + 1)
 
 		const meta = entry.extensions?.serenepub ?? {}
 		const bindingLocalId = meta.bindingLocalId
@@ -4329,6 +4474,12 @@ async function insertLorebookEntries(
 				: {})
 		}
 
+		if (typeId === HISTORY_TYPE_ID && typeof (values.fields as any)?.year !== "number") {
+			skippedHistoryEntries++
+			if (Array.isArray(meta.scenes)) unfiledNestedScenes.push(...meta.scenes)
+			continue
+		}
+		positions.set(typeId, position + 1)
 		rows.push({ values, meta, typeId })
 	}
 
@@ -4357,27 +4508,12 @@ async function insertLorebookEntries(
 					.map((localId) => bindingLocalIdToRealId.get(localId))
 					.filter((id): id is number => id !== undefined)
 			: []
-	for (const { values, meta, typeId } of rows) {
-		const id = idOf.get(slot(typeId, values.position))!
-		recordEntryRefs(meta, id, typeId)
-		// Only the dated type carries nested scenes, so only it does more than
-		// record the id it got back.
-		if (typeId !== HISTORY_TYPE_ID) continue
-		if (typeof meta.localId === "number")
-			historyEntryLocalIdToRealId.set(meta.localId, id)
-
-		// Nested scenes — each still gets its own document-scoped localId (see
-		// mapEntry) so narrativeGraph can reference one. sessionId/
-		// selectedMessageIds were deliberately never exported — they're
-		// session-instance-specific and can't round-trip.
-		// participantCharacters/mentionedCharacters are binding localIds (see
-		// the merge plan) — resolved back to real ids via the same map
-		// bindingLocalId elsewhere in this format uses. A legacy export's
-		// name-string arrays resolve to nothing here (every entry fails the
-		// `=== "number"` check) rather than erroring — the scene still
-		// imports, just without its old cast list, consistent with this whole
-		// function's best-effort philosophy.
-		const scenes = Array.isArray(meta.scenes) ? meta.scenes : []
+	// Nested scenes of a history entry (`historyEntryId`), or of one the import
+	// skipped (`null`: they arrive unfiled).
+	const importScenes = async (
+		scenes: any[],
+		historyEntryId: number | null
+	) => {
 		for (const scene of scenes) {
 			const participantCharacters = resolveBindingIds(
 				scene?.participantCharacters
@@ -4389,7 +4525,7 @@ async function insertLorebookEntries(
 				.insert(schema.scenes)
 				.values({
 					lorebookId,
-					historyEntryId: id,
+					historyEntryId,
 					sessionId: null,
 					name: scene?.name ?? null,
 					selectedMessageIds: [],
@@ -4412,6 +4548,30 @@ async function insertLorebookEntries(
 			}
 		}
 	}
+
+	for (const { values, meta, typeId } of rows) {
+		const id = idOf.get(slot(typeId, values.position))!
+		recordEntryRefs(meta, id, typeId)
+		// Only the dated type carries nested scenes, so only it does more than
+		// record the id it got back.
+		if (typeId !== HISTORY_TYPE_ID) continue
+		if (typeof meta.localId === "number")
+			historyEntryLocalIdToRealId.set(meta.localId, id)
+
+		// Nested scenes — each still gets its own document-scoped localId (see
+		// mapEntry) so narrativeGraph can reference one. sessionId/
+		// selectedMessageIds were deliberately never exported — they're
+		// session-instance-specific and can't round-trip.
+		// participantCharacters/mentionedCharacters are binding localIds (see
+		// the merge plan) — resolved back to real ids via the same map
+		// bindingLocalId elsewhere in this format uses. A legacy export's
+		// name-string arrays resolve to nothing here (every entry fails the
+		// `=== "number"` check) rather than erroring — the scene still
+		// imports, just without its old cast list, consistent with this whole
+		// function's best-effort philosophy.
+		await importScenes(Array.isArray(meta.scenes) ? meta.scenes : [], id)
+	}
+	await importScenes(unfiledNestedScenes, null)
 
 	// The `parent` role, once every row it could name exists. A link the file
 	// states but this import cannot honour (a missing parent, a cycle, a type
@@ -4439,7 +4599,8 @@ async function insertLorebookEntries(
 	return {
 		historyEntryLocalIdToRealId,
 		sceneLocalIdToRealId,
-		entryLocalIdToRealId
+		entryLocalIdToRealId,
+		skippedHistoryEntries
 	}
 }
 
@@ -4721,6 +4882,7 @@ async function restoreNarrativeGraph(
 									lorebookId,
 									characterId: null,
 									binding: token,
+									createdBy: userId,
 									...nodeFields
 								},
 								{ writtenBy: `user:${userId}` }
@@ -5560,6 +5722,11 @@ async function afterImportCommit(opts: {
 			)
 		)
 	)
+	const n = opts.entryRefs.skippedHistoryEntries
+	if (n > 0)
+		warnings.push(
+			`${n} history ${n === 1 ? "entry" : "entries"} had no year and ${n === 1 ? "was" : "were"} not imported.`
+		)
 	queueImportedBook(opts.lorebookId, opts.lorebookName)
 	return warnings
 }

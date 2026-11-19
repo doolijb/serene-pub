@@ -341,6 +341,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 	/* Pub settings */
 	"systemSettings:updateScriptsEnabled": systemSetting(),
 	"systemSettings:updateContextDebuggingEnabled": systemSetting(),
+	"systemSettings:updateStepTimeLimitsOff": systemSetting(),
 	"systemSettings:updateAccountsEnabled": systemSetting(),
 	"systemSettings:updateRequireTwoFactor": systemSetting(),
 	"systemSettings:updateDefaultLanguage": systemSetting(),

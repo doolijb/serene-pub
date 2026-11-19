@@ -25,6 +25,7 @@ import { tunnelsUnavailableReason } from "./tunnels"
 import { isWildcardAllowed, listAllowedHosts } from "./originAllowlist"
 import { pluginsEnabled } from "$lib/server/plugins/flag"
 import { needsReview, type PluginManifest } from "$lib/server/plugins/permissions"
+import { stepTimeLimitsOff } from "$lib/server/pipelines/runtime/callTether"
 import { listNamespaces } from "$lib/server/pipelines/config/panel/read"
 import { attentionFor, type OverviewFacts } from "$lib/server/admin/attention"
 import { readNeededJobs } from "$lib/server/admin/jobUse"
@@ -192,7 +193,8 @@ export async function buildAdminOverview(): Promise<Sockets.Admin.Overview.Respo
 		pipelines: {
 			published: library.length,
 			enabled: library.filter((p) => p.enabled).length,
-			runs24h
+			runs24h,
+			stepTimeLimitsOff: await stepTimeLimitsOff(db)
 		},
 		extensions: {
 			sandboxEnabled: pluginsEnabled(),

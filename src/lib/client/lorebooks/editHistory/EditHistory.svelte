@@ -1,13 +1,16 @@
 <script lang="ts">
 	/**
-	 * 🚧 An entry's, a card version's or a cast version's **Edit history**
-	 * (`lore_redlines`): a fold under the fields, closed on load, drawn only
-	 * when the subject has edits. The subject is an entry (`lorebookId` +
-	 * `entryId`) or a version (`characterVersionId`); one descriptor holds the
-	 * events, key and match, the markup is shared. The list is asked when the
+	 * 🚧 An entry's, a scene's, a card version's or a cast version's **Edit
+	 * history** (`lore_redlines`): a fold under the fields, closed on load,
+	 * drawn only when the subject has edits. The subject is an entry
+	 * (`lorebookId` + `entryId`), a scene (`lorebookId` + `sceneId`) or a
+	 * version (`characterVersionId`); one descriptor holds the events, key and
+	 * match, the markup is shared. The list is asked when the
 	 * subject or its saved row changes and heard again whenever the server
 	 * re-sends it (after a Restore or a clear). A refusal is said inline here,
-	 * never as a toast. An entry's ⋯ menu **Clear edit history…** sets
+	 * never as a toast. A scene has no clear of its own: its edits go with
+	 * the lorebook's clear, so it draws neither a clear button nor the dialog.
+	 * An entry's ⋯ menu **Clear edit history…** sets
 	 * `clearOpen`; a version, having no ⋯ menu, ends the open fold with its own
 	 * button. This component owns the question and the clear, and reports
 	 * `{ count, canClear }` through `onState`.
@@ -46,6 +49,8 @@
 		/** With `entryId`: the entry's lorebook. */
 		lorebookId?: number
 		entryId?: number
+		/** With `lorebookId`: a scene instead of an entry. */
+		sceneId?: number
 		/** The other subject: a card version or a cast version. */
 		characterVersionId?: number
 		/** When set, every Restore is disabled and carries this as its title. */
@@ -72,6 +77,7 @@
 	let {
 		lorebookId,
 		entryId,
+		sceneId,
 		characterVersionId,
 		restoreBlocked,
 		onRestore,
@@ -127,6 +133,31 @@
 						: null,
 				question: CLEAR_VERSION_QUESTION,
 				sentence: clearVersionSentence
+			}
+		}
+		if (sceneId !== undefined) {
+			const id = sceneId
+			return {
+				kind: "scene" as const,
+				id,
+				scope: lorebookId as number,
+				asks: "scenes:redlines",
+				restores: "scenes:restoreRedline",
+				clears: "",
+				askParams: { sceneId: id },
+				clearParams: {},
+				matchClear: (_d: object) => false,
+				normalise: (res: any) =>
+					res.sceneId === id
+						? {
+								subjectId: id,
+								canRestore: res.canRestore,
+								canClear: false,
+								redlines: res.redlines as Row[]
+							}
+						: null,
+				question: "",
+				sentence: (_n: number): string => ""
 			}
 		}
 		const id = entryId as number
@@ -234,6 +265,7 @@
 	}
 
 	async function clearAll() {
+		if (subject.kind === "scene") return
 		clearBusy = true
 		clearError = ""
 		try {
@@ -430,7 +462,7 @@
 	</section>
 {/if}
 
-{#if variant === "fold"}
+{#if variant === "fold" && subject.kind !== "scene"}
 	<ClearEditHistoryDialog
 		open={clearOpen || versionClearOpen}
 		question={subject.question}

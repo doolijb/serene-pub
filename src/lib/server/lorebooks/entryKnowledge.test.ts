@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 import {
-	KNOWLEDGE_SOURCES,
 	NOTHING_MARKED_RECEIPT,
 	judgeEntryKnowledge,
-	knowledgeExclusionReason,
-	knowledgeExclusions,
+	type KnowledgeDrop,
+	knowledgeDropReceipt,
+	knowledgeDropOf,
+	noteKnowledgeDrop,
 	knowledgeReceipt,
+	winningTies,
 	type KnowledgeRowRead
 } from "./entryKnowledge"
 import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
@@ -23,6 +25,7 @@ const row = (
 	branchId: null,
 	date: null,
 	inNotes: false,
+	hand: false,
 	...over
 })
 const year = (y: number) => ({ year: y, month: null, day: null })
@@ -255,12 +258,6 @@ describe("judgeEntryKnowledge", () => {
 
 describe("sentences", () => {
 	it("spells the reasons and receipts", () => {
-		expect(knowledgeExclusionReason("not-known", "Ana")).toBe(
-			"Not known by Ana."
-		)
-		expect(knowledgeExclusionReason("kept-from", "Ana")).toBe(
-			"Kept from Ana."
-		)
 		expect(knowledgeReceipt("Ana", { notKnown: 0, keptFrom: 0 })).toBe(
 			"No entries left out for Ana"
 		)
@@ -284,37 +281,188 @@ describe("sentences", () => {
 		)
 	})
 
-	it("spells every source for every left-out entry", () => {
-		const out = knowledgeExclusions(
-			[
+	it("says one read's drop, noted on its rows", () => {
+		const rows: unknown[] = []
+		expect(knowledgeDropOf(rows)).toBeUndefined()
+		const drop: KnowledgeDrop = {
+			kind: "judged",
+			name: "Ana",
+			notKnown: 1,
+			keptFrom: 0,
+			leftOut: [
 				{ entryId: 4, cause: "not-known" },
-				{ entryId: 5, cause: "kept-from" }
-			],
-			"Ana"
-		)
-		expect(KNOWLEDGE_SOURCES).toEqual([
-			"worldLore",
-			"characterLore",
-			"history"
-		])
-		expect(out).toHaveLength(6)
-		for (const source of KNOWLEDGE_SOURCES) {
-			expect(out).toContainEqual({
-				source,
-				id: 4,
-				reason: "Not known by Ana."
-			})
-			expect(out).toContainEqual({
-				source,
-				id: 5,
-				reason: "Kept from Ana."
-			})
+				{ entryId: 5, cause: "not-known" }
+			]
 		}
+		noteKnowledgeDrop(rows, drop)
+		expect(knowledgeDropOf(rows)).toBe(drop)
+		expect(knowledgeDropReceipt(drop)).toBe(
+			"1 entry left out: not known by Ana"
+		)
+		expect(knowledgeDropReceipt({ kind: "nothing-marked" })).toBe(
+			NOTHING_MARKED_RECEIPT
+		)
+		expect(knowledgeDropReceipt({ kind: "reads-all" })).toBe(
+			"Reads everything: not one cast member's turn"
+		)
 	})
 
 	it("names the kinds", () => {
 		for (const k of KNOWLEDGE_KINDS) expect(isKnowledgeKind(k)).toBe(true)
 		expect(isKnowledgeKind("member of")).toBe(false)
 		expect(isKnowledgeKind(null)).toBe(false)
+	})
+
+	describe("winningTies", () => {
+		const win = (rows: KnowledgeRowRead[], line: Line = MAIN_LINE) =>
+			winningTies({ rows, line, moment: null, timelineOff: false })
+
+		it("a dated tie beats an undated one that is not a hand tie", () => {
+			const undated = row({ entryId: 1, kind: "kept_from" })
+			const dated = row({ entryId: 1, kind: "was_told", date: year(5) })
+			expect(win([undated, dated]).get(1)?.id).toBe(dated.id)
+			expect(win([dated, undated]).get(1)?.id).toBe(dated.id)
+		})
+
+		it("the later date wins", () => {
+			const a = row({ entryId: 1, kind: "knows", date: year(5) })
+			const b = row({ entryId: 1, kind: "kept_from", date: year(9) })
+			expect(win([b, a]).get(1)?.id).toBe(b.id)
+		})
+
+		it("the nearer line wins at one date", () => {
+			const main = row({ entryId: 1, kind: "kept_from" })
+			const branch = row({ entryId: 1, kind: "knows", branchId: 7 })
+			expect(win([main, branch], BRANCH).get(1)?.id).toBe(branch.id)
+		})
+
+		it("kept from wins at a tie", () => {
+			const knows = row({ entryId: 1, kind: "knows" })
+			const kept = row({ entryId: 1, kind: "kept_from" })
+			expect(win([knows, kept]).get(1)?.id).toBe(kept.id)
+			expect(win([kept, knows]).get(1)?.id).toBe(kept.id)
+		})
+
+		it("carries the date only where the Timeline is on", () => {
+			const dated = row({ entryId: 1, kind: "knows", date: year(5) })
+			const on = win([dated]).get(1)
+			expect(on?.date).toEqual(year(5))
+			const off = winningTies({
+				rows: [dated],
+				line: MAIN_LINE,
+				moment: null,
+				timelineOff: true
+			}).get(1)
+			expect(off?.id).toBe(dated.id)
+			expect(off?.date).toBeNull()
+		})
+
+		it("leaves out a row that does not read", () => {
+			const late = row({ entryId: 1, kind: "knows", date: year(50) })
+			const got = winningTies({
+				rows: [late],
+				line: MAIN_LINE,
+				moment: year(10),
+				timelineOff: false
+			})
+			expect(got.size).toBe(0)
+		})
+	})
+})
+
+describe("a hand tie always wins (D39)", () => {
+	const hand = (
+		entryId: number,
+		kind: "knows" | "kept_from",
+		over: Partial<KnowledgeRowRead> = {}
+	) => row({ entryId, kind, hand: true, ...over })
+	const win = (
+		rows: KnowledgeRowRead[],
+		o: { line?: Line; moment?: ReturnType<typeof year> | null; off?: boolean } = {}
+	) =>
+		winningTies({
+			rows,
+			line: o.line ?? MAIN_LINE,
+			moment: o.moment ?? null,
+			timelineOff: o.off ?? false
+		})
+
+	for (const handKind of ["knows", "kept_from"] as const) {
+		for (const play of ["was_told", "has_been_there"] as const) {
+			for (const date of [null, year(5)]) {
+				it(`hand ${handKind} beats ${play} (${date ? "dated" : "undated"}), either order of writing`, () => {
+					const h = hand(1, handKind)
+					const p = row({ entryId: 1, kind: play, date })
+					// ids both ways: the play tie newer, then older
+					const newer = row({ entryId: 1, kind: play, date })
+					expect(win([h, p]).get(1)?.id).toBe(h.id)
+					expect(win([p, h]).get(1)?.id).toBe(h.id)
+					expect(win([newer, h]).get(1)?.id).toBe(h.id)
+					const out = judge({ rows: [p, h] }).leftOut
+					expect(out.length).toBe(handKind === "kept_from" ? 1 : 0)
+				})
+			}
+		}
+	}
+
+	it("hand beats an ordinary tie", () => {
+		const ord = row({ entryId: 1, kind: null, date: year(9) })
+		const h = hand(1, "kept_from")
+		expect(win([ord, h]).get(1)?.id).toBe(h.id)
+		expect(judge({ rows: [ord, h] }).keptFrom).toBe(1)
+	})
+
+	it("hand beats a dated or branch knows / kept_from", () => {
+		const dated = row({
+			entryId: 1,
+			kind: "knows",
+			date: year(50)
+		})
+		const branched = row({ entryId: 1, kind: "knows", branchId: 7 })
+		const h = hand(1, "kept_from")
+		expect(win([dated, h]).get(1)?.id).toBe(h.id)
+		expect(win([branched, h], { line: BRANCH }).get(1)?.id).toBe(h.id)
+		const keptDated = row({ entryId: 1, kind: "kept_from", date: year(60) })
+		const k = hand(1, "knows")
+		expect(win([keptDated, k]).get(1)?.id).toBe(k.id)
+		expect(judge({ rows: [keptDated, k] }).keptFrom).toBe(0)
+	})
+
+	it("of two hand ties the notes win, then the newest id", () => {
+		const book = hand(1, "kept_from")
+		const notes = hand(1, "knows", { inNotes: true })
+		expect(win([book, notes]).get(1)?.id).toBe(notes.id)
+		expect(win([notes, book]).get(1)?.id).toBe(notes.id)
+		const a = hand(2, "kept_from")
+		const b = hand(2, "knows")
+		expect(win([a, b]).get(2)?.id).toBe(b.id)
+		expect(win([b, a]).get(2)?.id).toBe(b.id)
+		const older = hand(3, "knows", { id: 1000 })
+		const newer = hand(3, "kept_from", { id: 1001 })
+		expect(win([newer, older]).get(3)?.id).toBe(1001)
+	})
+
+	it("play against play is still by date (unchanged)", () => {
+		const a = row({ entryId: 1, kind: "was_told", date: year(5) })
+		const b = row({ entryId: 1, kind: "kept_from", date: year(9) })
+		expect(win([a, b]).get(1)?.id).toBe(b.id)
+	})
+
+	it("the mark and no tie are unchanged", () => {
+		expect(judge({ markedEntryIds: [1] }).notKnown).toBe(1)
+		expect(
+			judge({ markedEntryIds: [1], rows: [hand(1, "knows")] }).leftOut
+		).toEqual([])
+		expect(
+			judge({ markedEntryIds: [1], rows: [hand(1, "kept_from")] }).keptFrom
+		).toBe(1)
+	})
+
+	it("holds with the Timeline off", () => {
+		const h = hand(1, "kept_from")
+		const p = row({ entryId: 1, kind: "was_told", date: year(5) })
+		expect(win([p, h], { off: true }).get(1)?.id).toBe(h.id)
+		const off = judge({ rows: [p, h], timelineOff: true })
+		expect(off.keptFrom).toBe(1)
 	})
 })

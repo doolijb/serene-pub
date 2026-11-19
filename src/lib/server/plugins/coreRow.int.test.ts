@@ -195,7 +195,7 @@ describe("a stored 'core' plugin row", () => {
 		)
 		const srcs = res.modePanels.map((p) => p.src ?? "")
 		// The twin's remote widget.
-		expect(srcs).toContain(`/plugin-ui/${TWIN}/ui/widget.mjs`)
+		expect(srcs).toContain(`/plugin-ui/${TWIN}/ui/widget.mjs?v=1.0.0`)
 		expect(srcs.some((s) => s.startsWith("/plugin-ui/core/"))).toBe(false)
 		expect(
 			res.modePanels.some((p) => (p.surface as { owner?: string; pluginId?: string }).owner === "core" ||
@@ -213,6 +213,7 @@ describe("a stored 'core' plugin row", () => {
 		const get = (rest: string) =>
 			GET({
 				params: { rest },
+				url: new URL(`http://localhost/plugin-ui/${rest}`),
 				request: new Request(`http://localhost/plugin-ui/${rest}`)
 			} as never) as Promise<Response>
 		expect((await get(`${TWIN}/ui/panel.html`)).status).toBe(200)

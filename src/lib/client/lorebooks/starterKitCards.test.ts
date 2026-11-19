@@ -71,10 +71,10 @@ describe("primer rows (m2e-F-C)", () => {
 
 	test("primerRowLine is the server's sentence", () => {
 		expect(primerRowLine({ readOnly: { pluginName: null } })).toBe(
-			"This starter lorebook comes with the pub: clone it to make your own."
+			"This lorebook comes with the pub: make your own copy to change it."
 		)
 		expect(primerRowLine({ readOnly: { pluginName: "Mundi" } })).toBe(
-			"This starter lorebook comes with Mundi: clone it to make your own."
+			"This lorebook comes with Mundi: make your own copy to change it."
 		)
 	})
 })

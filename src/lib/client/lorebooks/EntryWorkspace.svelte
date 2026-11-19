@@ -36,6 +36,8 @@
 		isFileableEntryType
 	} from "$lib/shared/entries/types"
 	import EntryPool from "./EntryPool.svelte"
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
 	import LooseEndsQueue from "./LooseEndsQueue.svelte"
 	import type { ChoreField, LooseEnd } from "./looseEnds"
 	import ReadInLine from "./editor/ReadInLine.svelte"
@@ -89,7 +91,8 @@
 		descriptorForKind,
 		doorForKey,
 		draftStale,
-		editorPlaceholder
+		editorPlaceholder,
+		newHistoryDate
 	} from "./sections"
 	import EntryInspector from "./sections/EntryInspector.svelte"
 	import CastPoolRow from "./sections/CastPoolRow.svelte"
@@ -112,6 +115,11 @@
 	import { compareDates, dateValue } from "./sections/historyDates"
 	import { formatDate } from "./sections/historyDates"
 	import { parseMoment } from "./time/moment"
+	import {
+		BookKnowledge,
+		setBookKnowledge,
+		socketKnowledgeApi
+	} from "./knowledge/bookKnowledge.svelte"
 	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 	import AmendmentList from "./time/AmendmentList.svelte"
 	import VersionRail from "./time/VersionRail.svelte"
@@ -431,18 +439,25 @@
 
 	/**
 	 * The conversation reading this book, which is the one the marks and the
-	 * Read in line are about. A session reading another book decided nothing
-	 * about these rows.
+	 * Read in line are about: the open session when it reads the book (its
+	 * lorebook, or its own notes), else the newest session in the book's
+	 * `readBy`. A session reading another book decided nothing about these
+	 * rows; a book nothing reads has none.
 	 */
+	let openReads = $derived(
+		openSessionCtx?.lorebookId === lorebookId ||
+			(openSessionCtx?.sessionId != null &&
+				book.sessionId === openSessionCtx.sessionId)
+	)
 	let readingSessionId = $derived(
-		openSessionCtx?.lorebookId === lorebookId
-			? openSessionCtx.sessionId
-			: null
+		openReads ? openSessionCtx.sessionId : (book.readBy[0]?.id ?? null)
 	)
 	let readingSessionName = $derived(
 		readingSessionId === null
 			? null
-			: (openSessionCtx.sessionName ?? "the open session")
+			: openReads
+				? (openSessionCtx.sessionName ?? "the open session")
+				: (book.readBy[0]?.name ?? "a session")
 	)
 
 	/**
@@ -1020,7 +1035,12 @@
 		libraryOpenKey = null
 		creatingDoor = door
 		draftKey = "new"
-		draft = door.newDraft(lorebookId)
+		draft = {
+			...door.newDraft(lorebookId),
+			...(door.kind === HISTORY_TYPE_ID
+				? (newHistoryDate(openBookTime, route.branch ?? null) ?? {})
+				: {})
+		}
 		pristineDraft = { ...$state.snapshot(draft) }
 	}
 
@@ -1198,6 +1218,139 @@
 	let entryRowDisabled = $derived(
 		railed ? !entryEditable : readOnly || libraryOpen
 	)
+	/**
+	 * 🚧 Not common knowledge: the book's one store holds the mark and writes it
+	 * at once (never part of the draft). Provided so the pool's bulk bar and the
+	 * inspector's Known by tab find the same copy.
+	 */
+	const knowledge = new BookKnowledge(socketKnowledgeApi(socket))
+	setBookKnowledge(knowledge)
+	/** The owner's (their marks read succeeded), on a stored entry the form lets them change. */
+	let knowledgeToggleShown = $derived(
+		knowledge.loaded &&
+			!libraryOpen &&
+			!isNew &&
+			!!selectedSource &&
+			activeDoor.store === "entries" &&
+			!entryRowDisabled
+	)
+	$effect(() => {
+		if (readOnly) return
+		return knowledge.open(lorebookId)
+	})
+	$effect(() => {
+		const id =
+			knowledge.loaded &&
+			!isNew &&
+			!libraryOpen &&
+			activeDoor.store === "entries" &&
+			selectedSource
+				? selectedSource.id
+				: null
+		const at = momentDate
+		knowledge.showEntry(id, {
+			branchId: route.branch ?? null,
+			moment: at
+				? {
+						year: at.year,
+						month: at.month ?? null,
+						day: at.day ?? null
+					}
+				: null
+		})
+	})
+	let markBusy = $state(false)
+	let markError = $state<string | null>(null)
+	// A refusal belongs to the entry it was said under.
+	$effect(() => {
+		void selectedSource?.id
+		markError = null
+	})
+	async function toggleNotCommon() {
+		if (!selectedSource || markBusy) return
+		markError = null
+		markBusy = true
+		try {
+			await knowledge.setMark(
+				[selectedSource.id],
+				!knowledge.isMarked(selectedSource.id)
+			)
+		} catch (err) {
+			markError =
+				err instanceof Error && err.message
+					? err.message
+					: "The entries could not be marked."
+		} finally {
+			markBusy = false
+		}
+	}
+	/**
+	 * 🚧 The lock on the open row (an entry or a scene): sessions and their
+	 * routines leave it as it is. One value, never dated, never part of the
+	 * draft, written at once. Offered to whoever may edit the row; a reader who
+	 * cannot edit it is only told when it is on.
+	 */
+	let lockOn = $derived(
+		!!selectedSource &&
+			(activeDoor.store === "scenes"
+				? selectedSource.sceneLock === true
+				: selectedSource.entryLock === true)
+	)
+	let lockStored = $derived(
+		!isNew &&
+			!libraryOpen &&
+			!!selectedSource &&
+			(activeDoor.store === "scenes" || activeDoor.store === "entries") &&
+			typeof selectedSource.id === "number"
+	)
+	let lockBusy = $state(false)
+	let lockError = $state<string | null>(null)
+	// A refusal belongs to the row it was said under.
+	$effect(() => {
+		void selectedKey
+		lockError = null
+	})
+	async function toggleLock() {
+		const row = selectedSource
+		if (!row || lockBusy || readOnly) return
+		const locked = !lockOn
+		lockError = null
+		lockBusy = true
+		try {
+			if (activeDoor.store === "scenes") {
+				const requestId = uuid()
+				await awaitReply({
+					socket,
+					event: "scenes:update",
+					params: { scene: { id: row.id, sceneLock: locked }, requestId },
+					errorEvent: "scenes:update:error",
+					fallbackError: "The lock could not be saved.",
+					match: (reply) => reply.requestId === requestId,
+					matchError: (reply) =>
+						(reply as { requestId?: unknown } | null)?.requestId === requestId
+				})
+			} else {
+				const request = `lock:${uuid()}`
+				await awaitReply({
+					socket,
+					event: "entries:setMarks",
+					params: { entryId: row.id, locked, request },
+					errorEvent: "entries:setMarks:error",
+					fallbackError: "The lock could not be saved.",
+					match: (reply) => reply.request === request && !reply.error,
+					matchError: (reply) =>
+						(reply as { request?: unknown } | null)?.request === request
+				})
+			}
+		} catch (err) {
+			lockError =
+				err instanceof Error && err.message
+					? err.message
+					: "The lock could not be saved."
+		} finally {
+			lockBusy = false
+		}
+	}
 	let entryRowOpen = $derived(
 		rowOpenFor && rowOpenFor.key === draftKey
 			? rowOpenFor.open
@@ -2192,6 +2345,7 @@
 			draft = (descriptorForKind(SCENE_KIND) ?? descriptor).toDraft(
 				(held ? { ...held, ...msg.scene } : msg.scene) as any
 			)
+			pristineDraft = { ...$state.snapshot(draft) }
 		}
 	}
 
@@ -2527,6 +2681,83 @@
 	</button>
 {/snippet}
 
+{#snippet notCommonToggle(where: string)}
+	<!-- 🚧 Not common knowledge: one value per entry, never dated, written at
+	     once through the knowledge door — not a field of the draft. -->
+	{#if knowledgeToggleShown && selectedSource}
+		{@const on = knowledge.isMarked(selectedSource.id)}
+		<div class="flex flex-col gap-1">
+			<button
+				class="btn btn-sm w-full justify-start {on
+					? 'preset-pressed'
+					: 'preset-tonal-surface'}"
+				type="button"
+				aria-pressed={on}
+				aria-describedby="not-common-help-{where}"
+				data-lore-mark="not-common"
+				disabled={markBusy}
+				onclick={toggleNotCommon}
+			>
+				<Icons.EyeOff size={14} aria-hidden="true" />
+				<span>Not common knowledge</span>
+				<Icons.Check
+					size={14}
+					class="ml-auto shrink-0 {on ? '' : 'invisible'}"
+					aria-hidden="true"
+				/>
+			</button>
+			<p
+				id="not-common-help-{where}"
+				class="text-meta text-surface-600-400"
+			>
+				Only the cast members you name under Known by read this entry
+				when they speak.
+			</p>
+			{#if markError}
+				<p role="alert" class="text-error-700-300 text-xs">
+					{markError}
+				</p>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet lockToggle()}
+	<!-- 🚧 The lock: one value per row, never dated, written at once — not a
+	     field of the draft. -->
+	<div class="flex flex-col gap-1">
+		<button
+			class="btn btn-sm w-full justify-start sm:w-auto {lockOn
+				? 'preset-pressed'
+				: 'preset-tonal-surface'}"
+			type="button"
+			aria-pressed={lockOn}
+			aria-describedby="lock-help"
+			data-lore-lock
+			disabled={lockBusy}
+			onclick={toggleLock}
+		>
+			<Icons.Lock size={14} aria-hidden="true" />
+			<!-- 🚧 Provisional copy: the owner has not seen this label. -->
+			<span>Locked</span>
+			<Icons.Check
+				size={14}
+				class="ml-auto shrink-0 {lockOn ? '' : 'invisible'}"
+				aria-hidden="true"
+			/>
+		</button>
+		<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
+		<FieldHelp id="lock-help">
+			{activeDoor.store === "scenes"
+				? "Sessions and their routines leave this scene's summary, notes and cast as they are; you can still edit it."
+				: "Sessions and their routines leave this entry as it is; you can still edit it."}
+		</FieldHelp>
+		{#if lockError}
+			<InlineError>{lockError}</InlineError>
+		{/if}
+	</div>
+{/snippet}
+
 {#snippet editorMenu()}
 	<!-- The entry's state, not its fields. Pinned and Off are marks on the
 	     draft, saved with it (and dated with it when reading at a moment);
@@ -2571,6 +2802,11 @@
 								() =>
 									(draft!.enabled = draft!.enabled === false)
 							)}
+						{/if}
+						{#if !railed}
+							{@render notCommonToggle("menu")}
+						{/if}
+						{#if draft && !railed}
 							{#if !readOnly && !isNew && selectedSource && selectedSource.branchId != null && (selectedSource.branchId ?? null) === (route.branch ?? null) && activeDoor.kind !== HISTORY_TYPE_ID}
 								<button
 									class="btn btn-sm preset-tonal-surface w-full justify-start"
@@ -2793,6 +3029,7 @@
 								() => (draft!.enabled = draft!.enabled === false)
 							)}
 						{/if}
+						{@render notCommonToggle("zone")}
 					{/if}
 				{/snippet}
 			</BeginningDecayRow>
@@ -2936,6 +3173,14 @@
 					}}
 				/>
 			{/if}
+			{#if lockStored && !readOnly}
+				{@render lockToggle()}
+			{:else if lockStored && lockOn}
+				<!-- 🚧 Provisional copy: the owner has not seen this sentence. -->
+				<p class="text-surface-600-400 text-chip" data-lore-lock-note>
+					Locked: sessions and their routines leave it as it is.
+				</p>
+			{/if}
 			<!-- A shared book's fields read, never write: one `disabled`
 			     fieldset stills every control the editor draws. -->
 			{#if libraryOpen && libraryOpenRow}
@@ -2957,7 +3202,7 @@
 				</div>
 			{/if}
 			{#snippet railEdits(ids: readonly (number | null)[])}
-				{#if selectedItem}
+				{#if selectedItem && !readOnly}
 					<EditHistory
 						{lorebookId}
 						entryId={selectedItem.id}
@@ -3019,7 +3264,7 @@
 					{@render fields()}
 					<!-- The wide rail shows each version's edits itself; this fold
 					     is the narrow layout's, scoped to the version shown. -->
-					{#if selectedItem}
+					{#if selectedItem && !readOnly}
 						<div class="@min-[36rem]/versions:hidden">
 							<EditHistory
 								{lorebookId}
@@ -3093,7 +3338,7 @@
 						moment={route.moment}
 					/>
 				{/if}
-				{#if !(railed && rail && shownVersion)}
+				{#if !(railed && rail && shownVersion) && !readOnly}
 					<EditHistory
 						{lorebookId}
 						entryId={selectedItem.id}

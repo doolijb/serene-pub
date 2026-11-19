@@ -53,6 +53,8 @@ import {
 } from "./navigation"
 import { answerFileSave } from "./fileSave"
 import { answerFireTurn, type FireTurnDeps } from "./fireTurn"
+import { answerStopRun } from "./stopRun"
+import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
 import {
 	answerForwardTurn,
 	answerRewindTurn,
@@ -184,6 +186,8 @@ export interface WidgetRequestDeps {
 
 	// ── The viewer ──
 	isAdmin(): boolean
+	/** The viewer owns this session (the owner's `prompt-details`). */
+	isSessionOwner(): boolean
 	/** Context debugging is on (system settings). */
 	contextDebugging(): boolean
 	/** The viewer may control this line (the page's own controls' rule). */
@@ -194,6 +198,8 @@ export interface WidgetRequestDeps {
 	panelsCtx(): PanelsCtx
 	/** The viewer's user id, null when unknown. */
 	viewerId(): number | null
+	/** True when `id` is one of the summaries the page projects into the turn line's background runs (`stop-run`). */
+	isSummary(id: string): boolean
 	castMemberOf: OpenCharacterDeps["castMemberOf"]
 	openCastMember: OpenCharacterDeps["openCastMember"]
 	openSeatMemberSheet: NonNullable<OpenCharacterDeps["openSeatMemberSheet"]>
@@ -244,6 +250,10 @@ export interface WidgetRequestDeps {
 	sceneList(): readonly SceneRow[]
 	/** 🚧 The session's own book (its Session notes): what Chronicle and Places read when it reads no shared lorebook (pr-6 B §B-3). */
 	ownBookId?(): number | null
+	/** The book the session reads: its attached lorebook, else its own book (what `open-lore` with no book opens). */
+	sessionBookId(): number | null
+	/** Whether a summary would be saved into the session's own notes (no attached lorebook). */
+	summarizingIntoNotes(): boolean
 	/** This session's scenes on its line not yet in the lorebook's graph. */
 	ungraphedScenes(): number
 	/** Open the page's Extend graph review. */
@@ -395,11 +405,17 @@ export const WIDGET_REQUEST_ANSWERS: {
 		answerViewImage(p, from, d)
 	},
 	"open-lore": (p, _from, d) => {
-		answerOpenLore(p, d)
+		answerOpenLore(p, {
+			showLore: d.showLore,
+			openLorebooksPanel: d.openLorebooksPanel,
+			isSessionOwner: d.isSessionOwner,
+			ownBookId: () => d.ownBookId?.() ?? null,
+			sessionBookId: d.sessionBookId
+		})
 	},
 	"prompt-details": (p, _from, d) => {
 		answerPromptDetails(p, {
-			isAdmin: d.isAdmin(),
+			mayRead: d.isAdmin(),
 			contextDebugging: d.contextDebugging(),
 			findMessage: d.findMessage,
 			showReport: d.showReport
@@ -434,7 +450,9 @@ export const WIDGET_REQUEST_ANSWERS: {
 			summarizeOpen: d.summarizeOpen,
 			startSelection: d.startSummarySelection,
 			hasScene: (sceneId) => d.sceneList().some((s) => s.id === sceneId),
-			processScene: d.processScene
+			processScene: d.processScene,
+			isSessionOwner: d.isSessionOwner,
+			onNotes: d.summarizingIntoNotes
 		})
 	},
 	// 🚧 Live scenes (§14 C): the conversation's scene boundaries, each
@@ -484,6 +502,18 @@ export const WIDGET_REQUEST_ANSWERS: {
 	},
 	"fire-turn": (p, _from, d) => {
 		answerFireTurn(p, d)
+	},
+	// 🚧 Stop on a background run the turn line lists (`./stopRun.ts`).
+	"stop-run": (p, _from, d) => {
+		answerStopRun(p, {
+			runOf: (id) =>
+				sessionStore.runsOf(d.sessionId() ?? -1).find((r) => r.runId === id),
+			isSummary: d.isSummary,
+			cancelRun: (runId) =>
+				void useTypedSocket().emit("pipelines:cancelRun", { runId }),
+			cancelActivity: (id) =>
+				void useTypedSocket().emit("activity:cancel", { id })
+		})
 	},
 	"rewind-turn": (p, _from, d) => {
 		answerRewindTurn(p, d)

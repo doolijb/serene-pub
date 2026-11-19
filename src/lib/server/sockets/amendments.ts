@@ -521,6 +521,12 @@ export async function cardMemberAt(
 		 * the resolver and the presences cut the same way (finding #39).
 		 */
 		at?: AsOf
+		/**
+		 * The reading's `timelineOff`: the lorebook keeps no timeline, so
+		 * dated presences are ignored and the member stands once, at no
+		 * point of her life (as a member with no presences).
+		 */
+		timelineOff: boolean
 	}
 ): Promise<{
 	member: Record<string, unknown>
@@ -541,10 +547,12 @@ export async function cardMemberAt(
 	})
 	if (!member) return null
 
-	const presenceRows = await dbOrTx
-		.select()
-		.from(schema.castPresences)
-		.where(eq(schema.castPresences.lorebookBindingId, member.id))
+	const presenceRows = params.timelineOff
+		? []
+		: await dbOrTx
+				.select()
+				.from(schema.castPresences)
+				.where(eq(schema.castPresences.lorebookBindingId, member.id))
 	const presences = presenceRows.map((p) => ({
 		id: p.id,
 		castId: p.lorebookBindingId,

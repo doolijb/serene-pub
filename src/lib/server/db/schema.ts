@@ -1595,6 +1595,21 @@ export const lorebookBindings = pgTable(
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
+		/**
+		 * 🚧 The **cast member lock**: while true no run changes this member's
+		 * words, durable sheet or art; read only through
+		 * `castMemberLockedAgainstRuns` (`shared/lorebooks/runLocks.ts`).
+		 */
+		castMemberLock: boolean("cast_member_lock").notNull().default(false),
+		/**
+		 * The person who made this cast member (a guest naming their seat, the
+		 * owner adding one by hand or for someone, a copy's or an import's
+		 * maker); null when a run or a plugin made it, or for a member stored
+		 * before the column. Not the book's owner.
+		 */
+		createdBy: integer("created_by").references(() => users.id, {
+			onDelete: "set null"
+		}),
 		// ⚠ No `persona_id`: a persona is a character, so a persona binding IS
 		// a character binding and `character_id` is the only bound arc.
 		// The member's **cast tag**, `{{char:N}}` — the one spelling every
@@ -3116,6 +3131,12 @@ export const sessionMessages = pgTable(
 		// only writer.
 		error: json("error").$type<{
 			message: string
+			/**
+			 * Set when `message` ends with the suggestion to ask an
+			 * administrator: the sentence without it, which an administrator is
+			 * shown in its place.
+			 */
+			plainMessage?: string
 			code?: string
 			connection?: ConnectionIdentity
 		} | null>(),
@@ -3368,6 +3389,8 @@ export const messages = pgTable(
 		// only writer.
 		error: json("error").$type<{
 			message: string
+			/** The message without its suggestion to ask an administrator, when it ends with one. */
+			plainMessage?: string
 			code?: string
 			connection?: ConnectionIdentity
 		} | null>(),
@@ -4346,6 +4369,16 @@ export const systemSettings = pgTable(
 			.notNull()
 			.default(false),
 		/**
+		 * 🚧 **Turn off step time limits** (Admin › Diagnostics; owner 2026-11-15,
+		 * lane dbg-1): a diagnostic switch, off by default. While on, runs that
+		 * start pass `stepTimeLimitsOff` to the executor, which then applies no
+		 * step `timeoutMs` and no ceiling; Stop still ends every run. Limits
+		 * enforced inside a call stay on whatever this says: script and plugin
+		 * sandbox deadlines, tool hooks, the connection's idle watchdog. Read
+		 * only through `stepTimeLimitsOff()` (`pipelines/runtime/callTether.ts`).
+		 */
+		stepTimeLimitsOff: boolean("step_time_limits_off").notNull().default(false),
+		/**
 		 * Compile prompts through the pipeline instead of `PromptBuilder`.
 		 *
 		 * Off by default and deliberately so: the two paths are byte-identical
@@ -4857,6 +4890,14 @@ export const scenes = pgTable(
 		 * renumbered. False: a person's own name, shown as stored.
 		 */
 		nameIsDefault: boolean("name_is_default").notNull().default(false),
+		/**
+		 * 🚧 The **scene lock**: a person switched it on; while true no run
+		 * writes, deletes or archives this scene (its summary, notes, name and
+		 * cast as runs write them); a person's hand edit, Apply and Take back
+		 * still do. The one reader is `sceneLockedAgainstRuns`
+		 * (`shared/lorebooks/runLocks.ts`).
+		 */
+		sceneLock: boolean("scene_lock").notNull().default(false),
 		// The IDs of sessionMessages included in this scene
 		selectedMessageIds: json("selected_message_ids")
 			.notNull()
@@ -6494,8 +6535,10 @@ export const pipelineConfigValues = pgTable(
  * to four different node definitions.
  *
  * The pool is `(node_definition_id, slot)`. Selection refuses across it, and
- * `created_for_spec_id` sorts the picker without ever refusing — the same split
- * `pipeline_context_templates` makes, for the same reason.
+ * `created_for_spec_id` sorts the picker AND narrows what a call offers
+ * (another pipeline's prompt is not offered unless in force or the call's
+ * default; `promptsOffered`), and the panel's and the form's writes refuse a
+ * prompt the call does not offer.
  *
  * ## Why `fields` is JSON
  *
@@ -6525,8 +6568,8 @@ export const pipelinePrompts = pgTable(
 		 */
 		slot: text("slot").notNull(),
 		/**
-		 * Where it was authored. GROUPING ONLY, never a permission — same
-		 * column, same rule, as `pipeline_context_templates`. `set null` rather
+		 * Where it was authored. Sorts the picker and narrows what a call offers
+		 * (`promptsOffered`); a write of one the call does not offer is refused. `set null` rather
 		 * than cascade: deleting a pipeline must not delete somebody's prompt.
 		 */
 		createdForSpecId: integer("created_for_spec_id").references(
@@ -8938,6 +8981,16 @@ export const lorebookEntries = pgTable(
 		typeVersion: integer("type_version").notNull(),
 
 		/**
+		 * 🚧 The **entry lock**: a person switched it on; while true no run (a
+		 * pipeline, a routine, the automatic Apply) writes, deletes or archives
+		 * this row; a person's hand edit, Apply and Take back still do. Not the
+		 * slot lock (`config.lock`, one stat for everyone) and not the setting
+		 * lock. The one reader is `entryLockedAgainstRuns`
+		 * (`shared/lorebooks/runLocks.ts`).
+		 */
+		entryLock: boolean("entry_lock").notNull().default(false),
+
+		/**
 		 * The trigger keywords, as an array.
 		 *
 		 * `text[]` and not the legacy delimited string: `splitKeys()` splits on
@@ -10993,7 +11046,7 @@ export const loreImprints = pgTable(
  * when, and who. The UI calls the list **Edit history**. Written only by
  * `recordRedline` (`server/lorebooks/redlines.ts`), on the transaction of the
  * write it records; a subject keeps its newest 50, never evicting the newest
- * a person wrote. Three subjects, exactly one key set (CHECK):
+ * a person wrote. Four subjects, exactly one key set (CHECK):
  *
  * - an **entry** (`entry_id`, cascade): its name, content, keys or typed
  *   fields, or a dated change's fields (`amendment_id`, cascade; NULL is the
@@ -11002,6 +11055,8 @@ export const loreImprints = pgTable(
  *   The card owner's; the card owner clears it.
  * - a **cast version** (`character_version_id`, cascade): its profile fields.
  *   The lorebook's; the lorebook's owner clears it.
+ * - a **scene** (`scene_id`, cascade): its cast — the participant and
+ *   mentioned lists, by member id. The lorebook's; its owner clears it.
  *
  * ⚠ The `lore_` prefix is provisional: a card version's rows are not lore.
  * Never keyed by a lorebook: Apply and Take back move an entry between
@@ -11031,6 +11086,8 @@ export const loreRedlines = pgTable(
 			() => characterVersions.id,
 			{ onDelete: "cascade" }
 		),
+		/** The scene whose cast was edited; NULL when the subject is not a scene. */
+		sceneId: integer("scene_id").references(() => scenes.id, { onDelete: "cascade" }),
 		/** The dated change this edit changed; NULL = the entry itself. Only with `entry_id`. */
 		amendmentId: integer("amendment_id").references(() => entryAmendments.id, {
 			onDelete: "cascade"
@@ -11038,7 +11095,7 @@ export const loreRedlines = pgTable(
 		changes: jsonb("changes")
 			.$type<Record<string, { before: { v: unknown } | null; after: { v: unknown } | null }>>()
 			.notNull(),
-		/** `save` · `routine` · `apply` · `revert` · `take-back` · `restore`. */
+		/** `save` · `routine` · `apply` · `revert` · `take-back` · `restore` · `scene-compiler`. */
 		cause: text("cause").notNull(),
 		/** The person who made it — plain, no key. NULL: a run, or an Apply made by itself. */
 		userId: integer("user_id"),
@@ -11060,13 +11117,16 @@ export const loreRedlines = pgTable(
 		index("lore_redlines_character_version_idx")
 			.on(t.characterVersionId, t.id)
 			.where(sql`${t.characterVersionId} IS NOT NULL`),
+		index("lore_redlines_scene_idx")
+			.on(t.sceneId, t.id)
+			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"lore_redlines_subject_check",
-			sql`(${t.entryId} IS NULL) <> (${t.characterVersionId} IS NULL) AND (${t.amendmentId} IS NULL OR ${t.entryId} IS NOT NULL)`
+			sql`num_nonnulls(${t.entryId}, ${t.characterVersionId}, ${t.sceneId}) = 1 AND (${t.amendmentId} IS NULL OR ${t.entryId} IS NOT NULL)`
 		),
 		check(
 			"lore_redlines_cause_check",
-			sql`${t.cause} IN ('save', 'routine', 'apply', 'revert', 'take-back', 'restore')`
+			sql`${t.cause} IN ('save', 'routine', 'apply', 'revert', 'take-back', 'restore', 'scene-compiler')`
 		)
 	]
 )

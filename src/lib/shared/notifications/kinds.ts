@@ -220,6 +220,21 @@ export const UPDATE_AVAILABLE = defineNotificationKind({
 })
 
 /**
+ * 🚧 A **condition**, not news (lane dbg-1, owner 2026-11-15): the diagnostic switch *Turn off step time
+ * limits* is on, raised for every administrator. It clears only when the switch goes off; viewing it only marks it
+ * read. A condition is also a notification here because the owner asked for it by name ("notification/activity,
+ * admin dashboard, and in the session activity/turn order widget").
+ */
+export const STEP_TIME_LIMITS_OFF = defineNotificationKind({
+	id: "core:notification/step-time-limits-off@1",
+	level: "attention",
+	clearsOn: "resolve",
+	title: "Step time limits are off",
+	detail: "A stuck step waits until someone stops it.",
+	cta: "Open Diagnostics"
+})
+
+/**
  * A 0.5.3 database finished upgrading (every admin, once). News: what changed
  * or could not be carried is in the admin History as upgrade notes.
  */
@@ -281,6 +296,8 @@ export const regardingFor = {
 	/** `source` is `koboldcpp` · `ollama` · `onnx`; `key` names the model. */
 	download: (source: string, key: string) => `download:${source}:${key}`,
 	update: () => `app:update`,
+	/** 🚧 The diagnostic switch *Turn off step time limits*. */
+	stepTimeLimitsOff: () => `app:step-time-limits-off`,
 	dataUpgrade: () => `app:data-upgrade`,
 	move: (sessionId: number) => `session:${sessionId}/move`,
 	form: (sessionId: number, messageId: number, blockId: string) =>

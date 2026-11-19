@@ -27,7 +27,11 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { awaitReply } from "$lib/client/utils/awaitReply"
 	import { appletLauncher } from "$lib/client/sessions/appletRows"
-	import type { SessionCreationMode } from "@serene-pub/sdk"
+	import { STORY_CALENDAR_PRESETS, type SessionCreationMode } from "@serene-pub/sdk"
+	import FieldHelp from "$lib/client/components/FieldHelp.svelte"
+	import InlineError from "$lib/client/components/InlineError.svelte"
+	import SettingSwitch from "$lib/client/components/admin/pub/SettingSwitch.svelte"
+	import { displayTimeZone } from "$lib/client/utils/realTime.svelte"
 	import CreationModePicker from "./CreationModePicker.svelte"
 	import {
 		declareInterest,
@@ -49,7 +53,12 @@
 	import NewLorebookDialog from "../lorebookForms/NewLorebookDialog.svelte"
 	import StarterKitPicker from "../lorebookForms/StarterKitPicker.svelte"
 	import SessionLorebookReading from "./SessionLorebookReading.svelte"
-	import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
+	import {
+		dateProblem,
+		formatDate,
+		readStoryCalendar,
+		type StoryClock
+	} from "$lib/shared/lorebooks/storyDate"
 	import {
 		isStarterKit,
 		KIT_SESSION_NOTE,
@@ -221,6 +230,16 @@
 	let surfacedBranchId = $state<number | null>(null)
 	let surfacedClock = $state<StoryClock | null>(null)
 	let creating = $state(false)
+	/**
+	 * 🚧 Where a new session on the chosen lorebook starts (`lorebooks:storyTime`'s
+	 * `start`): shown as one line under the book. `Change` opens the book's line
+	 * and clock control, held here as a draft; `asks` (today does not fit the
+	 * calendar) opens it and makes the date required.
+	 */
+	let startTime = $state.raw<Sockets.Lorebooks.BookStoryTime | null>(null)
+	let startChangeOpen = $state(false)
+	let startBranchId = $state<number | null>(null)
+	let startClock = $state<StoryClock | null>(null)
 	/** 🚧 M2c: the person chose the generic start form for an applet genre ("Use the start form"). */
 	let genericForm = $state(false)
 	/** 🚧 M2c: an applet's request collapses to a one-press confirm until "Change…". */
@@ -419,12 +438,13 @@
 	)
 	/**
 	 * 🚧 M3b: the genre seats its cast from the attached lorebook at create (`shape.castFromLorebook`) — said in
-	 * the confirm only when it will happen: the switch field (absent = always on) is on, and a book is chosen
-	 * (the server seats only from an attached book).
+	 * the confirm only when it will happen: the switch field (absent = always on) is on, and a lorebook or a
+	 * starter lorebook is chosen (the server seats from the attached book, else its starter copy).
 	 */
 	const seatsCastFromBook = $derived.by(() => {
 		const seat = flow.shape?.castFromLorebook
-		if (!seat || flow.fields.lorebookId == null) return false
+		if (!seat || (flow.fields.lorebookId == null && !flow.starterKit))
+			return false
 		if (!seat.field) return true
 		// The server's rule, read off what Start will actually SEND (unanswered
 		// start-form questions are dropped): the sent value, else the declared
@@ -824,6 +844,57 @@
 			surfacedClock = null
 		})
 	})
+	/** The chosen lorebook whose start date is told: dated, and the mode starts on it. */
+	const startDateBook = $derived.by(() => {
+		if (flow.mode !== "new" && flow.mode !== "new-world") return null
+		const id = flow.fields.lorebookId
+		if (id == null) return null
+		const book =
+			lorebookOptions.find((l) => l.id === id) ??
+			sharedSurfacedList.find((l) => l.id === id)
+		if (!book || book.timelineEnabled === false) return null
+		return { id, name: book.name || "Untitled lorebook" }
+	})
+	const startDateId = $derived(startDateBook?.id ?? null)
+	$effect(() => {
+		const id = startDateId
+		untrack(() => {
+			startTime = null
+			startChangeOpen = false
+			startBranchId = null
+			startClock = null
+		})
+		if (id == null) return
+		return requestWithInterest("lorebooks:storyTime", { lorebookId: id }, (msg) => {
+			if (msg.lorebookId !== id) return
+			startTime = msg
+			if (!startChangeOpen && msg.start) startBranchId = msg.start.branchId
+		})
+	})
+	const startCause = $derived(startTime?.start?.cause ?? null)
+	/** The control is the draft's: open on `Change`, always open on `asks`; the own surfaced book's Branch-off shows its own. */
+	const startControlShown = $derived(
+		startDateBook != null &&
+			!(ownSurfacedChosen && surfacedStart === "branch-off") &&
+			(startCause === "asks" || (startChangeOpen && startCause != null))
+	)
+	const startDateWords = $derived.by(() => {
+		const start = startTime?.start
+		if (!start?.date) return null
+		return formatDate(start.date, readStoryCalendar(startTime?.calendar ?? null))
+	})
+	/** `asks`: Start waits for a date that lands on the calendar. */
+	const startDateMissing = $derived.by(() => {
+		if (startDateBook == null || startCause !== "asks") return false
+		const c =
+			ownSurfacedChosen && surfacedStart === "branch-off"
+				? surfacedClock
+				: startClock
+		if (!c) return true
+		return (
+			dateProblem(c, readStoryCalendar(startTime?.calendar ?? null)) !== null
+		)
+	})
 	/** Start in the copy mode on a surfaced book. */
 	function chooseSurfacedBook(id: number) {
 		touch()
@@ -844,6 +915,101 @@
 	const noLorebookChosen = $derived(
 		flow.fields.lorebookId == null && !flow.starterKit
 	)
+	// ── 🚧 Story time for the session's own new notes (nothing chosen) ──
+	/** The switch's draft: starts at the preset's resolved default, starts over with the preset. */
+	let notesTimeline = $state(false)
+	/** The genre mandates a timeline: the server says so on the preset row (`timelineRequired`). */
+	const notesTimelineRequired = $derived(flow.preset?.timelineRequired === true)
+	/** The block is drawn: own new notes in `new` mode, advanced controls or not. */
+	const notesTimelineShown = $derived(flow.mode === "new" && noLorebookChosen)
+	const notesTimeOn = $derived(
+		notesTimelineShown && (notesTimelineRequired || notesTimeline)
+	)
+	const realCalendar = STORY_CALENDAR_PRESETS.find(
+		(p) => p.id === "real-calendar"
+	)!.calendar
+	/** Today in the account's (else the browser's) time zone; sent with Start, so what is on screen is what is stored. */
+	function todayParts() {
+		const parts = (timeZone?: string) =>
+			new Intl.DateTimeFormat("en-US", {
+				...(timeZone ? { timeZone } : {}),
+				year: "numeric",
+				month: "numeric",
+				day: "numeric"
+			}).formatToParts(new Date())
+		let p: Intl.DateTimeFormatPart[]
+		try {
+			p = parts(displayTimeZone())
+		} catch {
+			p = parts()
+		}
+		const n = (t: string) => Number(p.find((x) => x.type === t)?.value)
+		return { year: n("year"), month: n("month"), day: n("day") }
+	}
+	/** Read at mount and again when Start is pressed, so a day that rolled over is the new day. */
+	let notesToday = $state(todayParts())
+	const notesTodayWords = $derived(formatDate(notesToday, realCalendar))
+	let notesChangeOpen = $state(false)
+	let notesYear = $state<number | null>(null)
+	let notesMonth = $state<number | null>(null)
+	let notesDay = $state<number | null>(null)
+	const notesNum = (v: unknown) =>
+		typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null
+	/** The picked day, once the three parts are all there. */
+	const notesClock = $derived<StoryClock | null>(
+		notesChangeOpen &&
+			notesYear !== null &&
+			notesMonth !== null &&
+			notesDay !== null
+			? {
+					year: notesYear,
+					month: notesMonth,
+					day: notesDay,
+					hour: null,
+					minute: null
+				}
+			: null
+	)
+	const notesDateProblem = $derived(
+		notesClock ? dateProblem(notesClock, realCalendar) : null
+	)
+	/** Change is open and the day is missing or does not land: Start waits. */
+	const notesDateMissing = $derived(
+		notesTimelineShown &&
+			notesTimeOn &&
+			notesChangeOpen &&
+			(notesClock === null || notesDateProblem !== null)
+	)
+	/** The date shown and sent: the picked day, else today. */
+	const notesPicked = $derived(
+		notesClock !== null && notesDateProblem === null ? notesClock : null
+	)
+	const notesPickedWords = $derived(
+		notesPicked ? formatDate(notesPicked, realCalendar) : ""
+	)
+	function openNotesChange() {
+		touch()
+		notesYear = notesToday.year
+		notesMonth = notesToday.month
+		notesDay = notesToday.day
+		notesChangeOpen = true
+	}
+	// The switch starts over with the preset.
+	$effect(() => {
+		void flow.preset?.id
+		untrack(() => {
+			notesTimeline = flow.preset?.timelineDefault === true
+		})
+	})
+	// The draft day and Change close when story time is off, a lorebook or kit is chosen, or the mode moves.
+	$effect(() => {
+		if (notesTimeOn) return
+		untrack(() => {
+			notesChangeOpen = false
+			notesYear = notesMonth = notesDay = null
+		})
+	})
+
 	/** On screen once everything above it has an answer, like the Name card. */
 	const showLorebook = $derived(
 		genreAnswered &&
@@ -1195,10 +1361,19 @@
 	let scenarioOpen = $state(false)
 	const showScenario = $derived(scenarioOpen || !!flow.fields.scenario)
 
-	const canStart = $derived(flow.canStart && !creating)
+	const canStart = $derived(
+		flow.canStart && !creating && !startDateMissing && !notesDateMissing
+	)
 	/** Why Start is grey, said under it (less-confusing E1); none while the
 	 *  create is on its way. */
-	const startReason = $derived(creating ? null : flow.startBlocker)
+	const startReason = $derived(
+		creating
+			? null
+			: (flow.startBlocker ??
+					(startDateMissing || notesDateMissing
+						? "Choose the date the story begins on."
+						: null))
+	)
 
 	function reopen(step: Step) {
 		openStep = step
@@ -1370,6 +1545,9 @@
 	$effect(() => {
 		flow.lorebookRules =
 			chosenKit?.rulesId ?? chosenLorebook?.primaryRuleset ?? null
+		flow.lorebookIsProvided = !!(
+			chosenLorebook as { provided?: unknown } | null
+		)?.provided
 	})
 	const rulesNow = $derived(flow.rulesShown)
 	/** 🚧 Where adopted rules come from, in words: the book's or the kit's — only when it brings its own. */
@@ -1602,14 +1780,38 @@
 						}
 					: {})
 			})
+		} else if (startControlShown && startClock) {
+			const c = startClock
+			Object.assign(payload.session, {
+				lorebookBranchId: startBranchId,
+				storyClockYear: c.year,
+				storyClockMonth: c.month ?? null,
+				storyClockDay: c.day ?? null,
+				storyClockHour: c.hour ?? null,
+				storyClockMinute: c.minute ?? null
+			})
 		}
+		// 🚧 The session's own new notes: the switch's answer, never a date with story time off.
+		const notesAsked = notesTimelineShown && !notesTimelineRequired
+		if (notesTimeOn && notesDateProblem === null) {
+			if (!notesClock) notesToday = todayParts()
+			const day = notesClock ?? notesToday
+			Object.assign(payload.session, {
+				storyClockYear: day.year,
+				storyClockMonth: day.month ?? null,
+				storyClockDay: day.day ?? null,
+				storyClockHour: null,
+				storyClockMinute: null
+			})
+		}
+		const notesChoice = notesAsked ? { notesTimeline } : {}
 		const fromApplet =
 			prefill?.fromApplet && flow.genreId === prefill.genreId
 				? { fromApplet: { pluginId: prefill.fromApplet } }
 				: {}
 		const releaseOk = requestWithInterest(
 			"sessions:create",
-			{ ...payload, ...fromApplet },
+			{ ...payload, ...notesChoice, ...fromApplet },
 			handleCreated
 		)
 		releaseCreateInterest = () => {
@@ -2442,6 +2644,148 @@
 				{/if}
 			{/snippet}
 
+			<!-- 🚧 Where the story begins, under the chosen dated lorebook (see `startDateBook`). -->
+			{#snippet startDateLine(bookId: number)}
+				{#if startDateBook?.id === bookId && startCause && startCause !== "undated" && !(ownSurfacedChosen && surfacedStart === "branch-off")}
+					<div class="mt-1 mb-1 ml-9" data-start-date>
+						{#if startCause === "asks"}
+							<p
+								class="text-surface-600-400 mb-1 text-xs"
+								data-testid="start-story-date"
+								data-cause="asks"
+							>
+								Today's date doesn't fit this lorebook's calendar, so choose
+								the date the story begins on.
+							</p>
+						{:else}
+							<p class="text-surface-600-400 text-xs" data-testid="start-story-date" data-cause={startCause}>
+								{#if startCause === "today"}
+									The story begins today, {startDateWords}.
+								{:else}
+									The story begins on {startDateWords}, where {startDateBook.name} last was.
+								{/if}
+								{#if !startChangeOpen}
+									<button
+										type="button"
+										class="anchor ml-1"
+										data-start-date-change
+										onclick={() => {
+											touch()
+											startChangeOpen = true
+										}}
+									>
+										Change
+									</button>
+								{/if}
+							</p>
+						{/if}
+						{#if startControlShown}
+							<SessionLorebookReading
+								lorebookId={bookId}
+								bind:branchId={startBranchId}
+								bind:clock={startClock}
+							/>
+						{/if}
+					</div>
+				{/if}
+			{/snippet}
+
+			<!-- 🚧 Story time for the session's own new notes: drawn last in whichever Lorebook card shows. -->
+			{#snippet notesTimelineChoice()}
+				{#if notesTimelineShown}
+					<div class="mt-4 space-y-1" data-notes-timeline>
+						{#if notesTimelineRequired}
+							<p
+								class="text-surface-600-400 text-xs"
+								data-testid="start-notes-timeline-required"
+							>
+								<!-- 🚧 -->{flow.genre?.name ?? "This genre"} always keeps story time, so this session's notes keep a timeline.
+							</p>
+						{:else}
+							<!-- 🚧 label -->
+							<SettingSwitch
+								name="start-notes-timeline"
+								label="Keep a timeline"
+								checked={notesTimeline}
+								onCheckedChange={(e) => (notesTimeline = e.checked)}
+								describedBy="start-notes-timeline-help"
+							/>
+							<FieldHelp id="start-notes-timeline-help" class="mt-1">
+									<!-- 🚧 -->Dates, history and a story clock in this session's own notes; you can change it later in Book settings.
+								</FieldHelp>
+						{/if}
+						{#if notesTimeOn}
+							<!-- An invalid date states no date: the hint and the reason under Start say it. -->
+							{#if notesDateProblem === null}
+							<p class="text-surface-600-400 text-xs" data-testid="start-notes-date">
+								<!-- 🚧 -->{#if notesPicked}The story begins on {notesPickedWords}.{:else}The story begins today, {notesTodayWords}.{/if}
+								{#if !notesChangeOpen}
+									<button
+										type="button"
+										class="anchor ml-1"
+										data-notes-date-change
+										onclick={openNotesChange}
+									>
+										Change
+									</button>
+								{/if}
+							</p>
+							{/if}
+							{#if notesChangeOpen}
+								<fieldset class="flex flex-col gap-1.5" data-notes-date>
+									<legend class="text-surface-600-400 mb-1.5 text-xs"><!-- 🚧 -->The day the story begins</legend>
+									<div class="grid grid-cols-3 gap-2">
+										<label class="flex flex-col gap-1 text-xs">
+											<span class="text-surface-600-400">Year</span>
+											<input
+												class="input rounded-base"
+												type="number"
+												step="1"
+												value={notesYear}
+												oninput={(e) => (notesYear = notesNum(e.currentTarget.valueAsNumber))}
+												aria-describedby="start-notes-date-hint"
+												aria-invalid={notesDateProblem !== null}
+											/>
+										</label>
+										<label class="flex flex-col gap-1 text-xs">
+											<span class="text-surface-600-400">Month</span>
+											<input
+												class="input rounded-base"
+												type="number"
+												min="1"
+												step="1"
+												value={notesMonth}
+												oninput={(e) => (notesMonth = notesNum(e.currentTarget.valueAsNumber))}
+												aria-describedby="start-notes-date-hint"
+												aria-invalid={notesDateProblem !== null}
+											/>
+										</label>
+										<label class="flex flex-col gap-1 text-xs">
+											<span class="text-surface-600-400">Day</span>
+											<input
+												class="input rounded-base"
+												type="number"
+												min="1"
+												step="1"
+												value={notesDay}
+												oninput={(e) => (notesDay = notesNum(e.currentTarget.valueAsNumber))}
+												aria-describedby="start-notes-date-hint"
+												aria-invalid={notesDateProblem !== null}
+											/>
+										</label>
+									</div>
+									<div id="start-notes-date-hint" aria-live="polite" data-notes-date-hint>
+										{#if notesDateProblem}
+											<InlineError>{notesDateProblem}</InlineError>
+										{/if}
+									</div>
+								</fieldset>
+							{/if}
+						{/if}
+					</div>
+				{/if}
+			{/snippet}
+
 			{#snippet surfacedStartChoice(bookId: number)}
 				{#if ownSurfacedChosen?.id === bookId}
 					<div class="mt-1 mb-1 ml-9" data-surfaced-start>
@@ -2571,6 +2915,7 @@
 												{/if}
 											</button>
 											{@render timelineOffer(l)}
+											{@render startDateLine(l.id)}
 										</li>
 									{/each}
 								</ul>
@@ -2818,6 +3163,7 @@
 						{/if}
 						{@render timelineOffer(l)}
 						{@render surfacedStartChoice(l.id)}
+						{@render startDateLine(l.id)}
 					</li>
 				{/snippet}
 
@@ -2915,6 +3261,14 @@
 										{@render bookPickRow(l)}
 									{/each}
 								</ul>
+								{#if g.rows.some((r) => r.id === flow.fields.lorebookId)}
+									<p
+										class="text-surface-600-400 mt-2 text-xs"
+										data-start-kit-note
+									>
+										{KIT_SESSION_NOTE}
+									</p>
+								{/if}
 							</div>
 						{/each}
 					{/if}
@@ -2983,6 +3337,7 @@
 							{/each}
 						</ul>
 					{/if}
+					{@render notesTimelineChoice()}
 				</section>
 
 				{#if advanced && (presetRigourUnplayed || howStrictShown)}
@@ -3085,6 +3440,7 @@
 					</button>
 					{@render timelineOffer(l)}
 					{@render surfacedStartChoice(l.id)}
+					{@render startDateLine(l.id)}
 				</li>
 			{/snippet}
 
@@ -3188,6 +3544,14 @@
 										{@render plainBookRow(l)}
 									{/each}
 								</ul>
+								{#if g.rows.some((r) => r.id === flow.fields.lorebookId)}
+									<p
+										class="text-surface-600-400 mt-2 text-xs"
+										data-start-kit-note
+									>
+										{KIT_SESSION_NOTE}
+									</p>
+								{/if}
 							</div>
 						{/each}
 					{/if}
@@ -3220,6 +3584,7 @@
 							</p>
 						{/if}
 					{/if}
+					{@render notesTimelineChoice()}
 				</section>
 			{/if}
 

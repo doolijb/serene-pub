@@ -32,6 +32,26 @@ describe("conversationSceneOf", () => {
 		expect(caused.openedBecause).toBe("the day changed")
 		expect(caused.castCause).toMatch(/^Story keeps/)
 	})
+	test("W1: with no timeline a scene carries no story clock; with one it does", () => {
+		const row = {
+			...base,
+			channel: "main",
+			openedAtMessageId: 12,
+			closedAtMessageId: 13,
+			openedStoryClockYear: 1,
+			openedStoryClockMonth: 3,
+			openedStoryClockDay: 12,
+			closedStoryClockYear: 1
+		} as LiveSceneRow
+		const off = conversationSceneOf(row, undefined, { storyDates: false })
+		expect(off.openedAt).toBeNull()
+		expect(off.closedAt).toBeNull()
+		expect(off.historyEntry).toBeNull()
+		expect(off.historyEntryId).toBe(30)
+		expect(conversationSceneOf(row, undefined, { storyDates: true }).historyEntry?.year).toBe(1)
+		expect(conversationSceneOf(row, undefined, { storyDates: true }).openedAt?.year).toBe(1)
+		expect(conversationSceneOf(row).closedAt?.year).toBe(1)
+	})
 	test("a live scene carries its lane, its boundaries, both clocks and its summary state", () => {
 		expect(
 			conversationSceneOf({

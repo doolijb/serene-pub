@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest"
 import { flushSync } from "svelte"
 import { projectMessageRow } from "@serene-pub/sdk"
 import { createSessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
-import { createRemoteMessages } from "./remoteMessages.svelte"
+import { createRemoteMessages, withoutStoryStamp } from "./remoteMessages.svelte"
 
 const projected = vi.hoisted(() => ({ calls: 0 }))
 vi.mock("@serene-pub/sdk", async (orig) => {
@@ -121,5 +121,39 @@ describe("the log a remote widget is handed", () => {
 		expect(reuse([row])).toEqual([{ id: 1, content: "a" }])
 		row.content = "ab"
 		expect(reuse([row])).toEqual([{ id: 1, content: "ab" }])
+	})
+
+	it("with no timeline the story-clock stamp is withheld; with one it reaches the widget", () => {
+		const stamped = rowAt(1, {
+			storyClockYear: 412,
+			storyClockMonth: 3,
+			storyClockDay: 5,
+			storyClockHour: 9,
+			storyClockMinute: 30
+		})
+		const keys = ["storyClockYear", "storyClockMonth", "storyClockDay", "storyClockHour", "storyClockMinute"]
+		const off = createRemoteMessages({ storyDates: false })([stamped])[0] as Record<string, unknown>
+		for (const k of keys) expect(off[k] ?? null).toBeNull()
+		expect(off.content).toBe("line 1")
+		// The stored row is untouched: switching the timeline on shows the stamp again.
+		expect(stamped.storyClockYear).toBe(412)
+		const on = createRemoteMessages({ storyDates: true })([stamped])[0] as Record<string, unknown>
+		expect([on.storyClockYear, on.storyClockMonth, on.storyClockDay, on.storyClockHour, on.storyClockMinute]).toEqual([412, 3, 5, 9, 30])
+		const dflt = createRemoteMessages()([stamped])[0] as Record<string, unknown>
+		expect(dflt.storyClockYear).toBe(412)
+	})
+
+	it("the plugin session-view frame's rows lose the same stamp, and nothing else", () => {
+		const row = { id: 1, content: "x", createdAt: "2026-11-17", storyClockYear: 412, storyClockHour: 9 }
+		expect(withoutStoryStamp(row)).toEqual({
+			id: 1,
+			content: "x",
+			createdAt: "2026-11-17",
+			storyClockYear: null,
+			storyClockHour: null
+		})
+		const bare = { id: 2, content: "y" }
+		expect(withoutStoryStamp(bare)).toBe(bare)
+		expect(row.storyClockYear).toBe(412)
 	})
 })

@@ -253,11 +253,12 @@ describe("a binding that stopped resolving", () => {
 			.from(schema.sessionPresetNotices)
 			.where(eq(schema.sessionPresetNotices.presetId, presetId))) as any[]
 		// 🚧 R56: beside the stale slot, each action this Story preset offers
-		// that needs a model nothing here serves (the two picture actions on a
-		// pub with no model that draws) is noticed too, keyed by registration.
+		// that needs a model nothing here serves (the picture actions on a pub
+		// with no model that draws, the speech actions on one with no model that
+		// speaks) is noticed too, keyed by registration.
 		const stale = all.filter((n) => n.event.startsWith("core:event/"))
 		for (const n of all.filter((x) => !x.event.startsWith("core:event/")))
-			expect(n.reason).toMatch(/^Unavailable: needs a model that can .*draw pictures/)
+			expect(n.reason).toMatch(/^Unavailable: needs a model that can .*(draw pictures|speak)/)
 		expect(stale.length).toBe(1)
 		expect(stale[0]).toMatchObject({
 			event: "core:event/message-respond@1",

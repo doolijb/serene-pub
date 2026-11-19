@@ -158,10 +158,10 @@ describe("the questions the engine asks a type", () => {
 
 	it("carries each field's declared default, which is what an absent key reads as", () => {
 		expect(fieldDefault(WORLD_LORE_TYPE_ID, "priority")).toBe(1)
-		expect(fieldDefault(HISTORY_TYPE_ID, "year")).toBe(1)
 		expect(fieldDefault(HISTORY_TYPE_ID, "graphed")).toBe(false)
 		// Declared with no default reads the same as absent: `null`.
 		expect(fieldDefault(WORLD_LORE_TYPE_ID, "category")).toBeNull()
+		expect(fieldDefault(HISTORY_TYPE_ID, "year")).toBeNull()
 		expect(fieldDefault(HISTORY_TYPE_ID, "month")).toBeNull()
 	})
 

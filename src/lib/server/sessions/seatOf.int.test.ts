@@ -22,11 +22,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -375,6 +375,80 @@ describe("overlapping id ranges", () => {
 			kind: "player",
 			seatId: seatN.id,
 			cardId: null
+		})
+	})
+})
+
+describe("opts.kind searches one table", () => {
+	test("kind player never returns a character seat, departed seats included", async () => {
+		const u = await user()
+		const c = await card(u.id, "KindP")
+		const s = await session(u.id)
+		await characterSeat(s.id, { characterId: c.id })
+		const dead = await playerSeat(s.id, { personaId: c.id, removedAt: gone })
+		expect(
+			await seatOf(asDb(), s.id, `character:${c.id}`, { kind: "player" })
+		).toMatchObject({ kind: "player", seatId: dead.id, departed: true })
+		expect(await seatOf(asDb(), s.id, `character:${c.id}`)).toMatchObject({
+			kind: "character"
+		})
+	})
+
+	test("kind character never returns a player seat", async () => {
+		const u = await user()
+		const c = await card(u.id, "KindC")
+		const s = await session(u.id)
+		await playerSeat(s.id, { personaId: c.id })
+		expect(
+			await seatOf(asDb(), s.id, `character:${c.id}`, { kind: "character" })
+		).toBeNull()
+		const gonec = await characterSeat(s.id, {
+			characterId: c.id,
+			removedAt: gone
+		})
+		expect(
+			await seatOf(asDb(), s.id, `character:${c.id}`, { kind: "character" })
+		).toMatchObject({ kind: "character", seatId: gonec.id, departed: true })
+	})
+
+	test("within a kind a live seat wins over a departed one", async () => {
+		const u = await user()
+		const b = await book(u.id)
+		const m = await member(b.id, null)
+		const s = await session(u.id)
+		await characterSeat(s.id, { castMemberId: m.id, removedAt: gone, position: 0 })
+		const live = await characterSeat(s.id, { castMemberId: m.id, position: 5 })
+		expect(
+			await seatOf(asDb(), s.id, `seated-member:${m.id}`, { kind: "character" })
+		).toMatchObject({ seatId: live.id, departed: false })
+	})
+
+	test("a player-seat ref with kind character is null; with kind player it is found", async () => {
+		const u = await user()
+		const s = await session(u.id)
+		const p = await playerSeat(s.id, { removedAt: gone })
+		expect(
+			await seatOf(asDb(), s.id, `player-seat:${p.id}`, { kind: "character" })
+		).toBeNull()
+		expect(
+			await seatOf(asDb(), s.id, `player-seat:${p.id}`, { kind: "player" })
+		).toMatchObject({ kind: "player", seatId: p.id })
+		expect(await seatOf(asDb(), s.id, `player-seat:${p.id}`)).toMatchObject({
+			seatId: p.id
+		})
+	})
+
+	test("seated-member with kind character skips a player seat of the member", async () => {
+		const u = await user()
+		const b = await book(u.id)
+		const m = await member(b.id, null)
+		const s = await session(u.id)
+		await playerSeat(s.id, { castMemberId: m.id })
+		expect(
+			await seatOf(asDb(), s.id, `seated-member:${m.id}`, { kind: "character" })
+		).toBeNull()
+		expect(await seatOf(asDb(), s.id, `seated-member:${m.id}`)).toMatchObject({
+			kind: "player"
 		})
 	})
 })

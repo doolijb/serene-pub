@@ -72,9 +72,9 @@ const RANK_HYBRID = "core:task/rank-hybrid"
  * assertion: a green suite is evidence only if the thing under test can still
  * move it.
  */
-const BUDGET = 7296
+const BUDGET = 6809
 /** worldLore's share of it — 0.1667 — which the big entry has to exceed. */
-const WORLD_LORE_BAND = 1216
+const WORLD_LORE_BAND = 1135
 
 /**
  * Two entries, sized so the two precedences disagree about which to keep.
@@ -86,7 +86,7 @@ const WORLD_LORE_BAND = 1216
  * what stops the spillover sweep quietly rescuing both and erasing the
  * difference.
  *
- * Share-first therefore keeps the *lower*-scoring entry and spends 1000 of 7296
+ * Share-first therefore keeps the *lower*-scoring entry and spends 1000 of 6809
  * tokens; score-led keeps the higher-scoring one and spends 6500. That is
  * design §7's argument, on the shipped document rather than in a unit fixture.
  */
@@ -144,6 +144,8 @@ beforeAll(async () => {
 			{
 				lorebookId: lorebook.id,
 				name: "The muster at Emberfall",
+				// A history entry is dated: the type declares no default year.
+				year: 1,
 				keys: "ashguard",
 				content:
 					"ashguard " + "y".repeat(SMALL_HISTORY_TOKENS * 4 - 10)
@@ -428,7 +430,7 @@ describe("a stored switch reaches the selection", () => {
 			expect(on.budget).toBe(BUDGET)
 			// Score-led: the band is a ceiling rather than a pot, the best
 			// candidate holds the tokens it needs while it waits, and the
-			// sweep hands them over. 6500 of 7296 tokens carry what scored
+			// sweep hands them over. 6500 of 6809 tokens carry what scored
 			// instead of 1000 carrying what did not.
 			expect(on.kept).toEqual(["worldLore"])
 			expect(on.tokens).toBe(BIG_WORLD_LORE_TOKENS)

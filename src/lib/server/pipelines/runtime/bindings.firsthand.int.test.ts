@@ -213,6 +213,9 @@ function ctxFor(w: World) {
 	return { log, ctx: { read: (t: string, q?: unknown) => (host as any).read(t, q), log } as never }
 }
 
+/** These two reads also take `speakerInCast` (on by default; `bindings.speakerInCast.int.test.ts`): off here, so this file tests firsthand alone. */
+const NOT_BY_CAST = { speakerInCast: false }
+
 const bindings = async () => (await import("$lib/server/pipelines/runtime/bindings")).coreBindings()
 
 async function history(w: World, extra: Record<string, unknown> = {}, params: Record<string, unknown> = {}) {
@@ -228,7 +231,7 @@ async function history(w: World, extra: Record<string, unknown> = {}, params: Re
 async function earlier(w: World, extra: Record<string, unknown> = {}) {
 	const { ctx, log } = ctxFor(w)
 	const r = (await (await bindings())["core:query/earlier-scenes@1"]!(
-		{ scope: { sessionId: w.sessionId }, budget: { total: 1000 }, params: {}, ...extra } as never,
+		{ scope: { sessionId: w.sessionId }, budget: { total: 1000 }, params: NOT_BY_CAST, ...extra } as never,
 		ctx
 	)) as any
 	expect(r.kind).toBe("ok")
@@ -384,7 +387,7 @@ describe("core:query/earlier-scenes@1 with firsthandFor", () => {
 async function historyEntries(w: World, extra: Record<string, unknown> = {}) {
 	const { ctx, log } = ctxFor(w)
 	const r = (await (await bindings())["core:query/history-entries@1"]!(
-		{ scope: { sessionId: w.sessionId }, params: {}, ...extra } as never,
+		{ scope: { sessionId: w.sessionId }, params: NOT_BY_CAST, ...extra } as never,
 		ctx
 	)) as any
 	expect(r.kind).toBe("ok")
@@ -437,13 +440,15 @@ async function entriesOf(w: World) {
 }
 
 describe("core:query/history-entries@1 with firsthandFor", () => {
-	test("not invoked: byte-identical output, and no receipt line", async () => {
+	test("not invoked: byte-identical output, and no firsthand receipt line", async () => {
 		const w = await world()
 		await entriesOf(w)
 		const a = await historyEntries(w)
 		const b = await historyEntries(w)
 		expect(JSON.stringify(a.r)).toBe(JSON.stringify(b.r))
-		expect(a.log).not.toHaveBeenCalled()
+		// No firsthand receipt; only the lore read's own knowledge note (this
+		// run speaks as nobody, so it reads everything).
+		expect(a.log.mock.calls).toEqual([["info", "Reads everything: not one cast member's turn"]])
 	})
 
 	test("left out: a missed scene, and a mixed entry; kept: attended, and none of this session's", async () => {
@@ -462,7 +467,9 @@ describe("core:query/history-entries@1 with firsthandFor", () => {
 		expect(r.value.main).toEqual(plain.value.main)
 		expect(r.value.hits).toEqual(plain.value.hits)
 		expect(r.value.skipped).toEqual(plain.value.skipped)
+		// The lore read's knowledge note first, then the firsthand receipt.
 		expect(r.log.mock.calls).toEqual([
+			["info", "Reads everything: not one cast member's turn"],
 			["info", "2 history entries left out: Verity was not there for all of their scenes"]
 		])
 	})
@@ -472,6 +479,7 @@ describe("core:query/history-entries@1 with firsthandFor", () => {
 		await entriesOf(w)
 		const r = await historyEntries(w, { firsthandFor: w.cards.Bram!.id })
 		expect(r.log.mock.calls).toEqual([
+			["info", "Reads everything: not one cast member's turn"],
 			["info", "1 history entry left out: Bram was not there for all of its scenes"]
 		])
 	})
@@ -483,7 +491,12 @@ describe("core:query/history-entries@1 with firsthandFor", () => {
 		const r = await historyEntries(w, { firsthandFor: null })
 		expect(r.exclusions).toEqual(plain.exclusions)
 		expect(JSON.stringify(r.r)).toBe(JSON.stringify(plain.r))
-		expect(r.log.mock.calls).toEqual([["info", "Reads everything: not one cast member's turn"]])
+		// The lore read's knowledge note, then the firsthand receipt: the
+		// same sentence from two readers.
+		expect(r.log.mock.calls).toEqual([
+			["info", "Reads everything: not one cast member's turn"],
+			["info", "Reads everything: not one cast member's turn"]
+		])
 	})
 
 	test("eligibility blocks a vector-search copy of a left-out entry", async () => {

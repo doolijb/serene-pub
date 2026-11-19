@@ -217,6 +217,26 @@ export function seatOfMessage<C extends PayloadSeat, P extends PayloadSeat>(
 	)
 }
 
+/** The live seat holding a departed seat's cast member, else its card. */
+function liveSeatOfSamePerson<C extends PayloadSeat, P extends PayloadSeat>(
+	session: SeatsPayload<C, P> | null | undefined,
+	gone: SeatFound<C | P>
+): SeatFound<C | P> | null {
+	const live = seatsInOrder(session).filter((f) => !f.seat.removedAt)
+	const member = gone.seat.castMemberId
+	const card =
+		gone.form === "player" ? gone.seat.personaId : gone.seat.characterId
+	const cardOf = (f: SeatFound) =>
+		f.form === "player" ? f.seat.personaId : f.seat.characterId
+	return (
+		(member != null
+			? live.find((f) => f.seat.castMemberId === member)
+			: undefined) ??
+		(card != null ? live.find((f) => cardOf(f) === card) : undefined) ??
+		null
+	)
+}
+
 /**
  * 🚧 The ref a line's speaker carries: the ref of the seat `seatOfMessage`
  * finds (`seatRefOf`), for every line — a card-less player seat's line
@@ -230,6 +250,11 @@ export function messageRefOf<C extends PayloadSeat, P extends PayloadSeat>(
 ): string | null {
 	const found = seatOfMessage(session, msg)
 	const filled = found ? seatRefOf(found.seat, found.form) : null
+	// A line spoken from a seat that has since left names its person by the
+	// seat that person holds now, so one person is one ref in every list
+	// built from the lines; the line's own name and face stay its own.
+	const current = found?.seat.removedAt ? liveSeatOfSamePerson(session, found) : null
+	if (current) return seatRefOf(current.seat, current.form) ?? filled
 	if (filled) return filled
 	return msg.characterId
 		? `character:${msg.characterId}`

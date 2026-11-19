@@ -49,6 +49,8 @@ export interface TemplateDiagnosticsOptions {
 	 * passes the laid-out scope (`laidOutScope`) with it, as the save does.
 	 */
 	variableLayoutOffers?: TemplateCheckOptions["variableLayoutOffers"]
+	/** The source is a variable layout: only then are shape findings reported. */
+	variableLayout?: boolean
 }
 
 /** 1-based line/column → offset. */
@@ -146,7 +148,8 @@ export function templateDiagnostics(
 	const offers = options.variableLayoutOffers
 	const report = checkTemplateSourceReport(engine, source, scope, {
 		...templateCheckWith(options.untyped),
-		...(offers ? { variableLayoutOffers: offers } : {})
+		...(offers ? { variableLayoutOffers: offers } : {}),
+		...(options.variableLayout ? { variableLayout: true } : {})
 	})
 	if (!report.checked) return { checked: false, diagnostics: [] }
 	const diagnostics = report.findings.map((f): TemplateDiagnostic => {

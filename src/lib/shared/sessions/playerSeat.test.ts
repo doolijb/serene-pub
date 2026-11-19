@@ -15,6 +15,20 @@ describe("a player seat as a person's voice", () => {
 		expect(isOwnPlayerSeat(blank, 2)).toBe(false)
 		expect(isOwnPlayerSeat(gone, 2)).toBe(false)
 	})
+	test("the person of a carded seat is its user_id: the owner's card held by a guest is the guest's", () => {
+		const ownersCardForGuest = { id: 5, personaId: 9, persona: { userId: 1, name: "Ann" }, userId: 2 }
+		expect(isOwnPlayerSeat(ownersCardForGuest, 2)).toBe(true)
+		expect(isOwnPlayerSeat(ownersCardForGuest, 1)).toBe(false)
+	})
+	test("a carded row from before user_id reads its card's owner", () => {
+		const legacy = { id: 6, personaId: 9, persona: { userId: 1, name: "Ann" }, userId: null }
+		expect(isOwnPlayerSeat(legacy, 1)).toBe(true)
+		expect(isOwnPlayerSeat(legacy, 2)).toBe(false)
+	})
+	test("a card-less seat is its user_id's, as before", () => {
+		expect(isOwnPlayerSeat({ ...named, userId: null }, 2)).toBe(false)
+		expect(isOwnPlayerSeat(named, 2)).toBe(true)
+	})
 	test("anyone's live voice; their card-less seats in order", () => {
 		expect([card, named, blank, gone].map(isLivePlayerSeat)).toEqual([true, true, false, false])
 		expect(ownCardlessPlayerSeats([card, blank, gone, named], 2).map((s) => s.id)).toEqual([2])

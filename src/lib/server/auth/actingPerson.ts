@@ -7,10 +7,13 @@
  * (`personMay`). It mirrors what the app already lets that person do by
  * clicking — it delegates to the existing helpers (`checkSessionAccess`,
  * `canViewCharacter`, `lorebookAccessFor`, `findOwnedBook`), each taking the
- * `db` it is given. `reply-run` is the one thing that is not a stored row: a
- * waiting reply, answered by session access plus the run registry. It is no
- * second rights table: handlers that decide the same question call it
- * (M2d, ★B).
+ * `db` it is given. `run` is the one thing that is not a stored row: a run in
+ * flight, answered by session access plus the run registry. Who may stop a
+ * run is decided here and nowhere else: its starter and an administrator,
+ * always; a run speaking one line (line-bound), no one else; any member of the
+ * session a reply, action or routine run; the session's owner any other run.
+ * It is no second rights table: handlers that decide the same question call
+ * it (M2d, ★B).
  *
  * Every function takes `db` — the module-level handle bypasses `vi.mock`, and
  * inside a transaction only `tx` may be used.
@@ -19,7 +22,7 @@ import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { canViewCharacter, checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { findOwnedBook, lorebookAccessFor } from "$lib/server/utils/ownedBook"
-import { runKindOf, runLineBoundOf, runSessionOf } from "$lib/server/pipelines/runtime/runRegistry"
+import { active as activeRuns } from "$lib/server/pipelines/runtime/runRegistry"
 
 /** 🚧 (M2b) What caused the work: a press, a send, a view, a routine, an install. */
 export type ActingVia = "press" | "send" | "view" | "routine" | "install"
@@ -81,7 +84,7 @@ export type PersonThing =
 	| { kind: "session-annex"; sessionId: number }
 	| { kind: "lorebook-annex"; lorebookId: number }
 	| { kind: "user-annex"; userId: number }
-	| { kind: "reply-run"; sessionId: number; runId: string }
+	| { kind: "run"; runId: string }
 export type PersonOp = "read" | "write" | "delete"
 /** `reason`: one plain sentence a person may read. */
 export type PersonAnswer = { ok: true } | { ok: false; reason: string }
@@ -94,10 +97,16 @@ const NOT_FOUND = {
 	lorebook: "Lorebook not found."
 }
 
+/** Does any member of the session (not only its owner) get to stop this run? A reply, action or routine run that is not line-bound. */
+export function membersMayStopRun(run: { kind: string; lineBound?: boolean }): boolean {
+	return run.lineBound !== true && ["reply", "action", "routine"].includes(run.kind)
+}
+
 /**
  * 🚧 (M2b) May this person do `op` to `thing`? Never more than a click could.
  * An admin is no super-user here except where the existing helper says so
- * (a lorebook READ, as `lorebookAccessFor`).
+ * (a lorebook READ, as `lorebookAccessFor`) and for stopping a run, which an
+ * admin may always do.
  */
 export async function personMay(
 	db: Db,
@@ -143,19 +152,16 @@ export async function personMay(
 				.limit(1)
 			return b && b.userId === uid ? OK : no(NOT_FOUND.lorebook)
 		}
-		case "reply-run": {
-			// A waiting reply is the room's: any session member may stop it
-			// (op "write"); `delete` stays the owner's, as a session-annex.
-			const a = await checkSessionAccess(thing.sessionId, uid, db)
+		case "run": {
+			// Stopping is the only write a run takes: `write` and `delete` ask it.
+			const run = activeRuns().find((h) => h.runId === thing.runId)
+			if (person.isAdmin || run?.userId === uid) return OK
+			if (!run || run.sessionId === undefined) return no("Not your run.")
+			const a = await checkSessionAccess(run.sessionId, uid, db)
 			if (!a.hasAccess) return no(NOT_FOUND.session)
-			if (
-				runSessionOf(thing.runId) !== thing.sessionId ||
-				runKindOf(thing.runId) !== "reply" ||
-				runLineBoundOf(thing.runId)
-			)
-				return no("Not your run.")
-			if (op !== "delete") return OK
-			return a.isOwner ? OK : no("Only the session's owner may do that.")
+			if (op === "read") return OK
+			if (run.lineBound === true) return no("Not your run.")
+			return membersMayStopRun(run) || a.isOwner ? OK : no("Not your run.")
 		}
 		case "user-annex":
 			return thing.userId === uid ? OK : no("That belongs to someone else.")

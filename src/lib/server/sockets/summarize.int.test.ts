@@ -328,3 +328,59 @@ describe("sessions:summarize — character lore binds its character only when sa
 		).toHaveLength(1)
 	})
 })
+
+describe("sessions:summarize — a failed run's reason is the administrator's", () => {
+	const REASON =
+		"KoboldCPP API error at http://10.0.0.5:5001/api/v1/generate: model 'mistral-7b.Q4_K_M.gguf' not loaded"
+	const NODE = "drafting.item.draft"
+	const PLAIN = "The summary could not be written. An administrator can see the details."
+
+	// A guest is refused before any run (summarize needs the owner), so the
+	// only readers of this failure are an owner who is or is not an administrator.
+	async function failAs(username: string, isAdmin: boolean) {
+		const { sessionsSummarizeHandler } = await import("./summarize")
+		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const user = await makeUser(username)
+		const { session, msg1, msg2 } = await makeSceneSession(user.id)
+		runSpecMock.mockReset().mockResolvedValue({
+			outcome: "err",
+			haltNodeKey: NODE,
+			haltReason: REASON,
+			nodes: []
+		})
+		const emitted: Array<[string, any]> = []
+		await sessionsSummarizeHandler.handler(
+			{ user: { id: user.id, isAdmin } } as any,
+			{
+				sessionId: session.id,
+				messageIds: [msg1.id, msg2.id],
+				loreType: "world"
+			} as any,
+			(event, data) => emitted.push([event, data])
+		)
+		const errors = emitted.filter(([e]) => e === "sessions:summarize:error")
+		expect(errors).toHaveLength(1)
+		const activity = activityStore
+			.getFor(user.id, true)
+			.find((a) => a.kind === "session_summarize" && a.sessionId === session.id) as any
+		const out = { error: errors[0][1].error as string, card: activity.errorMessage as string }
+		activityStore.remove(activity.id, "dismissed")
+		return out
+	}
+
+	test("a non-administrator reads plain words on the error and on the card", async () => {
+		const { error, card } = await failAs("summarize-halt-plain-user", false)
+		expect(error).toBe(PLAIN)
+		expect(card).toBe(PLAIN)
+		for (const leak of ["http://", ".gguf", NODE]) {
+			expect(error).not.toContain(leak)
+			expect(card).not.toContain(leak)
+		}
+	}, 60_000)
+
+	test("an administrator reads the whole reason and the node", async () => {
+		const { error, card } = await failAs("summarize-halt-admin-user", true)
+		expect(error).toBe(`${REASON} (at '${NODE}')`)
+		expect(card).toBe(`${REASON} (at '${NODE}')`)
+	}, 60_000)
+})

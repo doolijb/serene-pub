@@ -18,6 +18,6 @@ export function leaveDestination(
 ): LeaveDestination {
 	if (from === "apps" && appsRegistered) return "apps"
 	if (from === "home") return "home"
-	// A cold load (`page.state` is `{}`), junk, or Apps no longer registered.
+	// A cold load (`page.state` is `{}`), junk, or Apps not registered.
 	return "sessions"
 }

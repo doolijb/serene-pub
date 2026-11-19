@@ -138,6 +138,19 @@ const list = async (userId: number, entryId: number) => {
 	)
 }
 
+/** The refusal sentence of `entries:redlines`, with the whole reply and every emit checked free of the entry's text. */
+const listRefused = async (userId: number, entryId: number): Promise<string> => {
+	const { entryRedlinesHandler } = await import("./redlines")
+	const r = recorder()
+	try {
+		const res = await entryRedlinesHandler.handler(socketOf(userId), { entryId }, r.emit)
+		throw new Error(`not refused: ${JSON.stringify(res)}`)
+	} catch (e) {
+		expect(JSON.stringify(r.sent)).not.toContain("Rewritten")
+		return (e as Error).message
+	}
+}
+
 const restore = async (userId: number, redlineId: number) => {
 	const { entryRestoreRedlineHandler } = await import("./redlines")
 	const r = recorder()
@@ -247,11 +260,11 @@ describe("entries:redlines", () => {
 		})
 	})
 
-	test("names the session to a viewer who may open it, hides it from one who may not, and survives a delete", async () => {
+	test("names the session to the owner who may open it, hides one they may not, survives a delete; a guest of the notes is refused", async () => {
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const w = await world()
 		const member = await createTestUser(testDb, `redline-member-${++n}`)
-		// The book is the session's own notes, so its members may open it.
+		// The book is the session's own notes: its owner opens it, a guest does not.
 		await testDb
 			.update(schema.lorebooks)
 			.set({ sessionId: w.session.id })
@@ -278,20 +291,30 @@ describe("entries:redlines", () => {
 			"Remember things in Elsewhere",
 			`Remember things in Session ${w.tag}`
 		])
-		const theirs = await list(member.id, w.entry.id)
-		expect(theirs).toMatchObject({ canRestore: false, canClear: false })
-		expect(theirs.redlines.map((r) => r.who)).toEqual([
-			`By itself, from Session ${w.tag}`,
-			"Remember things in a session",
-			`Remember things in Session ${w.tag}`
-		])
-		expect(JSON.stringify(theirs)).not.toContain("runId")
+		// A guest of the session has no access to its notes (G2): refused, nothing of them in the answer.
+		const guestAsk = await listRefused(member.id, w.entry.id)
+		expect(guestAsk).toBe("Entry not found or access denied.")
+		// The owner is shown a session they cannot open only as "a session", never by name or run id.
+		const [hidden] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: member.id,
+				isGroup: false,
+				name: "Hidden table",
+				lorebookId: w.book.id
+			})
+			.returning()
+		await routineRewrite(w, "Rewritten hidden.", hidden!.id)
+		const withHidden = await list(w.user.id, w.entry.id)
+		expect(withHidden.redlines.map((r) => r.who)).toContain("Remember things in a session")
+		expect(JSON.stringify(withHidden)).not.toContain("Hidden table")
+		expect(JSON.stringify(withHidden)).not.toContain("runId")
 
 		await testDb
 			.delete(schema.sessions)
 			.where(eq(schema.sessions.id, elsewhere!.id))
 		const after = await list(w.user.id, w.entry.id)
-		expect(after.redlines.map((r) => r.who)[1]).toBe(
+		expect(after.redlines.map((r) => r.who)[2]).toBe(
 			"Remember things in a session that was deleted"
 		)
 	})
@@ -456,7 +479,7 @@ describe("count and clear", () => {
 		expect(await redlinesOf(other.id)).toHaveLength(0)
 	})
 
-	test("a member who is not the owner cannot clear or count", async () => {
+	test("a guest of the session (no access to its notes, G2) cannot clear or count", async () => {
 		const { entryRedlineCountHandler, entryClearRedlinesHandler } =
 			await import("./redlines")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -477,14 +500,14 @@ describe("count and clear", () => {
 					p,
 					recorder().emit
 				)
-			).rejects.toThrow(OWNER_ONLY)
+			).rejects.toThrow("Entry not found or access denied.")
 			await expect(
 				entryRedlineCountHandler.handler(
 					socketOf(member.id),
 					p,
 					recorder().emit
 				)
-			).rejects.toThrow(OWNER_ONLY)
+			).rejects.toThrow("Entry not found or access denied.")
 		}
 		expect(await redlinesOf(w.entry.id)).toHaveLength(1)
 	})

@@ -20,13 +20,12 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
 	return {
-		...actual,
-		db,
+		...testDbModule(await createTestDb()),
 		getCryptoSecretKey: () => "starter-cardless-test-secret"
 	}
 })

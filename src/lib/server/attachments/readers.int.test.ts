@@ -254,3 +254,46 @@ describe("attachmentReaders — sounds", () => {
 		T
 	)
 })
+
+describe("attachmentReaders — who reads the reason", () => {
+	const admin = { isAdmin: true }
+	const member = { isAdmin: false }
+	const asker = async (sessionId: number, subject: { isAdmin: boolean }) => {
+		const { attachmentReaders } = await import("./readers")
+		return attachmentReaders(db as any, { sessionId, userId, subject })
+	}
+	const plain = /^No model in this reply can read images\.$/
+
+	test(
+		"no model set: an administrator reads the fix, a member the plain sentence",
+		async () => {
+			const { setCapabilityDefault } = await import("$lib/server/connections/capabilityDefaults")
+			await setCapabilityDefault(db, "text->text", {
+				connectionId: null,
+				connectionModelId: null
+			})
+			const id = await session("core:genre/story")
+			const a = await asker(id, admin)
+			expect(a.kinds.image.reason).toContain("Use in Reply")
+			const m = await asker(id, member)
+			expect(m.kinds.image.reason).toMatch(plain)
+			expect(JSON.stringify(m)).not.toMatch(/Use in Reply|Connections|admin/)
+		},
+		T
+	)
+
+	test(
+		"a model that cannot read a kind: an administrator keeps the why, a member does not",
+		async () => {
+			await useDefault(await pair("koboldcpp", "nemo-12b"))
+			const id = await session("core:genre/story")
+			const a = await asker(id, admin)
+			expect(a.kinds.image.reason).toMatch(/^No model in this reply can read images\. ./)
+			expect(a.calls[0].reasons.image).toBeTruthy()
+			const m = await asker(id, member)
+			expect(m.kinds.image.reason).toMatch(plain)
+			expect(m.calls[0].reasons.image).toBeUndefined()
+		},
+		T
+	)
+})

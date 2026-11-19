@@ -27,6 +27,8 @@ vi.mock("$lib/server/db", async () => {
 let db: TestDb
 let dataDir: string
 let n = 0
+/** The message the latest `hostOf` made: the turn a write belongs to. */
+let lastMessageId = 0
 
 const CREATE = {
 	key: "file",
@@ -97,6 +99,7 @@ async function hostOf(w: World) {
 	await db
 		.insert(schema.messages)
 		.values({ id: legacy!.id, sessionId: w.session.id, role: "assistant" })
+	lastMessageId = legacy!.id
 	const { createHost } = await import("$lib/server/pipelines/runtime/host")
 	return createHost(
 		db as unknown as Db,
@@ -198,10 +201,50 @@ describe("without a date", () => {
 			decayRate: 0.4
 		})
 	})
-	it("Timeline on with no clock: no date", async () => {
+	it("Timeline on with no clock and no date at all in the lorebook (undatable): no date", async () => {
 		const w = await world({ clock: null })
 		const item = await write(w, ITEM_TYPE_ID)
 		expect(await rowOf(item.id)).toMatchObject({
+			...PERPETUAL,
+			decayRate: 0
+		})
+	})
+})
+
+describe("Timeline on, no clock, but dated history", () => {
+	it("an Item begins at the newest history date; world lore stays perpetual", async () => {
+		const w = await world({ clock: null })
+		for (const [i, fields] of [
+			{ year: 3, month: 2, day: 9 },
+			{ year: 7, month: 4, day: 1 }
+		].entries())
+			await db.insert(schema.lorebookEntries).values({
+				lorebookId: w.book.id,
+				typeId: HISTORY_TYPE_ID,
+				typeVersion: 1,
+				position: i + 1,
+				title: null,
+				content: "…",
+				fields
+			})
+		const item = await write(w, ITEM_TYPE_ID)
+		expect(await rowOf(item.id)).toMatchObject({
+			year: 7,
+			month: 4,
+			day: 1,
+			decayRate: 0
+		})
+		const itemTurn = lastMessageId
+		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+		const undone = await db.transaction(async (tx) =>
+			retractStateAnchoredTo(tx as unknown as Db, itemTurn, "leaves", {
+				leavingWith: [itemTurn]
+			})
+		)
+		expect(undone.changed).toBe(true)
+		expect(await entriesIn(w.book.id).then((r) => r.some((e) => e.id === item.id))).toBe(false)
+		const lore = await write(w, WORLD_LORE_TYPE_ID)
+		expect(await rowOf(lore.id)).toMatchObject({
 			...PERPETUAL,
 			decayRate: 0
 		})

@@ -25,13 +25,20 @@
  * ⚠ Not the app background, not a message attachment, not the retired
  * *scene image* pins.
  */
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { sessionsDrawingCard } from "$lib/server/cast/seatedCast"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 
 /** A refusal said to the person or written on the receipt, in words. */
-export class BackdropRefusal extends Error {}
+export class BackdropRefusal extends Error {
+	/** `forPeople` marks a message the people in the session can act on; unmarked messages are detail. */
+	constructor(message: string, opts?: { forPeople?: boolean }) {
+		super(message)
+		if (opts?.forPeople) forPeople(this, message)
+	}
+}
 
 /** Who is setting the backdrop, for the file check. */
 export interface BackdropWriter {
@@ -116,7 +123,8 @@ export async function backdropFileFor(
 				return { id: row.id }
 	}
 	throw new BackdropRefusal(
-		"That picture belongs to neither this session nor you, so it cannot be its backdrop."
+		"That picture belongs to neither this session nor you, so it cannot be its backdrop.",
+		{ forPeople: true }
 	)
 }
 

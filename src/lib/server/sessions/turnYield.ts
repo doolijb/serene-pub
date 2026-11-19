@@ -140,7 +140,11 @@ export async function turnRunOf(
  * every row a turn it planned wrote (`metadata.planRowId` naming one of
  * them).
  */
-export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]> {
+export async function turnYieldOf(
+	db: Db,
+	runId: number,
+	opts: { namingOf?: (sessionId: number) => ReturnType<typeof rowNaming> } = {}
+): Promise<TurnYieldRow[]> {
 	const artifacts = await db
 		.select({ entityId: schema.pipelineRunArtifacts.entityId })
 		.from(schema.pipelineRunArtifacts)
@@ -194,7 +198,7 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 		)
 		.orderBy(asc(schema.sessionMessages.id))
 	const naming = rows.length
-		? await rowNaming(db, rows[0]!.sessionId)
+		? await (opts.namingOf ?? ((s) => rowNaming(db, s)))(rows[0]!.sessionId)
 		: { envoyName: () => undefined, ownVoice: "" }
 	// 🚧 A turn's line is named by the member its card's seat seats (S2), else
 	// by the card's current version.
@@ -228,7 +232,8 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
  * follow-up, R6): an envoy's row by that envoy's declared name, anything
  * else by the pipeline's **own voice** — the genre's fallback envoy, else
  * the session's narrator name, else `UNCLAIMED_LINE_NAME` (`ownVoiceName`,
- * the one rule every reader shares). Read once per yield.
+ * the one rule every reader shares). Read once per yield; the narrator name
+ * is built only where the own voice needs it.
  */
 export async function rowNaming(
 	db: Db,
@@ -240,10 +245,14 @@ export async function rowNaming(
 	const { narratorNameFor } = await import(
 		"$lib/server/pipelines/runtime/host"
 	)
-	const [declared, narratorName] = await Promise.all([
-		sessionDeclaredEnvoys(db, sessionId).catch(() => []),
-		narratorNameFor(db, sessionId, undefined).catch(() => undefined)
-	])
+	const declared = await sessionDeclaredEnvoys(db, sessionId).catch(() => [])
+	// The narrator name is the own voice only where no fallback envoy names it
+	// (`ownVoiceName`): asked the rule itself, with no narrator, and built only
+	// when its answer is the unclaimed line's.
+	const narratorName =
+		ownVoiceName({ envoys: declared }) === ownVoiceName(null)
+			? await narratorNameFor(db, sessionId, undefined).catch(() => undefined)
+			: undefined
 	const bySlug = new Map(declared.map((d) => [d.slug, d]))
 	return {
 		envoyName: (ref) => {

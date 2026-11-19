@@ -30,6 +30,10 @@ import {
 } from "$lib/server/lorebooks/redlines"
 import { splitExampleDialogues } from "$lib/server/lorebooks/retold"
 import {
+	castMemberLockedAgainstRuns,
+	RUN_LOCK_SENTENCES
+} from "$lib/shared/lorebooks/runLocks"
+import {
 	CHARACTER_PROFILE_FIELDS,
 	creatorNotesOf,
 	emptyCharacterProfile,
@@ -1861,6 +1865,14 @@ async function authorWrite(
 	return { version, coalesced: false }
 }
 
+/** 🚧 A run's story write to a locked cast member; the caller turns it into a note, never a halt. */
+export class CastMemberLockRefusal extends Error {
+	constructor(sentence: string) {
+		super(sentence)
+		this.name = "CastMemberLockRefusal"
+	}
+}
+
 const NO_ANCHOR =
 	"A session's change to a cast member needs the turn it belongs to, and this one names none; an author's change uses a place on the member's line instead."
 
@@ -1877,6 +1889,15 @@ async function storyWrite(
 
 	if (session.messageId === null) throw new Error(NO_ANCHOR)
 	const member = await memberOf(tx, input.member)
+	if (
+		castMemberLockedAgainstRuns(member) &&
+		/^(run|session|script):/.test(input.writtenBy)
+	)
+		throw new CastMemberLockRefusal(
+			RUN_LOCK_SENTENCES.castMember(
+				member.name ? `'${member.name}'` : `cast member ${member.id}`
+			)
+		)
 	const [row] = await tx
 		.select({
 			name: schema.sessions.name,
@@ -1936,8 +1957,9 @@ async function storyWrite(
 	// reads its own notes alone on a line: then it lands on that line, dated
 	// the same way.
 	const inAttached = target.lorebookId === row.lorebookId
-	const { sessionReadingOf, writeDatingAt, momentOf } = await import(
-		"$lib/server/state/reading"
+	const { sessionReadingOf } = await import("$lib/server/state/reading")
+	const { loreWriteDateOf, undatedLoreWriteRefusal } = await import(
+		"$lib/server/state/storyTime"
 	)
 	const attachedReading =
 		row.lorebookId != null ? await sessionReadingOf(tx, S) : null
@@ -1949,9 +1971,10 @@ async function storyWrite(
 		ownLineReading.branchId != null &&
 		target.lorebookId === ownLineReading.lorebookId
 	const reading = onOwnLine ? ownLineReading : attachedReading
-	const dating = reading ? await writeDatingAt(tx, reading) : null
-	const date = reading ? reading.moment : momentOf(row)
-	const when: StoryDate | null = date ?? dating?.date ?? null
+	const written = await loreWriteDateOf(tx, S)
+	const when: StoryDate | null = written.kind === "dated" ? written.date : null
+	const refusal = await undatedLoreWriteRefusal(tx, S, when)
+	if (refusal) throw new Error(refusal)
 	const branchId =
 		inAttached || onOwnLine ? (reading?.branchId ?? null) : null
 
@@ -2028,9 +2051,8 @@ async function storyWrite(
 				year: when?.year ?? null,
 				month: when?.month ?? null,
 				day: when?.day ?? null,
-				historyEntryId: inAttached
-					? (dating?.historyEntryId ?? null)
-					: null,
+				historyEntryId:
+					inAttached && written.kind === "dated" ? written.hangsOn : null,
 				atHour: hour,
 				atMinute: minute,
 				// ★CV-15: a story write keeps the life point of the version it copies.

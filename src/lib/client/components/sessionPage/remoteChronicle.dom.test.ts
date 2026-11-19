@@ -23,6 +23,8 @@ const DECL = CORE_WIDGETS.find((w) => w.id === "chronicle")!
 
 const OWNER: ViewerV1 = { userId: 10, isAdmin: false, isGuest: false }
 const GUEST: ViewerV1 = { userId: 11, isAdmin: false, isGuest: true }
+/** An administrator in someone else's session: the host fills `isGuest` from the session's owner, so they are a guest. */
+const ADMIN_GUEST: ViewerV1 = { userId: 1, isAdmin: true, isGuest: true }
 
 const ANSWER: HistoryEntriesV1 = {
 	lorebookId: 4,
@@ -302,8 +304,10 @@ describe("core's remote Chronicle", () => {
 				"extend"
 			])
 				expect(view.query(part(name)), name).toBeNull()
-			// Opening the lorebook is reading, and stays.
-			expect(view.query(part("open"))).not.toBeNull()
+			// The notes are the owner's: no opener (Open in lorebook, a scene's, an Earlier entry's) is a button.
+			expect(view.query(part("open"))).toBeNull()
+			expect(view.query(`button${part("scene-open")}`)).toBeNull()
+			expect(view.query(`button${part("earlier-entry")}`)).toBeNull()
 
 			const notOwner = await mountChronicle({
 				answer: {
@@ -321,6 +325,32 @@ describe("core's remote Chronicle", () => {
 			)
 			expect(notOwner.view.query(part("now"))).toBeNull()
 			expect(notOwner.view.query(part("move"))).toBeNull()
+		}
+	)
+
+	test(
+		"the four openers: the owner presses them, a guest and an administrator guest read the same text without them",
+		{ timeout: 120_000 },
+		async () => {
+			const timeless: HistoryEntriesV1 = { ...ANSWER, current: null }
+			const owner = await mountChronicle()
+			expect(owner.view.query(part("open"))).not.toBeNull()
+			expect(owner.view.query(`button${part("scene-open")}`)).not.toBeNull()
+			const ownerTimeless = await mountChronicle({ answer: timeless })
+			expect(ownerTimeless.view.query(part("open"))).not.toBeNull()
+			for (const viewer of [GUEST, ADMIN_GUEST]) {
+				const a = await mountChronicle({ viewer })
+				const b = await mountChronicle({ viewer, answer: timeless })
+				for (const { view } of [a, b]) {
+					expect(view.query(part("open"))).toBeNull()
+					expect(view.query(`button${part("scene-open")}`)).toBeNull()
+					expect(view.query(`button${part("earlier-entry")}`)).toBeNull()
+				}
+				// The text the openers carried stays.
+				expect(text(a.view.query(part("scene-open")))).toMatch(/challenge/)
+				expect(a.view.query(part("scene-open"))?.tagName).toBe("SPAN")
+				expect(a.asked.map((x) => x.kind)).not.toContain("open-lore")
+			}
 		}
 	)
 

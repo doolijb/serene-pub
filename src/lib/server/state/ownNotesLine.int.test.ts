@@ -24,11 +24,11 @@ vi.setConfig({ testTimeout: T, hookTimeout: T })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -128,6 +128,7 @@ async function setup(opts: Opts = {}) {
 		.returning()
 	const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
 	const own = await ownBookFor(db(), session!.id)
+	await testDb.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, own.id)) // the notes state their timeline
 	const [lineRow] = await testDb
 		.insert(schema.lorebookBranches)
 		.values({ lorebookId: own.id, name: "Own line", forkYear: 10 })
@@ -435,9 +436,45 @@ describe("a session on its notes' main writes exactly as before", () => {
 	)
 
 	test(
-		"with no clock a cast version on main is undated",
+		"with no clock a cast version on main is dated at the notes' newest history day",
 		async () => {
 			const s = await setup({ clock: null })
+			const maren = await member(s, s.own.id, "Maren")
+			const { version } = await writeVersion(s, maren.id, "Maren on main")
+			const row = await versionRow(version.id)
+			expect(row.branchId).toBeNull()
+			expect(row.year).toBe(15)
+			// Back on the turn it was written in takes the version away.
+			const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+			const anchor = row.sourceMessageId!
+			const undone = await testDb.transaction(async (tx) =>
+				retractStateAnchoredTo(tx as unknown as Db, anchor, "leaves", {
+					leavingWith: [anchor]
+				})
+			)
+			expect(undone.changed).toBe(true)
+			expect(
+				await testDb
+					.select()
+					.from(schema.characterVersions)
+					.where(eq(schema.characterVersions.id, version.id))
+			).toEqual([])
+		},
+		T
+	)
+
+	test(
+		"with no clock and no dated row in the notes at all (undatable) a cast version on main is undated",
+		async () => {
+			const s = await setup({ clock: null })
+			await testDb
+				.delete(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.lorebookId, s.own.id),
+						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+					)
+				)
 			const maren = await member(s, s.own.id, "Maren")
 			const { version } = await writeVersion(s, maren.id, "Maren on main")
 			const row = await versionRow(version.id)
@@ -568,6 +605,47 @@ describe("a session with an attached book writing its notes is unchanged", () =>
 			const row = await versionRow(version.id)
 			expect(row.lorebookId).toBe(s.own.id)
 			expect(row.branchId).toBeNull()
+		},
+		T
+	)
+})
+
+describe("a cast version on an attached lorebook", () => {
+	const attachedHistory = async (s: Setup, years: number[]) => {
+		const rows = []
+		for (const year of years)
+			rows.push(await history(s.attachedId!, `Shared ${year}`, year))
+		return rows
+	}
+
+	test(
+		"dated history and no clock: the version hangs on the newest history entry and carries its year",
+		async () => {
+			const s = await setup({ attached: true, clock: null })
+			await setMode(s.user.id, "full")
+			const [three, nine] = await attachedHistory(s, [3, 9])
+			const maren = await member(s, s.attachedId!, "Maren")
+			const { version } = await writeVersion(s, maren.id, "Maren, shared")
+			const row = await versionRow(version.id)
+			expect(row.lorebookId).toBe(s.attachedId)
+			expect(row.historyEntryId).toBe(nine!.id)
+			expect(row.historyEntryId).not.toBe(three!.id)
+			expect(row.year).toBe(9)
+		},
+		T
+	)
+
+	test(
+		"undatable (no dated row, no clock): the version hangs on nothing and is undated",
+		async () => {
+			const s = await setup({ attached: true, clock: null })
+			await setMode(s.user.id, "full")
+			const maren = await member(s, s.attachedId!, "Maren")
+			const { version } = await writeVersion(s, maren.id, "Maren, shared")
+			const row = await versionRow(version.id)
+			expect(row.lorebookId).toBe(s.attachedId)
+			expect(row.historyEntryId).toBeNull()
+			expect(row.year).toBeNull()
 		},
 		T
 	)

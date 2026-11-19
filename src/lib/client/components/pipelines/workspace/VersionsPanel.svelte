@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * What is actually published (22): every version, the active pointer
@@ -23,12 +24,8 @@
 		iso ? new Date(iso).toLocaleString() : "—"
 
 	async function copyHash(hash: string) {
-		try {
-			await navigator.clipboard.writeText(hash)
-			notify.success({ title: "Hash copied" })
-		} catch {
-			notify.error({ title: "Clipboard unavailable" })
-		}
+		if (await copyText(hash)) notify.success({ title: "Hash copied" })
+		else notify.error({ title: "Clipboard unavailable" })
 	}
 </script>
 

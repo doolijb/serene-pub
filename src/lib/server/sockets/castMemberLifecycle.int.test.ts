@@ -174,7 +174,8 @@ describe("a dated card is its member's (A25)", () => {
 		const later = await cardMemberAt(testDb as any, {
 			lorebookId: book.id,
 			characterId: keeper.id,
-			at: { line, moment: { year: 25, month: null, day: null } }
+			at: { line, moment: { year: 25, month: null, day: null } },
+			timelineOff: false
 		})
 		expect(later?.member.id).toBe(member.id)
 		expect(later?.member.characterId).toBe(keeper.id)
@@ -182,7 +183,8 @@ describe("a dated card is its member's (A25)", () => {
 		const onMain = await cardMemberAt(testDb as any, {
 			lorebookId: book.id,
 			characterId: keeper.id,
-			at: { line: MAIN_LINE, moment: null }
+			at: { line: MAIN_LINE, moment: null },
+			timelineOff: false
 		})
 		expect(onMain?.member.id).toBe(member.id)
 		expect(onMain?.member.characterId).toBe(young.id)
@@ -280,26 +282,6 @@ describe("a dated card is its member's (A25)", () => {
 			(cardsOf.get(id) ?? []).includes(card.id)
 		)
 		expect(holders).toHaveLength(1)
-	})
-
-	test("the scene cast list names a seat holding the dated card as its member", async () => {
-		const user = await makeUser("cast-life-scenecast")
-		const book = await makeBook(user.id, "Ashfall scene cast")
-		const young = await makeCard(user.id, "Verity")
-		const keeper = await makeCard(user.id, "The Lamp Keeper")
-		const member = await makeMember(book.id, "Verity", young.id)
-		await amendCard(book.id, member.id, 20, keeper.id)
-		const session = await seat(user.id, book.id, keeper.id)
-		const { buildSceneCastList, resolveCharacterRefs } = await import(
-			"$lib/server/utils/summarizer/availableSceneCast"
-		)
-		const cast = await buildSceneCastList(null, book.id, session.id, testDb as any)
-		expect(cast.map((c) => c.id)).toEqual([member.id])
-		// A model naming the seat's card is naming her: her member, not a
-		// suggested newcomer.
-		expect(
-			resolveCharacterRefs([{ name: "The Lamp Keeper" } as any], cast)
-		).toEqual({ ids: [member.id], suggestedNames: [] })
 	})
 
 	test("linking a card another member is drawn with from a date is refused", async () => {

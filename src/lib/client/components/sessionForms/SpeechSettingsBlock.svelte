@@ -158,9 +158,10 @@
 				}}
 			/>
 		{:else}
-			<p class="text-sm">{narratorName(f.value)}</p>
+			{@const rid = `${fieldDomId(f)}-reason`}
+			<p class="text-sm" aria-describedby={f.readOnlyReason ? rid : undefined}>{narratorName(f.value)}</p>
 			{#if overridable && !pickOf(f) && narratorNone.consequence && !narratorLine?.voiceName}<p class="text-surface-600-400 text-xs">{narratorNone.consequence}</p>{/if}
-			{#if f.readOnlyReason}<p class="text-surface-600-400 text-xs">{f.readOnlyReason}</p>{/if}
+			{#if f.readOnlyReason}<p id={rid} class="text-surface-600-400 text-xs">{f.readOnlyReason}</p>{/if}
 		{/if}
 		{@render err(f)}
 	</div>
@@ -196,8 +197,8 @@
 						{/each}
 					</div>
 				{:else}
-					<p class="text-sm">{readChoices.find((c) => c.key === (readAloud.value ?? ""))?.label ?? String(readAloud.value ?? "")}</p>
-					{#if readAloud.readOnlyReason}<p class="text-surface-600-400 text-xs">{readAloud.readOnlyReason}</p>{/if}
+					<p class="text-sm" aria-describedby={readAloud.readOnlyReason ? `${id}-reason` : undefined}>{readChoices.find((c) => c.key === (readAloud.value ?? ""))?.label ?? String(readAloud.value ?? "")}</p>
+					{#if readAloud.readOnlyReason}<p id="{id}-reason" class="text-surface-600-400 text-xs">{readAloud.readOnlyReason}</p>{/if}
 				{/if}
 				<p class="text-surface-600-400 text-xs" aria-live="polite" data-testid="read-aloud-line">{readLine ?? ""}</p>
 				{@render err(readAloud)}
@@ -225,8 +226,8 @@
 						{templateChoices.find((c) => c.key === current)?.line ?? ""}
 					</p>
 				{:else}
-					<p class="text-sm">{templateChoices.find((c) => c.key === current)?.label ?? current}</p>
-					{#if template.readOnlyReason}<p class="text-surface-600-400 text-xs">{template.readOnlyReason}</p>{/if}
+					<p class="text-sm" aria-describedby={template.readOnlyReason ? `${tid}-reason` : undefined}>{templateChoices.find((c) => c.key === current)?.label ?? current}</p>
+					{#if template.readOnlyReason}<p id="{tid}-reason" class="text-surface-600-400 text-xs">{template.readOnlyReason}</p>{/if}
 				{/if}
 				{@render err(template)}
 			</div>
@@ -307,28 +308,34 @@
 		{#if language}
 			{@const lid = fieldDomId(language)}
 			<div class="flex flex-col gap-1" data-setting={language.id}>
-				<label class="flex flex-col gap-1 text-xs" for={lid}>
-					<span class="text-surface-600-400">{language.label || "Language"} (optional)</span>
-					<input
-						id={lid}
-						class="input w-24 rounded-base"
-						type="text"
-						maxlength="2"
-						placeholder="en"
-						value={typeof language.value === "string" ? language.value : ""}
-						disabled={busy(language) || !language.editable}
-						aria-describedby="{lid}-help"
-						onchange={(e) => {
-							const v = e.currentTarget.value.trim().toLowerCase()
-							if (v && !isLanguageCode(v)) {
-								langError = "Use a two-letter language code, such as en or ja."
-								return
-							}
-							langError = null
-							onwrite(language, v || null)
-						}}
-					/>
-				</label>
+				{#if language.editable}
+					<label class="flex flex-col gap-1 text-xs" for={lid}>
+						<span class="text-surface-600-400">{language.label || "Language"} (optional)</span>
+						<input
+							id={lid}
+							class="input w-24 rounded-base"
+							type="text"
+							maxlength="2"
+							placeholder="en"
+							value={typeof language.value === "string" ? language.value : ""}
+							disabled={busy(language)}
+							aria-describedby="{lid}-help"
+							onchange={(e) => {
+								const v = e.currentTarget.value.trim().toLowerCase()
+								if (v && !isLanguageCode(v)) {
+									langError = "Use a two-letter language code, such as en or ja."
+									return
+								}
+								langError = null
+								onwrite(language, v || null)
+							}}
+						/>
+					</label>
+				{:else}
+					<p id="{lid}-label" class="text-surface-600-400 text-xs">{language.label || "Language"} (optional)</p>
+					<p class="text-sm" aria-labelledby="{lid}-label" aria-describedby={language.readOnlyReason ? `${lid}-reason` : undefined}>{typeof language.value === "string" ? language.value : ""}</p>
+					{#if language.readOnlyReason}<p id="{lid}-reason" class="text-surface-600-400 text-xs">{language.readOnlyReason}</p>{/if}
+				{/if}
 				<p id="{lid}-help" class="text-surface-600-400 text-xs">
 					{language.description ||
 						"The language this session is spoken in, as a two-letter code such as en or fr. Empty uses the pub's default."}

@@ -87,16 +87,81 @@ const toRecord = (r: any): VariableTemplateRecord => ({
 // ── 🚧 the pub's layout, references, a preset's variable layouts ────────
 // (PLAN variable-layouts 2026-11-10.) The read half every reader shares —
 // the run's resolution (`config/world.ts`), the sockets and the data
-// upgrade's tests — so the screen and the run agree on what a variable is
+// upgrade's tests. Each lookup rule is a pure function over rows already read
+// (`pubLayoutAmong`, `layoutAmongByReference`, `layoutOfRow`); the database
+// helper reads rows and calls it, and the run's one batched read calls the
+// same function, so the screen and the run agree on what a variable is
 // written out with. Withdrawn rows (a disabled plugin's) never answer.
+
+type VariableTemplateRow = typeof schema.pipelineVariableTemplates.$inferSelect
+
+/**
+ * The pub's layout among the rows: the variable's row marked `pub_default`
+ * that is not withdrawn. At most one (partial unique index on `variable_id`).
+ */
+export function pubLayoutAmong(
+	rows: VariableTemplateRow[],
+	variableId: string
+): number | null {
+	return (
+		rows.find(
+			(r) =>
+				r.variableId === variableId && r.pubDefault === true && r.withdrawnAt == null
+		)?.id ?? null
+	)
+}
+
+/**
+ * The row a reference names within its variable among the rows, not
+ * withdrawn. At most one (unique on `variable_id, reference`).
+ */
+export function layoutAmongByReference(
+	rows: VariableTemplateRow[],
+	variableId: string,
+	reference: string
+): number | null {
+	return (
+		rows.find(
+			(r) =>
+				r.variableId === variableId &&
+				r.reference === reference &&
+				r.withdrawnAt == null
+		)?.id ?? null
+	)
+}
+
+/** What a run renders from a layout row (see `resolveVariableTemplate`). */
+export function layoutOfRow(row: VariableTemplateRow): {
+	variableId: string
+	engine: string
+	source: string
+	name: string
+	origin: "shipped" | "package" | "own"
+} {
+	return {
+		// What the row was written against — the caller compares it with what
+		// the key renders, and drops a row written for some other variable.
+		variableId: row.variableId,
+		engine: row.engine ?? CORE_TEMPLATE_ENGINE,
+		source: row.source ?? "",
+		// For the receipt's per-key line (2026-10-13): which row, and whose.
+		name: row.name,
+		origin:
+			row.ownerPluginId != null
+				? "package"
+				: row.seedKey != null || row.isImmutable
+					? "shipped"
+					: "own"
+	}
+}
 
 /** The pub's layout for a variable — the row marked `pub_default` — or null. */
 export async function pubLayoutOf(
 	db: Db,
 	variableId: string
 ): Promise<number | null> {
-	const [row] = await db
-		.select({ id: schema.pipelineVariableTemplates.id })
+	const rows = await db
+		.select()
 		.from(schema.pipelineVariableTemplates)
 		.where(
 			and(
@@ -106,7 +171,7 @@ export async function pubLayoutOf(
 			)
 		)
 		.limit(1)
-	return row?.id ?? null
+	return pubLayoutAmong(rows, variableId)
 }
 
 /** The row a layout reference names within its variable, or null (unknown, or withdrawn). */
@@ -115,8 +180,8 @@ export async function layoutByReference(
 	variableId: string,
 	reference: string
 ): Promise<number | null> {
-	const [row] = await db
-		.select({ id: schema.pipelineVariableTemplates.id })
+	const rows = await db
+		.select()
 		.from(schema.pipelineVariableTemplates)
 		.where(
 			and(
@@ -126,7 +191,7 @@ export async function layoutByReference(
 			)
 		)
 		.limit(1)
-	return row?.id ?? null
+	return layoutAmongByReference(rows, variableId, reference)
 }
 
 /** A preset's variable layouts as stored — `{ [variableId]: reference }`, `{}` when none. */
@@ -228,22 +293,7 @@ export async function resolveVariableTemplate(
 		.from(schema.pipelineVariableTemplates)
 		.where(eq(schema.pipelineVariableTemplates.id, templateId))
 		.limit(1)
-	if (!row) return null
-	return {
-		// What the row was written against — the caller compares it with what
-		// the key renders, and drops a row written for some other variable.
-		variableId: row.variableId,
-		engine: row.engine ?? CORE_TEMPLATE_ENGINE,
-		source: row.source ?? "",
-		// For the receipt's per-key line (2026-10-13): which row, and whose.
-		name: row.name,
-		origin:
-			row.ownerPluginId != null
-				? "package"
-				: row.seedKey != null || row.isImmutable
-					? "shipped"
-					: "own"
-	}
+	return row ? layoutOfRow(row) : null
 }
 
 /**

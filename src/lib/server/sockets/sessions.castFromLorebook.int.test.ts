@@ -50,13 +50,12 @@ vi.mock("$lib/server/sessions/seats", async (importOriginal) => {
 	}
 })
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
 	return {
-		...actual,
-		db,
+		...testDbModule(await createTestDb()),
 		getCryptoSecretKey: () => "cast-from-book-test-secret"
 	}
 })
@@ -285,6 +284,7 @@ async function create(
 		genreId?: string
 		mode?: "new-world"
 		lorebookId?: number
+		starterKit?: { lorebookId: number }
 		genreFields?: Record<string, unknown>
 		characterIds?: number[]
 		personaIds?: number[]
@@ -303,6 +303,7 @@ async function create(
 				...(p.lorebookId != null ? { lorebookId: p.lorebookId } : {}),
 				...(p.genreFields ? { genreFields: p.genreFields } : {})
 			},
+			...(p.starterKit ? { starterKit: p.starterKit } : {}),
 			characterIds: p.characterIds ?? [],
 			personaIds: p.personaIds ?? []
 		} as any,
@@ -322,6 +323,24 @@ const seatedOf = async (sessionId: number) =>
 			.orderBy(asc(schema.sessionCharacters.position))
 	).map((r) => r.id)
 
+/** The names of the members a session's seats name (a start on a provided book seats its copy's members), in seat order. */
+const seatedNamesOf = async (sessionId: number) => {
+	const seats = await testDb
+		.select({ castMemberId: schema.sessionCharacters.castMemberId })
+		.from(schema.sessionCharacters)
+		.where(eq(schema.sessionCharacters.sessionId, sessionId))
+		.orderBy(asc(schema.sessionCharacters.position))
+	const names: string[] = []
+	for (const { castMemberId } of seats) {
+		const [m] = await testDb
+			.select({ name: schema.lorebookBindings.name })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, castMemberId!))
+		names.push(m!.name)
+	}
+	return names
+}
+
 const bindingCount = async (lorebookId: number) =>
 	(
 		await testDb
@@ -333,12 +352,14 @@ const bindingCount = async (lorebookId: number) =>
 describe("the book seats its cast at sessions:create", () => {
 	test("the admin: every member but the persona, in book order (★S4-1)", async () => {
 		const p = await providedBook()
-		const res = await create(p.admin.id, true, { lorebookId: p.book.id })
+		const res = await create(p.admin.id, true, {
+			starterKit: { lorebookId: p.book.id }
+		})
 		expect(res.error).toBeUndefined()
-		expect(await seatedOf(res.session.id)).toEqual([
-			p.one.id,
-			p.plain.id,
-			p.two.id
+		expect(await seatedNamesOf(res.session.id)).toEqual([
+			`m${p.one.id}`,
+			`m${p.plain.id}`,
+			`m${p.two.id}`
 		])
 		const [row] = await testDb
 			.select()
@@ -350,29 +371,31 @@ describe("the book seats its cast at sessions:create", () => {
 	test("a member gets every member but the persona, in book order, and is not refused", async () => {
 		const p = await providedBook()
 		const m = await member()
-		const res = await create(m.id, false, { lorebookId: p.book.id })
+		const res = await create(m.id, false, {
+			starterKit: { lorebookId: p.book.id }
+		})
 		expect(res.error).toBeUndefined()
-		expect(await seatedOf(res.session.id)).toEqual([
-			p.one.id,
-			p.plain.id,
-			p.two.id
+		expect(await seatedNamesOf(res.session.id)).toEqual([
+			`m${p.one.id}`,
+			`m${p.plain.id}`,
+			`m${p.two.id}`
 		])
 	})
 
 	test("the switch off, a genre without the declaration, and no book seat none", async () => {
 		const p = await providedBook()
 		const off = await create(p.admin.id, true, {
-			lorebookId: p.book.id,
+			starterKit: { lorebookId: p.book.id },
 			genreFields: { examples: false }
 		})
 		expect(off.error).toBeUndefined()
-		expect(await seatedOf(off.session.id)).toEqual([])
+		expect(await seatedNamesOf(off.session.id)).toEqual([])
 		const plain = await create(p.admin.id, true, {
 			genreId: PLAIN,
-			lorebookId: p.book.id
+			starterKit: { lorebookId: p.book.id }
 		})
 		expect(plain.error).toBeUndefined()
-		expect(await seatedOf(plain.session.id)).toEqual([])
+		expect(await seatedNamesOf(plain.session.id)).toEqual([])
 		const noBook = await create(p.admin.id, true, {})
 		expect(noBook.error).toBeUndefined()
 		expect(await seatedOf(noBook.session.id)).toEqual([])
@@ -381,14 +404,18 @@ describe("the book seats its cast at sessions:create", () => {
 	test("a picked character that is also a member is seated once, after the picks keep their place", async () => {
 		const p = await providedBook()
 		const res = await create(p.admin.id, true, {
-			lorebookId: p.book.id,
+			starterKit: { lorebookId: p.book.id },
 			characterIds: [p.two.id]
 		})
 		expect(res.error).toBeUndefined()
 		expect(await seatedOf(res.session.id)).toEqual([
 			p.two.id,
-			p.one.id,
-			p.plain.id
+			null,
+			null
+		])
+		expect((await seatedNamesOf(res.session.id)).slice(1)).toEqual([
+			`m${p.one.id}`,
+			`m${p.plain.id}`
 		])
 	})
 
@@ -399,7 +426,7 @@ describe("the book seats its cast at sessions:create", () => {
 			persona: true
 		})
 		const first = await create(p.admin.id, true, {
-			lorebookId: p.book.id,
+			starterKit: { lorebookId: p.book.id },
 			personaIds: [personaA.id]
 		})
 		expect(first.error).toBeUndefined()
@@ -407,13 +434,16 @@ describe("the book seats its cast at sessions:create", () => {
 			persona: true
 		})
 		const second = await create(p.admin.id, true, {
-			lorebookId: p.book.id,
+			starterKit: { lorebookId: p.book.id },
 			personaIds: [personaB.id]
 		})
 		expect(second.error).toBeUndefined()
-		const seated = await seatedOf(second.session.id)
-		expect(seated).toEqual([p.one.id, p.plain.id, p.two.id])
-		expect(seated).not.toContain(personaA.id)
+		expect(await seatedNamesOf(second.session.id)).toEqual([
+			`m${p.one.id}`,
+			`m${p.plain.id}`,
+			`m${p.two.id}`
+		])
+		expect(await seatedOf(second.session.id)).not.toContain(personaA.id)
 		expect(await bindingCount(p.book.id)).toBe(before)
 	})
 

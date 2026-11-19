@@ -190,7 +190,7 @@ describe("the form's Rules and How strict", () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const [made] = await db
 			.insert(schema.sessions)
-			.values({ userId: ownerId, isGroup: false, name: "Strictness", genreId: "core:genre/story", rigour: "prose" } as any)
+			.values({ userId: ownerId, isGroup: false, name: "Strictness", genreId: "core:genre/story", primaryRuleset: VIS_ITINERIS, rigour: "prose" } as any)
 			.returning()
 		const id = made!.id
 		await sessionsUpdateHandler.handler(fakeSocket(ownerId), { session: { id, rigour: "mechanics" } } as any, () => {})
@@ -205,6 +205,46 @@ describe("the form's Rules and How strict", () => {
 		expect(JSON.stringify(errors)).toContain("How strict must be Words only, Rules or The rules decide.")
 	})
 
+	// The ruleset narrows How strict as at creation: Freeform decides nothing, so it plays Words only.
+	it("sessions:update refuses a How strict the session's ruleset does not play, and writes nothing; one it plays is written", async () => {
+		const { sessionsUpdateHandler } = await import("./sessions")
+		const made = async (primaryRuleset: string) =>
+			(
+				await db
+					.insert(schema.sessions)
+					.values({ userId: ownerId, isGroup: false, name: "Narrowed", genreId: "core:genre/story", primaryRuleset, rigour: "prose" } as any)
+					.returning()
+			)[0]!.id
+		const rigourOf = async (id: number) =>
+			(await db.select({ rigour: schema.sessions.rigour }).from(schema.sessions).where(eq(schema.sessions.id, id)))[0]!.rigour
+		const freeform = await made("core:ruleset/freeform@1")
+		const errors: unknown[] = []
+		await sessionsUpdateHandler
+			.handler(fakeSocket(ownerId), { session: { id: freeform, name: "Renamed", rigour: "mechanics" } } as any, (e: string, d: unknown) => {
+				if (e.endsWith(":error")) errors.push(d)
+			})
+			.catch((e: Error) => errors.push(e.message))
+		expect(JSON.stringify(errors)).toContain("This genre plays Words only.")
+		expect(await rigourOf(freeform)).toBe("prose")
+		const [unrenamed] = await db.select({ name: schema.sessions.name }).from(schema.sessions).where(eq(schema.sessions.id, freeform))
+		expect(unrenamed!.name).toBe("Narrowed")
+		const dice = await made(VIS_ITINERIS)
+		await sessionsUpdateHandler.handler(fakeSocket(ownerId), { session: { id: dice, rigour: "mechanics" } } as any, () => {})
+		expect(await rigourOf(dice)).toBe("mechanics")
+	})
+
+	it("sessions:update does not set the session type: it is fixed at creation", async () => {
+		const { sessionsUpdateHandler } = await import("./sessions")
+		const [made] = await db
+			.insert(schema.sessions)
+			.values({ userId: ownerId, isGroup: false, name: "Typed", genreId: "core:genre/story", sessionType: "story" } as any)
+			.returning()
+		await sessionsUpdateHandler.handler(fakeSocket(ownerId), { session: { id: made!.id, name: "Typed again", sessionType: "assistant" } } as any, () => {})
+		const [row] = await db.select({ name: schema.sessions.name, sessionType: schema.sessions.sessionType }).from(schema.sessions).where(eq(schema.sessions.id, made!.id))
+		expect(row!.name).toBe("Typed again")
+		expect(row!.sessionType).toBe("story")
+	})
+
 	it("a How strict a layer locks is refused mid-session in a sentence (Rule Based); the same value is no change", async () => {
 		const { sessionsUpdateHandler } = await import("./sessions")
 		const [preset] = await db
@@ -213,7 +253,7 @@ describe("the form's Rules and How strict", () => {
 			.where(eq(schema.sessionPresets.seedKey, "core-story-rule-based"))
 		const [made] = await db
 			.insert(schema.sessions)
-			.values({ userId: ownerId, isGroup: false, name: "Locked strictness", genreId: "core:genre/story", presetId: preset!.id, rigour: "scripts" } as any)
+			.values({ userId: ownerId, isGroup: false, name: "Locked strictness", genreId: "core:genre/story", primaryRuleset: VIS_ITINERIS, presetId: preset!.id, rigour: "scripts" } as any)
 			.returning()
 		const id = made!.id
 		const errors: unknown[] = []

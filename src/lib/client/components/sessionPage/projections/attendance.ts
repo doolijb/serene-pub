@@ -9,8 +9,8 @@
  * in a `$derived` and sets it under `SESSION_ATTENDANCE_KEY`; the widget
  * wire posts it to a widget that reads `attendance`, and to no other (R75).
  *
- * Who writes as whom is the persona card's owner (`persona.userId`) — a
- * persona is a character a person voices, and the card is theirs — read off
+ * Who writes as whom is the seat's person (`session_personas.user_id`); a
+ * seat with none reads its card's owner (`persona.userId`) — read off
  * the session payload as a string (`personaOwnersOf`), so a streamed chunk,
  * which replaces the session object and moves no persona, moves nothing here.
  */
@@ -53,7 +53,7 @@ export function personaOwnersOf(
 				pairs.push(`${owner}:-:${own}`)
 			continue
 		}
-		const userId = seat.persona?.userId
+		const userId = seat.userId ?? seat.persona?.userId
 		if (typeof userId !== "number") continue
 		// The card the seat voices is the persona's, as listed.
 		const ref = seatRefOf({ ...seat, personaId }, "player")

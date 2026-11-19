@@ -472,7 +472,7 @@ describe("Apply: a merged day", () => {
 		expect((await entryRow(fresh.id))!.lorebookId).toBe(w.book.id)
 	})
 
-	it("is the lorebook owner's alone", async () => {
+	it("needs the session's owner, and that owner must be able to write the lorebook", async () => {
 		const w = await world()
 		const m = await messageIn(w.memberSession.id)
 		await ownDay(w.memberSession.id, DAY, "Theirs.", m.id)
@@ -482,16 +482,15 @@ describe("Apply: a merged day", () => {
 				userId: w.member.id
 			})
 		).rejects.toThrow("Only the lorebook's owner can apply changes to it.")
-		const done = await (
-			await lore()
-		).applyOverlayItems(asDb(), {
-			sessionId: w.memberSession.id,
-			userId: w.user.id
-		})
-		expect(done.mergedDays).toHaveLength(1)
-		expect((await entryRow(w.loreDay.id))!.content).toBe(
-			"Lore day.\n\nTheirs."
+		await expect(
+			(await lore()).applyOverlayItems(asDb(), {
+				sessionId: w.memberSession.id,
+				userId: w.user.id
+			})
+		).rejects.toThrow(
+			"Only the session's owner can apply its changes or take them back."
 		)
+		expect((await entryRow(w.loreDay.id))!.content).toBe("Lore day.")
 	})
 
 	it("keeps the day held when the repoint would make a link say the same thing twice", async () => {

@@ -34,6 +34,10 @@
  *    `user_id` — nobody else's, not even the session owner's, on the same
  *    terms as a persona's line (the same ruling).
  *
+ * A line's seat is resolved within the line's own kind, departed seats
+ * included: a person's line keeps its person's right after the seat moves to
+ * the AI-played group, and an AI line is never judged by a player seat.
+ *
  * The client's `canControlMessage` (`routes/sessions/[id]/+page.svelte`)
  * mirrors every branch of this; the server refuses regardless.
  *
@@ -68,19 +72,23 @@ async function ownsCharacter(
 }
 
 /**
- * Whether the person acts for the seat of this session a speaker reference
- * resolves to (`seatOf`): the person who **seated** a character seat, the
+ * Whether the person acts for the seat of this session the line resolves to
+ * (`seatOf`), found only among seats of the line's own kind, departed seats
+ * included: a person's line among player seats, an AI line among character
+ * seats; a stamp of the other kind is ignored. The person who **seated** a character seat, the
  * player of a player seat (owner ruling 2026-11-05: "The person who seated
  * it"; plan §33.4) — `seatActorOf`. Only where that is unset is the owner of
  * the seat's member's ACTIVE card on the reading the judge (then the seat's
- * own card). A card no seat holds here any more is judged by the message's
- * own card.
+ * own card). A card no seat of the line's kind holds here is judged by the
+ * message's own card.
  */
 async function ownsSeatedCard(
 	db: Db,
 	sessionId: number,
 	cardId: number,
 	userId: number,
+	/** The line's kind: a person's line (`player`) or an AI line (`character`). */
+	kind: "character" | "player",
 	/**
 	 * ⏳ The seat the line's stamp names (`metadata.speaker`, member form once
 	 * the flip is on): read before the card, so a persona whose card also sits
@@ -91,9 +99,10 @@ async function ownsSeatedCard(
 	const { seatOf, seatActorOf } = await import("$lib/server/sessions/seats")
 	const named =
 		memberFormOn() && typeof stamped === "string" && /^(player-seat|seated-member):\d+$/.test(stamped)
-			? await seatOf(db, sessionId, stamped)
+			? await seatOf(db, sessionId, stamped, { kind })
 			: null
-	const seat = named ?? (await seatOf(db, sessionId, `character:${cardId}`))
+	const seat =
+		named ?? (await seatOf(db, sessionId, `character:${cardId}`, { kind }))
 	if (!seat) return ownsCharacter(db, cardId, userId)
 	return (await seatActorOf(db, sessionId, seat)) === userId
 }
@@ -200,6 +209,7 @@ export async function canActOnMessage(
 			message.sessionId,
 			message.personaId,
 			userId,
+			"player",
 			(message.metadata as { speaker?: unknown } | null)?.speaker
 		)
 
@@ -210,19 +220,23 @@ export async function canActOnMessage(
 			message.sessionId,
 			message.characterId,
 			userId,
+			"character",
 			(message.metadata as { speaker?: unknown } | null)?.speaker
 		)
 	}
 
 	// 🚧 A card-less character seat's line (`seated-member:<id>`, owner ruling
 	// 2026-11-05 "Still theo"): the owner's, else the person who seated it —
-	// `seatOf` answers the live seat, else the departed one. A card-less
+	// the character seat holding the member, live else departed, never a
+	// player seat. A card-less
 	// PLAYER line (`player-seat:<id>`) is not this: it falls through.
 	const speaker = (message.metadata as { speaker?: unknown } | null)?.speaker
 	if (typeof speaker === "string" && speaker.startsWith("seated-member:") && !message.isNarratorResponse) {
 		if (access.isOwner) return true
 		const { seatOf, seatActorOf } = await import("$lib/server/sessions/seats")
-		const seat = await seatOf(db, message.sessionId, speaker)
+		const seat = await seatOf(db, message.sessionId, speaker, {
+			kind: "character"
+		})
 		return seat != null && (await seatActorOf(db, message.sessionId, seat)) === userId
 	}
 

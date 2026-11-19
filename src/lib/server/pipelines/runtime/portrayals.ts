@@ -49,7 +49,7 @@ import { parseSeatRef, seatOf } from "$lib/server/sessions/seats"
 import { memberFormOn } from "$lib/server/state/memberForm"
 import { hostSeatRefOf } from "$lib/server/pipelines/prompt/seatCards"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, eq, inArray, isNull, isNotNull, or } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, isNotNull, or, sql } from "drizzle-orm"
 import { sessionDeclaredEnvoys } from "$lib/server/pipelines/entities/envoys"
 import {
 	formatParticipantRef,
@@ -171,7 +171,8 @@ export async function resolvePortrayals(
 				db
 					.select({
 						characterId: schema.sessionPersonas.personaId,
-						ownerId: schema.characters.userId
+						// The seat's person; the card's owner only when the seat names nobody.
+						ownerId: sql<number>`coalesce(${schema.sessionPersonas.userId}, ${schema.characters.userId})`
 					})
 					.from(schema.sessionPersonas)
 					.innerJoin(
@@ -289,7 +290,7 @@ export async function resolvePortrayals(
 								.where(eq(schema.characters.id, seat.cardId))
 								.limit(1)
 						: []
-				const uid = card?.userId ?? seat.actingUserId
+				const uid = seat.actingUserId ?? card?.userId
 				if (uid != null && members.has(uid)) answer = PERSON(uid)
 			}
 			seatPortrayal.set(key, answer)
@@ -418,7 +419,13 @@ export async function ownPresence(
 			and(
 				eq(schema.sessionPersonas.sessionId, sessionId),
 				isNull(schema.sessionPersonas.removedAt),
-				eq(schema.characters.userId, userId)
+				or(
+					eq(schema.sessionPersonas.userId, userId),
+					and(
+						isNull(schema.sessionPersonas.userId),
+						eq(schema.characters.userId, userId)
+					)
+				)
 			)
 		)
 		.orderBy(

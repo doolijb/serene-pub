@@ -2,6 +2,7 @@
 // GGUF header and the real familyOf (the lane B file stubs both).
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import * as fs from "fs"
+import * as os from "os"
 import * as path from "path"
 import { audiocppSettings } from "$lib/server/db/schema"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
@@ -21,8 +22,6 @@ import {
 // DB setup under load
 vi.setConfig({ testTimeout: 60_000 })
 
-const SCRATCH =
-	"/tmp/claude-1000/-home-jody-github-serene-pub/564efcec-663a-419e-8efc-7e445249445f/scratchpad/vacpp/w3"
 const lists = {
 	entries: parseAudioYaml(audioText),
 	families: parseAudioFamiliesYaml(familiesText)
@@ -63,7 +62,7 @@ const put = (rel: string, content: Buffer | string = "x") => {
 const list = () => listAudioCppPackages(db as never, opts)
 
 beforeAll(async () => {
-	tmp = fs.mkdtempSync(path.join(SCRATCH, "pkgs-v-"))
+	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pkgs-v-"))
 	root = path.join(tmp, "audio")
 	db = await createTestDb()
 	await ensureAudioCppSettings(db as never)

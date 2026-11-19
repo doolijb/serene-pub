@@ -49,6 +49,17 @@ const session = {
 }
 
 describe("personaOwnersOf", () => {
+
+	test("a seat's own person wins over its card's owner; none reads the card's owner", () => {
+		expect(
+			personaOwnersOf({
+				sessionPersonas: [
+					{ removedAt: null, personaId: 8, userId: 2, persona: { id: 8, userId: 1 } },
+					{ removedAt: null, personaId: 9, userId: null, persona: { id: 9, userId: 1 } }
+				]
+			})
+		).toBe("2:8 1:9")
+	})
 	test("each seated persona with its card's owner, in seat order — one string", () => {
 		expect(personaOwnersOf(session)).toBe("1:8 2:9 1:10")
 		expect(personaOwnersOf(undefined)).toBe("")

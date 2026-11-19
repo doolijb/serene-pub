@@ -42,7 +42,19 @@ import { v4 as uuidv4 } from "uuid"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { ComposedError } from "$lib/server/connections/visibility"
+import {
+	forPeople,
+	peopleSentenceOf
+} from "$lib/server/pipelines/runtime/host.types"
 import { persistGenerationErrorRow } from "./generationStatus"
+import {
+	haltedAtModelCall,
+	plainReplyFailure,
+	receiptHaltFor,
+	receiptPeopleSentence,
+	haltExplanationFor,
+	haltStepShownTo
+} from "$lib/server/pipelines/runtime/haltExplanation"
 import { turnDirectionText } from "$lib/server/sessions/turnDirection"
 import { previewProviders, providerSteps } from "$lib/server/pipelines/runtime/specShape"
 import { announceStateChanges } from "$lib/server/state/announce"
@@ -373,7 +385,10 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				socket.io,
 				sessionId,
 				messageId,
-				new ComposedError(reason),
+				// Every reason `refuse` is handed is the surface's own sentence
+				// (genre unavailable, archived, session not found) and names no
+				// plumbing: it is the row's text.
+				forPeople(new ComposedError(reason), reason),
 				{ userId }
 			)
 		return { ok: false, error: reason, shown: messageId !== undefined }
@@ -688,7 +703,19 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				socket.io,
 				sessionId,
 				messageId,
-				new ComposedError(haltExplanation(receipt) ?? "The turn produced no reply."),
+				receiptPeopleSentence(receipt) !== undefined
+					? forPeople(
+							new ComposedError(receiptPeopleSentence(receipt)!),
+							receiptPeopleSentence(receipt)
+						)
+					: haltedAtModelCall(receipt)
+						? new Error(
+								haltExplanation(receipt) ?? "The turn produced no reply."
+							)
+						: forPeople(
+								new ComposedError(plainReplyFailure()),
+								plainReplyFailure()
+							),
 				{ userId }
 			)
 		// ⚠ There is no `nobodyDue` any more (PLAN-turn-order §7). A reply
@@ -698,8 +725,12 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		if (receipt.outcome !== "ok")
 			return {
 				ok: false,
-				error:
-					haltExplanation(receipt) ?? "The turn produced no reply.",
+				error: receiptHaltFor(
+					socket.user,
+					"reply",
+					receipt,
+					haltExplanation(receipt) ?? "The turn produced no reply."
+				),
 				// The run-end hook failed the row the placeholder made, if the
 				// run got that far; a verb's row was there to fail either way.
 				shown:
@@ -725,12 +756,17 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		// run-end hook, which fires on a throw too; a verb's row that the run
 		// never reached is failed here, and a fresh turn answers the trigger.
 		console.error("[runReply] the reply could not run:", err)
+		// A `ComposedError` reads as its words only to an administrator, or
+		// when its raise site marked them for people; anyone else reads the
+		// plain sentence and the suggestion.
 		const reason =
 			err instanceof ComposedError
-				? err.message
+				? peopleSentenceOf(err) !== undefined
+					? err.message
+					: haltExplanationFor(socket.user, "reply", err.message)
 				: err instanceof Error &&
 					  /no published version/.test(err.message)
-					? err.message
+					? haltExplanationFor(socket.user, "reply", err.message)
 					: "The reply could not be generated."
 		caughtReason = reason
 		// Defensively, whatever the hook did: the row this run was filling —
@@ -745,7 +781,17 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				socket.io,
 				sessionId,
 				row,
-				new ComposedError(reason),
+				// A `ComposedError` goes to the row as raised (marked: its
+				// words; unmarked: the plain sentence, its words in the
+				// administrator's detail); a caught foreign error is the plain
+				// sentence, its message kept in the server log. `reason` is
+				// what the presser's refusal and progress card read.
+				err instanceof ComposedError
+					? err
+					: forPeople(
+							new ComposedError(plainReplyFailure()),
+							plainReplyFailure()
+						),
 				{ userId }
 			)
 			return { ok: false, error: reason, shown: true }
@@ -764,8 +810,16 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 			? "cancelled"
 			: (receipt?.outcome ?? "err")
 		// The step it halted at, by its heading — never the node key (2026-10-16).
+		const said =
+			(receipt && haltExplanation(receipt)) ??
+			caughtReason ??
+			"The turn produced no reply."
+		const stated = receipt
+			? receiptHaltFor(socket.user, "reply", receipt, said)
+			: said
+		const stepShown = !!receipt && haltStepShownTo(socket.user, receipt)
 		const haltStep =
-			outcome === "halt" && receipt?.haltNodeKey
+			outcome === "halt" && receipt?.haltNodeKey && stepShown
 				? await (
 						await import("$lib/server/pipelines/runtime/haltStep")
 					).haltStepOf(db, specId, receipt.haltNodeKey)
@@ -777,14 +831,9 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 			outcome,
 			...(outcome === "cancelled" ? { cancelled: true } : {}),
 			...(outcome === "err" || outcome === "halt"
-				? {
-						error:
-							(receipt && haltExplanation(receipt)) ??
-							caughtReason ??
-							"The turn produced no reply."
-					}
+				? { error: stated }
 				: {}),
-			...(outcome === "halt" && receipt?.haltNodeKey
+			...(outcome === "halt" && receipt?.haltNodeKey && stepShown
 				? { haltNodeKey: receipt.haltNodeKey }
 				: {}),
 			...(haltStep ? { haltStep } : {})

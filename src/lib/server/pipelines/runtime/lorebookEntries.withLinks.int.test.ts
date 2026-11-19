@@ -408,6 +408,7 @@ describe("core:query/lorebook-entries@1's binding", () => {
 				(await coreBindings()["core:query/lorebook-entries@1"]!(
 					{ scope: { sessionId, currentCharacterId: null }, params },
 					{
+						log: () => {},
 						read: async (
 							_: string,
 							query: Record<string, unknown>
@@ -427,6 +428,10 @@ describe("core:query/lorebook-entries@1's binding", () => {
 		expect(byName(on.main, "The Guardroom").links.length).toBe(2)
 		await list({ entryTypes: [LOCATION_TYPE_ID] })
 		expect(asked.at(-1)).toMatchObject({ withLinks: false })
+		// The knowledge filter is on unless the pipeline says `false`.
+		expect(asked.at(-1)).toMatchObject({ knownToSpeaker: true })
+		await list({ entryTypes: [LOCATION_TYPE_ID], knownToSpeaker: false })
+		expect(asked.at(-1)).toMatchObject({ knownToSpeaker: false })
 	}, 60_000)
 })
 

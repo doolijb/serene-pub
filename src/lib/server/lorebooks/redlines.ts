@@ -1,11 +1,11 @@
 /**
- * 🚧 **Redlines** — an **Edit history** (owner, 2026-11-13/14), of three
- * subjects: an entry, a cast version, a card version. Every save that changes
+ * 🚧 **Redlines** — an **Edit history** (owner, 2026-11-13/14), of four
+ * subjects: an entry, a cast version, a card version, a scene's cast. Every save that changes
  * an entry's name, content, keys or typed fields, a dated change's fields, or
  * a version's counted profile keys (`VERSION_REDLINE_KEYS`) keeps what each
  * changed key held before and after, when, and who (`lore_redlines`). An
  * entry's and a cast version's rows are the lorebook's; a card version's are
- * the card owner's.
+ * the card owner's; a scene's are the lorebook's.
  *
  * - **One writer.** `recordRedline` is the only insert; every writer of an
  *   entry's text calls it (or `recordEntryRedline`) on the handle of the
@@ -44,7 +44,8 @@ export const REDLINE_CAUSES = [
 	"apply",
 	"revert",
 	"take-back",
-	"restore"
+	"restore",
+	"scene-compiler"
 ] as const
 export type RedlineCause = (typeof REDLINE_CAUSES)[number]
 
@@ -126,11 +127,19 @@ export async function recordRedline(
 				/** The dated change edited; null or absent = the entry itself. */
 				amendmentId?: number | null
 				characterVersionId?: never
+				sceneId?: never
 		  }
 		| {
 				characterVersionId: number
 				entryId?: never
 				amendmentId?: never
+				sceneId?: never
+		  }
+		| {
+				sceneId: number
+				entryId?: never
+				amendmentId?: never
+				characterVersionId?: never
 		  }
 	)
 ): Promise<number | null> {
@@ -174,6 +183,7 @@ export async function recordRedline(
 		.values({
 			entryId: input.entryId ?? null,
 			characterVersionId: input.characterVersionId ?? null,
+			sceneId: input.sceneId ?? null,
 			amendmentId: input.amendmentId ?? null,
 			changes,
 			cause: input.cause,
@@ -184,7 +194,9 @@ export async function recordRedline(
 		db,
 		input.entryId != null
 			? { entryId: input.entryId }
-			: { characterVersionId: input.characterVersionId! }
+			: input.sceneId != null
+				? { sceneId: input.sceneId }
+				: { characterVersionId: input.characterVersionId! }
 	)
 	return row?.id ?? null
 }
@@ -195,7 +207,10 @@ export async function recordRedline(
  */
 async function keepNewest(
 	db: Db,
-	subject: { entryId: number } | { characterVersionId: number }
+	subject:
+		| { entryId: number }
+		| { characterVersionId: number }
+		| { sceneId: number }
 ): Promise<void> {
 	const rows = await db
 		.select({ id: T.id, userId: T.userId })
@@ -203,7 +218,9 @@ async function keepNewest(
 		.where(
 			"entryId" in subject
 				? eq(T.entryId, subject.entryId)
-				: eq(T.characterVersionId, subject.characterVersionId)
+				: "sceneId" in subject
+					? eq(T.sceneId, subject.sceneId)
+					: eq(T.characterVersionId, subject.characterVersionId)
 		)
 		.orderBy(desc(T.id))
 	if (rows.length <= REDLINES_KEPT) return
@@ -552,7 +569,7 @@ export async function putBackVersionRedlines(
 
 // ── Clearing and counting ───────────────────────────────────────────────────
 
-/** Which rows: one entry's, one cast or card version's, or every entry's and cast version's of a lorebook. */
+/** Which rows: one entry's, one cast or card version's, or a lorebook's (its entries', cast versions' and scenes'). */
 export type RedlineScope =
 	| { entryId: number }
 	| { characterVersionId: number }
@@ -572,6 +589,10 @@ const scopeWhere = (scope: RedlineScope) =>
 					inArray(
 						T.characterVersionId,
 						sql`(select ${schema.characterVersions.id} from ${schema.characterVersions} where ${schema.characterVersions.lorebookId} = ${scope.lorebookId})`
+					),
+					inArray(
+						T.sceneId,
+						sql`(select ${schema.scenes.id} from ${schema.scenes} where ${schema.scenes.lorebookId} = ${scope.lorebookId})`
 					)
 				)
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * The pipeline library — the admin workspace.
@@ -463,10 +464,9 @@
 	 * again. Copying hands it to the person, who knows where it belongs now.
 	 */
 	async function copyArchived(text: string) {
-		try {
-			await navigator.clipboard.writeText(text)
+		if (await copyText(text)) {
 			notify.success({ title: "Copied to the clipboard" })
-		} catch {
+		} else {
 			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})
@@ -1019,6 +1019,7 @@
 													? 18
 													: 8}
 											readonly={row.isImmutable}
+											variableLayout={tab !== "templates"}
 											value={d.source}
 											scope={scopeFor(tab, poolId, pools)}
 											variableLayouts={tab === "templates"

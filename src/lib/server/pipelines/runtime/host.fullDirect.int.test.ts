@@ -592,3 +592,47 @@ describe("what stays in the notes", () => {
 		expect(await entriesIn(w.book.id)).toHaveLength(1)
 	})
 })
+
+describe("a link on an attached lorebook hangs on a history entry, not a date", () => {
+	const linkWorld = async (dated: boolean) => {
+		const w = await world()
+		let newest: number | null = null
+		if (dated)
+			for (const fields of [
+				{ year: 3, month: 2, day: 9 },
+				{ year: 7, month: 4, day: 1 }
+			])
+				newest = (
+					await db
+						.insert(schema.lorebookEntries)
+						.values({
+							lorebookId: w.book.id,
+							typeId: HISTORY_TYPE_ID,
+							typeVersion: 1,
+							position: ++n,
+							title: null,
+							content: "…",
+							fields
+						})
+						.returning()
+				)[0]!.id
+		await messageIn(w.session.id)
+		const h = await hostOf(w)
+		const cellar: any = await h.commit!(roomIn("The Cellar"), CREATE)
+		const hall: any = await h.commit!(roomIn("The Hall"), CREATE)
+		await h.commit!({ from: cellar.id, to: hall.id }, LINK)
+		return { w, newest, links: await linksIn(w.book.id) }
+	}
+
+	it("dated history and no clock: the link hangs on the newest history entry", async () => {
+		const { newest, links } = await linkWorld(true)
+		expect(links).toHaveLength(1)
+		expect(links[0]!.historyEntryId).toBe(newest)
+	})
+
+	it("undatable (no dated row, no clock): the link hangs on nothing", async () => {
+		const { links } = await linkWorld(false)
+		expect(links).toHaveLength(1)
+		expect(links[0]!.historyEntryId).toBeNull()
+	})
+})

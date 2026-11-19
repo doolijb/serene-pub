@@ -86,6 +86,7 @@ async function world(
 	if (opts.own) {
 		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
 		book = await ownBookFor(db as unknown as Db, session!.id)
+		await db.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, book.id)) // the notes state their timeline
 	} else {
 		;[book] = await db.insert(schema.lorebooks).values({ userId: user.id, name: `Book ${suffix}` }).returning()
 	}
@@ -348,9 +349,29 @@ describe("update-lore-entry moving a history entry's date", () => {
 	})
 })
 
-describe("under Full, a change to an attached lorebook's history entry is written in place", () => {
-	it("moves its date through the socket's date checks, and refuses a date another entry holds", async () => {
+describe("under Full, a change to an attached lorebook's history entry (dated history, no clock) takes the dated-version path", () => {
+	it("refuses to move its date, and changes nothing", async () => {
 		const w = await world()
+		await w.message()
+		const one = await history(w.book.id, { year: 2, month: 1, day: 1 }, { content: "One." })
+		const two = await history(w.book.id, { year: 4, month: 1, day: 1 }, { content: "Two." })
+		const h = await w.host()
+		await expect(
+			h.commit!({ entry: one.id, content: "One, revised.", fields: { year: 3, month: 1, day: 1 } }, UPDATE)
+		).rejects.toThrow(/keeps its date in the lorebook/)
+		expect((await entry(one.id))!.content).toBe("One.")
+		expect((await entry(one.id))!.fields).toMatchObject({ year: 2, month: 1, day: 1 })
+		expect((await entry(two.id))!.content).toBe("Two.")
+		expect((await entry(two.id))!.fields).toMatchObject({ year: 4 })
+		expect(
+			(await db.select().from(schema.entryAmendments)).filter((r) => r.entryId === one.id || r.entryId === two.id)
+		).toHaveLength(0)
+	})
+})
+
+describe("under Full, a change to the session's own notes' history entry is written in place", () => {
+	it("moves its date through the socket's date checks, and refuses a date another entry holds", async () => {
+		const w = await world({ own: true })
 		await w.message()
 		const one = await history(w.book.id, { year: 2, month: 1, day: 1 }, { content: "One." })
 		const two = await history(w.book.id, { year: 4, month: 1, day: 1 }, { content: "Two." })

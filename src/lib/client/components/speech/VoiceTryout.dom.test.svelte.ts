@@ -122,6 +122,7 @@ describe("VoiceTryout", () => {
 
 	test("the seed shows as a person chip and Copy confirms inline, no toast", async () => {
 		const written: string[] = []
+		vi.stubGlobal("isSecureContext", true)
 		Object.defineProperty(navigator, "clipboard", {
 			value: { writeText: async (t: string) => void written.push(t) },
 			configurable: true
@@ -133,6 +134,7 @@ describe("VoiceTryout", () => {
 		expect(written).toEqual(["355260212"])
 		expect(document.body.textContent).toContain("Copied")
 		expect(toasts.length).toBe(0)
+		vi.unstubAllGlobals()
 	})
 
 	test("Re-roll spins the dice once and the spin clears on animationend", async () => {

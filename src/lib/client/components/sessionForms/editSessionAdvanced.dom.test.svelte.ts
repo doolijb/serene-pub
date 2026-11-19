@@ -326,16 +326,84 @@ describe("Edit Session — advanced controls on the Settings tab", () => {
 		const o = { advanced: false, viewerId: 2, pipelines: false }
 		openForm(o)
 		await feed(o)
-		expect(lines()).toBe(0)
-		expect(markers()).toEqual(ALL_OFF)
+		// A guest has no Settings tab at all (G1, 2026-11-16).
+		expect(panel()).toBeNull()
+		expect(asked("sessions:pipelines")).toBe(0)
 	})
 
-	test("guest, off, with session pipelines: one line", async () => {
+	test("guest, off, not admin, with session pipelines: no Settings panel, none asked for", async () => {
 		const o = { advanced: false, viewerId: 2 }
 		openForm(o)
 		await feed(o)
-		expect(lines()).toBe(1)
-		expect(markers().pipelines).toBe(false)
+		expect(panel()).toBeNull()
+		expect(asked("sessions:pipelines")).toBe(0)
+	})
+
+	test("guest, on, not admin, with session pipelines: still no Pipelines section (D58)", async () => {
+		const o = { advanced: true, viewerId: 2 }
+		openForm(o)
+		await feed(o)
+		expect(panel()).toBeNull()
+		expect(document.body.textContent).not.toContain("Changes here apply to this session only.")
+		expect(asked("sessions:pipelines")).toBe(0)
+	})
+
+	test("an administrator who is a guest, on, with session pipelines: no Pipelines section, no Session data, none asked for (G6)", async () => {
+		const o = { advanced: true, viewerId: 2, isAdmin: true }
+		openForm(o)
+		await feed(o)
+		expect(panel()).toBeNull()
+		expect(asked("sessions:pipelines")).toBe(0)
+	})
+
+	test("an administrator who is a guest, off: no line, no Pipelines section, no Session data (G6)", async () => {
+		const o = { advanced: false, viewerId: 2, isAdmin: true }
+		openForm(o)
+		await feed(o)
+		expect(panel()).toBeNull()
+	})
+
+	test("an owner who is also an administrator, on: still gets Pipelines and Session data", async () => {
+		const o = { advanced: true, isAdmin: true }
+		openForm(o)
+		await feed(o)
+		expect(markers().pipelines).toBe(true)
+		expect(markers().annex).toBe(true)
+	})
+
+	test("a pipeline setting saved in the settings rows makes each Pipelines card re-read its view", async () => {
+		const o = { advanced: true }
+		openForm(o)
+		await feed(o)
+		const field = {
+			id: JSON.stringify(["pipeline", "k", "n", "params", "enabled"]),
+			address: { kind: "pipeline", registrationKey: "k", nodeKey: "n", slot: "params", path: "enabled" },
+			label: "Pick sprites",
+			control: "boolean",
+			value: false,
+			inherited: true,
+			source: "session",
+			reach: "owner",
+			editable: true
+		}
+		const form = {
+			sessionId: 7,
+			viewer: "owner",
+			groups: [{ kind: "registration", id: "g", heading: "Reply", pipeline: "respond", registrationKeys: ["k"], fields: [field] }]
+		}
+		deliver("sessions:settingsForm", form, true)
+		await tick()
+		flushSync()
+		const before = emitted.length
+		const box = panel().querySelector(`input[type="checkbox"][role="switch"]`) as HTMLInputElement
+		box.checked = true
+		box.dispatchEvent(new Event("change", { bubbles: true }))
+		flushSync()
+		const req = emitted.filter(([e]) => e === "sessions:updateSetting").at(-1)![1]
+		deliver("sessions:updateSetting", { requestId: req.requestId, form })
+		await tick()
+		flushSync()
+		expect(emitted.slice(before).filter(([e, d]) => e === "pipelines:get" && d.slug === "respond" && d.sessionId === 7)).toHaveLength(1)
 	})
 
 	test("flipping the switch redraws in place: controls appear, the line goes", async () => {
@@ -452,17 +520,13 @@ describe("Edit Session — the reading, read-only", () => {
 		expect(clock.includes("Ashday, 2 Thaw, Year 1 AR")).toBe(true)
 	})
 
-	test("guest, off: the owner chooses, a generic branch, nothing asked", async () => {
+	test("guest, off: no reading at all, nothing asked", async () => {
 		const o = { advanced: false, viewerId: 2 }
 		openForm(o)
 		await feed(o, READING)
 		expect(asked("lorebooks:storyTime")).toBe(0)
 		expect(asked("lorebooks:lines")).toBe(0)
-		const reading = testId("session-lorebook-reading")?.textContent ?? ""
-		expect(reading.includes(GUEST_SENTENCE)).toBe(true)
-		expect(reading.includes(OWNER_SENTENCE)).toBe(false)
-		expect(reading.includes("A branch of this lorebook")).toBe(true)
-		const clock = testId("session-story-clock-readonly")?.textContent ?? ""
-		expect(clock.includes("Year 1, Mo. 1, Day 2")).toBe(true)
+		expect(panel()).toBeNull()
+		expect(document.querySelector('[data-testid="session-lorebook-reading"]')).toBeNull()
 	})
 })

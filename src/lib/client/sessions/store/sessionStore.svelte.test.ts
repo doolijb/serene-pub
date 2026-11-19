@@ -255,6 +255,33 @@ describe("scenes and runs and genre", () => {
 		expect(s.runsOf(1)).toEqual([])
 	})
 
+	it("a registered run's frames carry name, since, readsMessageId, parked and mayStop; a relay frame keeps them", () => {
+		const s = opened()
+		const st = { i18n: { en: "Working" } }
+		s.mergeRunStatus({ sessionId: 1, runId: "x", kind: "action", status: st, name: "Rest", since: 5, readsMessageId: 9, mayStop: true } as any)
+		expect(s.runsOf(1)[0]).toMatchObject({ name: "Rest", since: 5, readsMessageId: 9, mayStop: true })
+		expect(s.runsOf(1)[0]!.parked).toBeUndefined()
+		s.mergeRunStatus({ sessionId: 1, runId: "x", kind: "action", status: st, name: "Rest", since: 5, readsMessageId: 9, parked: true, mayStop: true } as any)
+		expect(s.runsOf(1)[0]!.parked).toBe(true)
+		// A registered frame without `parked` clears it; a relay frame (no `since`) leaves the rest as held.
+		s.mergeRunStatus({ sessionId: 1, runId: "x", kind: "action", status: st, name: "Rest", since: 5, mayStop: true } as any)
+		expect(s.runsOf(1)[0]!.parked).toBeUndefined()
+		s.mergeRunStatus({ sessionId: 1, runId: "x", kind: "action", status: { i18n: { en: "Later" } } } as any)
+		expect(s.runsOf(1)[0]).toMatchObject({ name: "Rest", since: 5, mayStop: true })
+	})
+
+	it("a holding action's working frames list it until its end frame", () => {
+		const s = opened()
+		const working = { i18n: { en: "working" } }
+		const frame = { sessionId: 1, runId: "x", kind: "action", status: working, name: "Rest", since: 5, mayStop: true }
+		s.mergeRunStatus(frame as any)
+		expect(s.runsOf(1)[0]).toMatchObject({ runId: "x", status: working, since: 5 })
+		s.mergeRunStatus({ ...frame } as any)
+		expect(s.runsOf(1).map((r) => r.runId)).toEqual(["x"])
+		s.mergeRunStatus({ ...frame, status: null } as any)
+		expect(s.runsOf(1)).toEqual([])
+	})
+
 	it("mergeGenreOf goes undefined, then null, then a row", () => {
 		const s = opened()
 		expect(s.genreOf(1)).toBeUndefined()

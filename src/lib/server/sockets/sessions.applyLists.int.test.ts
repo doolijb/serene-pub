@@ -172,7 +172,7 @@ async function world() {
 const noEmit = () => {}
 
 describe("the two lists: who reads, who presses", () => {
-	it("a member reads both with mayApply false, the owner with true, a stranger is refused", async () => {
+	it("a guest reads nothing, the owner reads both with mayApply true, a stranger is refused", async () => {
 		const {
 			sessionsOverlayItemsHandler: items,
 			sessionsAppliedBatchesHandler: batches
@@ -183,18 +183,19 @@ describe("the two lists: who reads, who presses", () => {
 			{ sessionId: w.session.id },
 			noEmit
 		)
-		expect(asMember).toMatchObject({
+		expect(JSON.parse(JSON.stringify(asMember))).toEqual({
 			sessionId: w.session.id,
+			items: [],
 			mayApply: false,
-			appliesItself: true
+			appliesItself: false
 		})
-		expect(asMember.items).toHaveLength(3)
 		const asOwner = await items.handler(
 			socketOf(w.owner.id, {}),
 			{ sessionId: w.session.id },
 			noEmit
 		)
 		expect(asOwner).toMatchObject({ mayApply: true, appliesItself: true })
+		expect(asOwner.items).toHaveLength(3)
 		expect(
 			await batches.handler(
 				socketOf(w.member.id, {}),
@@ -267,16 +268,38 @@ describe("the two lists: who reads, who presses", () => {
 				userId: w.owner.id,
 				isPlayer: true
 			})
+		const asGuest = await items.handler(
+			socketOf(w.owner.id, {}),
+			{ sessionId: w.session.id },
+			noEmit
+		)
+		// The lorebook's owner in the session as a guest has no access to the notes' review (G2): the empty shape.
+		expect(JSON.parse(JSON.stringify(asGuest))).toEqual({
+			sessionId: w.session.id,
+			items: [],
+			mayApply: false,
+			appliesItself: false
+		})
+		const { sessionsAppliedBatchesHandler: batches } = await import("./sessions")
+		expect(
+			JSON.parse(JSON.stringify(await batches.handler(socketOf(w.owner.id, {}), { sessionId: w.session.id }, noEmit)))
+		).toEqual({ sessionId: w.session.id, batches: [], mayApply: false })
+		// The session's owner who does not own the lorebook reads the review but cannot Apply.
 		expect(
 			await items.handler(
-				socketOf(w.owner.id, {}),
+				socketOf(w.member.id, {}),
 				{ sessionId: w.session.id },
 				noEmit
 			)
-		).toMatchObject({
-			mayApply: true,
-			appliesItself: false
-		})
+		).toMatchObject({ mayApply: false, appliesItself: false })
+		expect((await items.handler(socketOf(w.member.id, {}), { sessionId: w.session.id }, noEmit)).items).toHaveLength(3)
+		// Any other guest gets nothing.
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const other = await createTestUser(db, `lists-other-${++n}`)
+		await db.insert(schema.sessionGuests).values({ sessionId: w.session.id, userId: other.id, isPlayer: true })
+		expect(
+			JSON.parse(JSON.stringify(await items.handler(socketOf(other.id, {}), { sessionId: w.session.id }, noEmit)))
+		).toEqual({ sessionId: w.session.id, items: [], mayApply: false, appliesItself: false })
 	})
 })
 
@@ -308,18 +331,20 @@ describe("Apply, Take back and the room", () => {
 		})
 		const seen = room.to(w.member.id, "sessions:overlayItems")
 		expect(seen).toHaveLength(1)
-		expect(seen[0]!.data).toMatchObject({
+		expect(seen[0]!.data).toEqual({
 			sessionId: w.session.id,
 			items: [],
-			mayApply: false
+			mayApply: false,
+			appliesItself: false
 		})
 		const lists = room.to(w.member.id, "sessions:appliedBatches")
 		expect(lists[0]!.data).toMatchObject({
 			sessionId: w.session.id,
 			mayApply: false
 		})
-		expect(lists[0]!.data.batches).toHaveLength(1)
-		expect(lists[0]!.data.batches[0]).toMatchObject({
+		expect(lists[0]!.data.batches).toEqual([])
+		const ownerLists = room.to(w.owner.id, "sessions:appliedBatches")
+		expect(ownerLists[0]!.data.batches[0]).toMatchObject({
 			batch: res.batch,
 			count: 3
 		})
@@ -376,7 +401,8 @@ describe("Apply, Take back and the room", () => {
 		)
 		expect(done).toEqual({ sessionId: w.session.id, batch, refused: null })
 		expect(await inBook()).toBe(heldBefore - 3)
-		const items = room.to(w.member.id, "sessions:overlayItems")
+		expect(room.to(w.member.id, "sessions:overlayItems")[0]!.data.items).toEqual([])
+		const items = room.to(w.owner.id, "sessions:overlayItems")
 		expect(items[0]!.data.items).toHaveLength(3)
 		expect(
 			room.to(w.member.id, "sessions:appliedBatches")[0]!.data.batches
@@ -433,10 +459,11 @@ describe("Apply, Take back and the room", () => {
 			sceneId: scene!.id,
 			io: room.io
 		})
-		const items = room.to(w.member.id, "sessions:overlayItems")
+		const items = room.to(w.owner.id, "sessions:overlayItems")
 		expect(items).toHaveLength(1)
 		expect(items[0]!.data.items).toHaveLength(1)
-		const batches = room.to(w.member.id, "sessions:appliedBatches")[0]!.data
+		expect(room.to(w.member.id, "sessions:overlayItems")[0]!.data.items).toEqual([])
+		const batches = room.to(w.owner.id, "sessions:appliedBatches")[0]!.data
 		expect(batches.batches).toHaveLength(1)
 		expect(batches.batches[0]).toMatchObject({
 			automatic: "scene-close",

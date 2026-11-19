@@ -16,7 +16,7 @@ const read = (rel: string) =>
 
 describe("sessions:triggerGenerateMessage is retired", () => {
 	test("the server registers no handler for it", () => {
-		const src = read("./sessions.ts")
+		const src = read("./sessions.turns.ts")
 		expect(src).not.toContain(`event: "${ALIAS}"`)
 		expect(src).not.toContain("triggerGenerateMessageHandler")
 		expect(src).toContain(`event: "sessions:fireTurn"`)

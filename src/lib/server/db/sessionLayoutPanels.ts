@@ -76,6 +76,7 @@
  * It is a boot step and not a migration, per the boot defaults-sync rule: it
  * reads shipped rows the reconcilers write, so it runs after both of them.
  */
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
 import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import { db } from "."
@@ -91,9 +92,6 @@ import {
 
 type Blob = Record<string, unknown>
 
-
-/** The genre a session answered to before, when its row is gone. */
-const FALLBACK_GENRE = "core:genre/story" // Story since 2026-10-19 (was Chat, now the assistant)
 
 const isObj = (v: unknown): v is Blob =>
 	!!v && typeof v === "object" && !Array.isArray(v)
@@ -150,7 +148,7 @@ async function completeRow(tx: Db, id: number): Promise<boolean> {
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, row.sessionId))
 		.limit(1)
-	const genreId = session?.genreId ?? FALLBACK_GENRE
+	const genreId = session?.genreId ?? STANDARD_GENRE_ID
 
 	// The base the page drew under this row, found as the server found it.
 	let preset: Blob = {}

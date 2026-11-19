@@ -514,7 +514,9 @@ describe("Q0-1: an answer the interview could not judge is never marked answered
 		} finally {
 			await db.update(schema.pipelineScripts).set({ source: row!.source }).where(eq(schema.pipelineScripts.id, row!.id))
 		}
-		expect(res?.error).toMatch(/the judge is out/)
+		// A script's own failure is detail: the presser, not an administrator,
+		// reads the plain words, never the script's message.
+		expect(res?.error).toBe("The action could not finish. An administrator can see the details.")
 		const { formStandingOf } = await import("$lib/server/notifications/openForm")
 		expect(await formStandingOf(db as any, sessionId, form.messageId, form.blocks[0].id)).toBe("open")
 		const todo = `session:${sessionId}/form:${form.messageId}/${form.blocks[0].id}`
@@ -837,7 +839,8 @@ describe("Q1-4: no false busy on Regenerate", () => {
 		runRegistry.start({ runId: "walk2-reply", userId: ownerId, sessionId, specId: "core:spec/x", kind: "reply" })
 		try {
 			const refused = await retake()
-			expect(refused?.error).toBe("wait for the reply to finish")
+			// 2026-11-16 (ss-7): the one sentence every held re-run action answers with.
+			expect(refused?.error).toBe("Wait for the reply to finish, or stop it first.")
 		} finally {
 			runRegistry.finish("walk2-reply")
 		}

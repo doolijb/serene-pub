@@ -36,7 +36,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs"
-import { join, relative, resolve } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import { describe, expect, test } from "vitest"
 
 const ROOT = resolve(__dirname, "../../../..")
@@ -53,6 +53,20 @@ const isAdapterDirSpecifier = (spec: string): boolean =>
 	/(?:\$lib\/server|\.\.?)\/(?:connectionAdapters|imageAdapters)\//.test(spec)
 
 /**
+ * Does this import, written in `file`, resolve into a server adapter directory?
+ * A relative specifier is judged by where it lands from the importing file, so
+ * `shared/speech/` reaching `../connectionAdapters/` (which is
+ * `shared/connectionAdapters/`) is not mistaken for the server directory.
+ */
+const resolvesToServerAdapterDir = (file: string, spec: string): boolean => {
+	if (!spec.startsWith(".")) return isAdapterDirSpecifier(spec)
+	const target = relative(ROOT, resolve(ROOT, dirname(file), spec))
+		.split("\\")
+		.join("/")
+	return ADAPTER_DIRS.some((d) => target.startsWith(`src/${d}/`))
+}
+
+/**
  * A CONCRETE adapter module — the thing that must stay lazy.
  *
  * BOTH halves are load-bearing. The name alone matches `getConnectionAdapter`
@@ -62,13 +76,19 @@ const isAdapterDirSpecifier = (spec: string): boolean =>
  * the rule mean "a class that speaks to a backend" rather than "a path that ends
  * in Adapter".
  *
+ * The loaders (`get*Adapter`: `getSpeechAdapter` and kin) are excluded by their
+ * lowercase `get` prefix, exactly: a concrete adapter class module is
+ * capitalised, so the exclusion cannot swallow one.
+ *
  * `BaseConnectionAdapter`, `BaseImageAdapter`, `types` and `jsonSchemaToGbnf`
  * also live in those directories and are deliberately excluded: they carry types
  * and pure helpers, pull no backend SDK, and server modules import them freely.
  */
 const isConcreteAdapter = (spec: string): boolean =>
 	isAdapterDirSpecifier(spec) &&
-	/\/(?!Base)[A-Za-z0-9]+Adapter$/.test(spec.replace(/\.(ts|js)$/, ""))
+	/\/(?!Base|get[A-Z])[A-Za-z0-9]+Adapter$/.test(
+		spec.replace(/\.(ts|js)$/, "")
+	)
 
 interface ImportSite {
 	/** Repo-relative, POSIX — what a failure message prints. */
@@ -149,7 +169,7 @@ describe("no client-reachable module may touch an adapter", () => {
 		const violations = ALL_IMPORTS.filter(
 			(i) =>
 				CLIENT_REACHABLE.some((p) => i.file.startsWith(p)) &&
-				isAdapterDirSpecifier(i.spec)
+				resolvesToServerAdapterDir(i.file, i.spec)
 		).map(
 			(i) =>
 				`${i.file} imports "${i.spec}". Adapter modules are server-only and must stay lazily loaded; ` +
@@ -354,6 +374,13 @@ describe("the eager load stays in one place", () => {
 	test("registry consumers are enumerated", () => {
 		const CONSUMERS = [
 			"src/lib/server/connectionAdapters/manifest.conformance.test.ts",
+			// The speech family's conformance walk: awaits every `speech` thunk,
+			// the way `manifest.conformance.test.ts` does for the other slots, in
+			// a Node test process. The one eager site for that slot.
+			"src/lib/server/connectionAdapters/speech.conformance.test.ts",
+			// The speech family's loader: one key lookup, one thunk awaited, the
+			// shape of `getTranscriptionAdapter`.
+			"src/lib/server/connectionAdapters/speech/getSpeechAdapter.ts",
 			// Awaits NO thunk. `adapterIO` reads `ADAPTER_REGISTRY[type]?.embedding`
 			// as a presence test — "does this text type also embed?" — and loads
 			// the one module it needs through `getEmbeddingAdapter`. Runs on the

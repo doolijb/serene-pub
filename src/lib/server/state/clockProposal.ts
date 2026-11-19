@@ -32,7 +32,8 @@ import {
 } from "$lib/server/state/write"
 import {
 	bookCalendarOf,
-	storyMoveStartOf
+	storyMoveStartOf,
+	UNDATED_MOVE_SENTENCE
 } from "$lib/server/state/storyTime"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import {
@@ -76,8 +77,8 @@ export function clockAskRefusal(asked: unknown): string | null {
  * Why this session's clock could not move by this step now, as the clock's
  * own sentence — or null when it could. A dry run of
  * `advanceSessionStoryClock`: no book, or a result that does not land. A
- * story with no clock and no present starts on its first day
- * (`storyMoveStartOf`), as every move does. Asked when the move is RESOLVED, so a proposal nothing
+ * story with no clock and no present returns the refusal sentence
+ * (`UNDATED_MOVE_SENTENCE`), as the move itself does. Asked when the move is RESOLVED, so a proposal nothing
  * could accept is never shown; an accept asks again, under its lock.
  */
 export async function clockMoveProblem(
@@ -105,7 +106,8 @@ export async function clockMoveProblem(
 	const book = row.lorebookId ?? (await attachedOrOwnBookOf(db, sessionId))
 	if (book == null) return `There is no session ${sessionId}.`
 	// Where every move starts, asked of the one reader the move itself uses.
-	const { start } = await storyMoveStartOf(db, sessionId, row)
+	const start = await storyMoveStartOf(db, sessionId, row)
+	if (!start) return UNDATED_MOVE_SENTENCE
 	const moved = advanceStoryTime(start, by, unit, await bookCalendarOf(db, book))
 	return moved.problem ?? null
 }

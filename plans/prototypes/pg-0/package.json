@@ -1,0 +1,11 @@
+{
+  "name": "pg-0-prototype",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pglite-old": "npm:@electric-sql/pglite@0.2.17",
+    "pglite-tools-old": "npm:@electric-sql/pglite-tools@0.2.4",
+    "@electric-sql/pglite": "0.5.15",
+    "@electric-sql/pglite-tools": "0.4.15"
+  }
+}

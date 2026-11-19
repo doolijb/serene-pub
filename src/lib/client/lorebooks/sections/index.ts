@@ -81,6 +81,12 @@ export type { DoorId, PoolSource, SectionDescriptor } from "./types"
 const FIRES_TAB: InspectorTab = { id: "fires", label: "Read in?" }
 const REFERENCES_TAB: InspectorTab = { id: "references", label: "References" }
 const SCENES_TAB: InspectorTab = { id: "scenes", label: "Scenes" }
+/**
+ * 🚧 Who knows the entry: every door whose rows are entries offers it, since
+ * the knowledge filter judges every `lorebook_entries` row whatever its type.
+ * The inspector drops it for a reader who is not the owner and for a scene.
+ */
+const KNOWN_BY_TAB: InspectorTab = { id: "known-by", label: "Known by" }
 
 const timeOf = (value: unknown): number => {
 	if (!value) return 0
@@ -148,7 +154,7 @@ const world: SectionDescriptor = {
 	roles: new Set(["position"]),
 	row: WorldLoreRow,
 	editor: WorldLoreEditor,
-	inspector: [FIRES_TAB, REFERENCES_TAB],
+	inspector: [FIRES_TAB, REFERENCES_TAB, KNOWN_BY_TAB],
 	emptyCopy: {
 		title: "No world lore yet",
 		body: "World lore holds what is true of the setting whoever is in the scene: cities, factions, history, house rules.",
@@ -178,7 +184,7 @@ const characters: SectionDescriptor = {
 	roles: new Set(["position", "anchor"]),
 	row: CharacterLoreRow,
 	editor: CharacterLoreEditor,
-	inspector: [FIRES_TAB, REFERENCES_TAB],
+	inspector: [FIRES_TAB, REFERENCES_TAB, KNOWN_BY_TAB],
 	emptyCopy: {
 		title: "No character lore yet",
 		body: "Character lore is private to one cast member: their secrets, backstory, abilities, what only they would know.",
@@ -212,7 +218,7 @@ const history: SectionDescriptor = {
 	rowMenu: HistoryRowMenu,
 	listActions: HistoryListActions,
 	listHead: HistoryUnfiledGroup,
-	inspector: [FIRES_TAB, REFERENCES_TAB, SCENES_TAB],
+	inspector: [FIRES_TAB, REFERENCES_TAB, SCENES_TAB, KNOWN_BY_TAB],
 	emptyCopy: {
 		title: "No history yet",
 		body: "History is the story's own timeline: what happened, dated, in the order it happened.",
@@ -223,7 +229,9 @@ const history: SectionDescriptor = {
 	newDraft: (lorebookId) => ({
 		typeId: HISTORY_TYPE_ID,
 		lorebookId,
-		year: 1,
+		// Empty: the caller prefills the line's present (`newHistoryDate`);
+		// with none, the server dates it today or says why not.
+		year: null,
 		month: null,
 		day: null,
 		content: "",
@@ -302,7 +310,7 @@ const items: SectionDescriptor = {
 	roles: new Set(["position"]),
 	row: ItemRow,
 	editor: ItemEditor,
-	inspector: [FIRES_TAB, REFERENCES_TAB],
+	inspector: [FIRES_TAB, REFERENCES_TAB, KNOWN_BY_TAB],
 	emptyCopy: {
 		title: "No items yet",
 		body: "An item is a thing somebody can hold — a key, a sword, a letter — and how many of it the world has.",
@@ -349,7 +357,7 @@ const places: SectionDescriptor = {
 	roles: new Set(["position"]),
 	row: PlaceRow,
 	editor: PlaceEditor,
-	inspector: [FIRES_TAB, REFERENCES_TAB],
+	inspector: [FIRES_TAB, REFERENCES_TAB, KNOWN_BY_TAB],
 	emptyCopy: {
 		title: "No places yet",
 		body: "A place is somewhere the story can be: a room, a street, a town. Link it to the places it leads to.",
@@ -423,7 +431,7 @@ const all: SectionDescriptor = {
 	roles: new Set(),
 	row: PoolRow,
 	editor: GenericEntryEditor,
-	inspector: [FIRES_TAB, REFERENCES_TAB],
+	inspector: [FIRES_TAB, REFERENCES_TAB, KNOWN_BY_TAB],
 	emptyCopy: {
 		title: "This lorebook is empty",
 		body: "Everything the book knows shows up here. Start anywhere and the other doors are filters over the same list.",
@@ -455,6 +463,32 @@ const rulesListDoors = new Map<
 	{ sig: string; door: SectionDescriptor }
 >()
 
+/**
+ * Where a new history entry on a line opens: the line's present, else where
+ * a new session on the book would start, else nothing (never Year 1). Date
+ * parts only: year, month, day.
+ */
+export function newHistoryDate(
+	time: {
+		presents: {
+			main: StoryDate | null
+			branches: { branchId: number; present: StoryDate | null }[]
+		} | null
+		start: { date: StoryDate | null } | null
+	},
+	branchId: number | null
+): { year: number; month: number | null; day: number | null } | null {
+	const present = time.presents
+		? branchId == null
+			? time.presents.main
+			: (time.presents.branches.find((b) => b.branchId === branchId)?.present ?? null)
+		: null
+	const date = present ?? time.start?.date ?? null
+	return date
+		? { year: date.year, month: date.month ?? null, day: date.day ?? null }
+		: null
+}
+
 export function rulesListDoor(
 	list: PieceList,
 	lorebookId: number | null
@@ -477,7 +511,7 @@ export function rulesListDoor(
 		roles: new Set(["position"]),
 		row: PoolRow,
 		editor: DerivedEntryEditor,
-		inspector: [FIRES_TAB, REFERENCES_TAB],
+		inspector: [FIRES_TAB, REFERENCES_TAB, KNOWN_BY_TAB],
 		emptyCopy: {
 			title: `Nothing in ${list.label} yet`,
 			// 🚧 ★50 proposed copy: a list of other rules is listed, never added to.

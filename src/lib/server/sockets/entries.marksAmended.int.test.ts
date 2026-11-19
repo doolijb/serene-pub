@@ -270,4 +270,25 @@ describe("entries:setMarks says when a dated amendment decides the mark", () => 
 			.where(eq(schema.lorebookEntries.id, kept.id))
 		expect(stored!.enabled).toBe(true)
 	}, 60_000)
+	test("an administrator outside the session is refused it, and nothing is written (G6)", async () => {
+		const b = await makeBook()
+		const kept = await b.entry("Mine")
+		const mine = await b.session(null)
+		const { entrySetMarksHandler } = await import("./entries")
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const outsider = await createTestUser(testDb, "marks-amended-admin")
+		// Old: an administrator's session id was taken as it came.
+		const res: any = await entrySetMarksHandler.handler(
+			{ user: { id: outsider.id, isAdmin: true } } as any,
+			{ entryId: kept.id, off: true, sessionId: mine.id },
+			noop
+		)
+		expect(res.error).toBe("Session not found.")
+		const [stored] = await testDb
+			.select({ enabled: schema.lorebookEntries.enabled })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, kept.id))
+		expect(stored!.enabled).toBe(true)
+	}, 60_000)
+
 })

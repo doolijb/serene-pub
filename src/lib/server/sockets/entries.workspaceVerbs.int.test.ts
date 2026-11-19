@@ -738,3 +738,24 @@ describe("entries:sessionEntries — the lore entries widget's read (L1)", () =>
 		expect(tagged.request).toBe("p:7")
 	})
 })
+
+describe("entries:sessionEntries — an administrator outside the session (G6)", () => {
+	test("is told the session is not found, and nothing of the book is in the answer; the owner reads it", async () => {
+		const { entrySessionEntriesHandler } = await import("./entries")
+		const owner = await makeUser("gate-owner")
+		const outsider = await makeUser("gate-admin")
+		const lorebook = await makeLorebook(owner.id, "Gate Book")
+		await makeEntry(lorebook.id, { title: "Owner-only secret title" })
+		const session = await makeSession(owner.id, lorebook.id)
+		// Old: any administrator listed any session's entries.
+		const asAdmin: any = await entrySessionEntriesHandler.handler(
+			{ user: { id: outsider.id, isAdmin: true } } as any,
+			{ sessionId: session.id },
+			noopEmit
+		)
+		expect(asAdmin.error).toBe("Session not found.")
+		expect(JSON.stringify(asAdmin)).not.toContain("Owner-only secret title")
+		const asOwner: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id }, noopEmit)
+		expect(asOwner.rows.map((r: any) => r.title)).toEqual(["Owner-only secret title"])
+	})
+})

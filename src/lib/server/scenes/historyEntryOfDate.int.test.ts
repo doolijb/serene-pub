@@ -178,7 +178,7 @@ describe("historyEntryOfDate", () => {
 		).toBeNull()
 	}, 60_000)
 
-	test("no date: the newest dated entry, else Year 1, Month 1, Day 1", async () => {
+	test("no date: the newest dated entry, else the line's clock's day, else refused", async () => {
 		const { book, entries } = await makeBook([
 			{ year: 2, month: 1, day: 1 },
 			{ year: 7, month: 4, day: 5 },
@@ -190,12 +190,29 @@ describe("historyEntryOfDate", () => {
 			date: { year: 7, month: 4, day: 5 }
 		})
 
+		// No dated entry, no clock: refused in words, nothing written.
 		const empty = await makeBook()
+		await expect(ask(empty.book.id, null, true)).rejects.toThrow(
+			"These scenes have no date, and this line has no dated history entry or story clock to file them under."
+		)
+		expect(await historyRows(empty.book.id)).toHaveLength(0)
+
+		// A line clock: the entry is made on the clock's day (time dropped).
+		await testDb
+			.update(schema.lorebooks)
+			.set({
+				storyClockYear: 9,
+				storyClockMonth: 3,
+				storyClockDay: 4,
+				storyClockHour: 17,
+				storyClockMinute: 5
+			} as any)
+			.where(eq(schema.lorebooks.id, empty.book.id))
 		const made = await ask(empty.book.id, null, true)
 		expect(made!.created).toBe(true)
 		const [row] = await historyRows(empty.book.id)
-		expect(row.fields).toMatchObject({ year: 1, month: 1, day: 1 })
-		expect(made!.date).toEqual({ year: 1, month: 1, day: 1 })
+		expect(row.fields).toMatchObject({ year: 9, month: 3, day: 4 })
+		expect(made!.date).toEqual({ year: 9, month: 3, day: 4 })
 	}, 60_000)
 
 	test("pickEntryOfDate: exact day, ties to the lowest id, no date the newest, a sibling line's row skipped", async () => {

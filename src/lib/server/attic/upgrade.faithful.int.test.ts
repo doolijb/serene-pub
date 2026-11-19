@@ -29,6 +29,7 @@ import {
 	fixtureManifest,
 	placeFixture,
 	previewTurn,
+	sessionStepValues,
 	runUpgradeTasks,
 	type PreviewOutcome
 } from "./testFixture"
@@ -258,21 +259,24 @@ describe("prompt text only (owner ruling, 2026-10-01)", () => {
 		}
 		// A chat's own sampling config is its session's sampling pick, on each
 		// pipeline's reply steps (the steps it runs on the Reply loadout, by the
-		// addresses its document gives them); nothing else is a session override.
+		// addresses its document gives them), in the session's registration
+		// values; the attic leaves no session override behind.
 		const { replyLoadoutSteps } = await import("$lib/server/pipelines/runtime/specShape")
 		const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+		expect(await q(`SELECT id FROM pipeline_node_overrides WHERE scope_kind = 'session'`)).toEqual([])
 		const stepsOf = new Map<string, string[]>()
-		const others: Row[] = []
-		for (const r of await q(
-			`SELECT o.scope_id, o.node_key, o.slot, p.slug FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
-			 WHERE o.path <> 'searchByMeaning'`
-		)) {
-			if (!stepsOf.has(r.slug)) stepsOf.set(r.slug, replyLoadoutSteps((await loadPublished(db as never, r.slug))!))
-			if (!(r.slot === "sampling" && stepsOf.get(r.slug)!.includes(r.node_key))) others.push(r)
+		const picked = new Set<number>()
+		for (const c of before.chats.filter((c) => c.sampling_config_id != null)) {
+			const values = await sessionStepValues(db, c.id, { slot: "sampling" })
+			for (const v of values) {
+				if (!stepsOf.has(v.slug)) stepsOf.set(v.slug, replyLoadoutSteps((await loadPublished(db as never, v.slug))!))
+				expect(stepsOf.get(v.slug)!, `${v.slug} ${v.nodeKey}`).toContain(v.nodeKey)
+				expect(v.path).toBe("")
+			}
+			if (values.length) picked.add(c.id)
 		}
-		expect(others).toEqual([])
-		const picked = (await q(`SELECT DISTINCT scope_id FROM pipeline_node_overrides WHERE slot = 'sampling' ORDER BY scope_id`)).map((r) => r.scope_id)
-		expect(picked).toEqual(
+		// Every chat that had one has it on at least the reply pipeline its session runs.
+		expect([...picked].sort((a, b) => a - b)).toEqual(
 			before.chats
 				.filter((c) => c.sampling_config_id != null)
 				.map((c) => c.id)
@@ -328,12 +332,13 @@ describe("ragIgnored (M4)", () => {
 	test("a chat that ignored retrieval has search-by-meaning off, and keeps its flag", async () => {
 		const ignored = before.chats.filter((c) => c.metadata?.ragIgnored === true).map((c) => c.id)
 		expect(ignored.length).toBeGreaterThan(0)
-		const rows = await q(
-			`SELECT o.scope_id, o.value, p.slug FROM pipeline_node_overrides o JOIN pipeline_specs p ON p.id = o.spec_id
-			 WHERE o.scope_kind = 'session' AND o.slot = 'params' AND o.path = 'searchByMeaning'`
-		)
+		expect(await q(`SELECT id FROM pipeline_node_overrides WHERE scope_kind = 'session'`)).toEqual([])
+		const rows: Array<{ scope_id: number; value: unknown; slug: string }> = []
+		for (const id of ignored)
+			for (const v of await sessionStepValues(db, id, { slot: "params", path: "searchByMeaning" }))
+				rows.push({ scope_id: id, value: v.value, slug: v.slug })
 		const respond = rows.filter((r) => r.slug === "core:spec/story-respond")
-		expect(respond.map((r) => r.scope_id).sort((a, b) => a - b)).toEqual(ignored)
+		expect([...new Set(respond.map((r) => r.scope_id))].sort((a, b) => a - b)).toEqual(ignored)
 		expect(rows.every((r) => r.value === "off")).toBe(true)
 		for (const id of ignored)
 			expect((await one(`SELECT metadata FROM sessions WHERE id = $1`, id)).metadata.ragIgnored).toBe(true)

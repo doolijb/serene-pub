@@ -18,11 +18,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const broadcasts: { sessionId: number; event: string; data: any }[] = []
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 vi.mock("./utils/broadcastHelpers", async (importOriginal) => {
@@ -109,6 +109,35 @@ describe("lorebooks:create takes the Timeline switch", () => {
 			quiet
 		)
 		expect((await stored(on.lorebook!.id)).timelineEnabled).toBe(true)
+	})
+
+	test("a dated book is born on the real calendar, an undated one free-form, a kit copy keeps the kit's", async () => {
+		const { lorebooksCreateHandler } = await import("./lorebooks")
+		const { STORY_CALENDAR_PRESETS } = await import("@serene-pub/sdk")
+		const real = STORY_CALENDAR_PRESETS.find((p) => p.id === "real-calendar")!.calendar
+		const twelve = STORY_CALENDAR_PRESETS.find((p) => p.id === "twelve-months")!.calendar
+		const me = await person()
+		const dated = await lorebooksCreateHandler.handler(as(me.id), { name: "Dated" } as any, quiet)
+		expect((await stored(dated.lorebook!.id)).storyCalendar).toEqual(real)
+		const on = await lorebooksCreateHandler.handler(
+			as(me.id),
+			{ name: "On", timelineEnabled: true } as any,
+			quiet
+		)
+		expect((await stored(on.lorebook!.id)).storyCalendar).toEqual(real)
+		const off = await lorebooksCreateHandler.handler(
+			as(me.id),
+			{ name: "Undated", timelineEnabled: false } as any,
+			quiet
+		)
+		expect((await stored(off.lorebook!.id)).storyCalendar).toBeNull()
+		const kit = await book(me.id, { kind: "starter_kit", name: "Kit", storyCalendar: twelve as any })
+		const copy = await lorebooksCreateHandler.handler(
+			as(me.id),
+			{ name: "From kit", starterKit: { lorebookId: kit.id } } as any,
+			quiet
+		)
+		expect((await stored(copy.lorebook!.id)).storyCalendar).toEqual(twelve)
 	})
 
 	test("a value that is not on or off is refused and writes nothing", async () => {

@@ -849,6 +849,11 @@ describe("the files a request carries", () => {
 		// on the error's `connection` field instead.
 		expect(err.message).not.toMatch(/koboldcpp/i)
 		expect(err.connection).toMatchObject({ type: "koboldcpp" })
+		// The sender reads one sentence for people instead, naming no adapter.
+		const { peopleSentenceOf } = await import("./host.types")
+		const { ATTACHMENTS_NOT_SENT_SENTENCE } = await import("./dispatch")
+		expect(peopleSentenceOf(err)).toBe(ATTACHMENTS_NOT_SENT_SENTENCE)
+		expect(ATTACHMENTS_NOT_SENT_SENTENCE).not.toMatch(/koboldcpp|adapter|connection|model/i)
 		expect(seen.attachments).toBeUndefined()
 	})
 })

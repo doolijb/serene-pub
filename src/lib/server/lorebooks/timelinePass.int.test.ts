@@ -28,11 +28,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -232,6 +232,7 @@ beforeAll(async () => {
 			userId: await user(),
 			name: null,
 			overlayOf: null,
+			timelineEnabled: true, // data from before the rule: notes were made on
 			primaryRuleset: "core:ruleset/freeform@1",
 			rulesetVersion: null
 		})
@@ -243,6 +244,7 @@ beforeAll(async () => {
 			userId: await user(),
 			name: null,
 			overlayOf: null,
+			timelineEnabled: true, // data from before the rule: notes were made on
 			primaryRuleset: "core:ruleset/freeform@1",
 			rulesetVersion: null
 		})
@@ -254,6 +256,7 @@ beforeAll(async () => {
 			userId: await user(),
 			name: null,
 			overlayOf: null,
+			timelineEnabled: true, // data from before the rule: notes were made on
 			primaryRuleset: "core:ruleset/freeform@1",
 			rulesetVersion: null
 		})
@@ -265,6 +268,7 @@ beforeAll(async () => {
 			userId: await user(),
 			name: null,
 			overlayOf: null,
+			timelineEnabled: true, // data from before the rule: notes were made on
 			primaryRuleset: "core:ruleset/freeform@1",
 			rulesetVersion: null
 		})
@@ -281,6 +285,7 @@ beforeAll(async () => {
 				userId: await user(),
 				name: null,
 				overlayOf: over,
+				timelineEnabled: true,
 				primaryRuleset: "core:ruleset/freeform@1",
 				rulesetVersion: null
 			})

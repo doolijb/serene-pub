@@ -278,32 +278,11 @@ export async function defaultVariableTemplateFor(
 	db: Db,
 	variableId: string
 ): Promise<number | null> {
-	const speech = SHIPPED_SPEECH_VARIABLE_LAYOUTS.find(
-		(t) => t.variableId === variableId
-	)
-	if (speech) {
+	for (const seedKey of defaultSeedKeysOf(variableId)) {
 		const [row] = await db
 			.select()
 			.from(schema.pipelineVariableTemplates)
-			.where(eq(schema.pipelineVariableTemplates.seedKey, speech.seedKey))
-			.limit(1)
-		if (row) return row.id
-	}
-
-	const shipped = SHIPPED_VARIABLE_TEMPLATES.find(
-		(t) => t.variableId === variableId && t.isDefault
-	)
-
-	if (shipped) {
-		const [row] = await db
-			.select()
-			.from(schema.pipelineVariableTemplates)
-			.where(
-				eq(
-					schema.pipelineVariableTemplates.seedKey,
-					seedKeyFor(shipped)
-				)
-			)
+			.where(eq(schema.pipelineVariableTemplates.seedKey, seedKey))
 			.limit(1)
 		if (row) return row.id
 	}
@@ -323,8 +302,61 @@ export async function defaultVariableTemplateFor(
 			)
 		)
 		.orderBy(asc(schema.pipelineVariableTemplates.id))
-	const first = rows.find((r) => !isForeignPackageRow(r, variableId))
-	return first?.id ?? null
+	return firstDefaultCandidate(rows, variableId)
+}
+
+/**
+ * The seed keys of the rows that are a variable's default, in the order they
+ * are tried: its speech layout, then its shipped default. Seed keys are unique
+ * (`seed_key` unique), so each names at most one row, whichever variable it
+ * belongs to.
+ */
+export function defaultSeedKeysOf(variableId: string): string[] {
+	const keys: string[] = []
+	const speech = SHIPPED_SPEECH_VARIABLE_LAYOUTS.find(
+		(t) => t.variableId === variableId
+	)
+	if (speech) keys.push(speech.seedKey)
+	const shipped = SHIPPED_VARIABLE_TEMPLATES.find(
+		(t) => t.variableId === variableId && t.isDefault
+	)
+	if (shipped) keys.push(seedKeyFor(shipped))
+	return keys
+}
+
+/**
+ * The fallback of `defaultVariableTemplateFor`: the first of the variable's
+ * rows — `rows` in ascending `id` — that is not withdrawn and not a package's
+ * foreign row.
+ */
+export function firstDefaultCandidate(
+	rows: Array<typeof schema.pipelineVariableTemplates.$inferSelect>,
+	variableId: string
+): number | null {
+	return (
+		rows.find(
+			(r) =>
+				r.variableId === variableId &&
+				r.withdrawnAt == null &&
+				!isForeignPackageRow(r, variableId)
+		)?.id ?? null
+	)
+}
+
+/**
+ * `defaultVariableTemplateFor` over rows already read: the row of the first
+ * default seed key present (whatever variable it belongs to), else
+ * `firstDefaultCandidate`. `rows` in ascending `id`.
+ */
+export function defaultTemplateAmong(
+	rows: Array<typeof schema.pipelineVariableTemplates.$inferSelect>,
+	variableId: string
+): number | null {
+	for (const seedKey of defaultSeedKeysOf(variableId)) {
+		const row = rows.find((r) => r.seedKey === seedKey)
+		if (row) return row.id
+	}
+	return firstDefaultCandidate(rows, variableId)
 }
 
 /**

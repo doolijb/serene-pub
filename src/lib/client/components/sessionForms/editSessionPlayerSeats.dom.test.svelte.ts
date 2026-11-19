@@ -152,7 +152,10 @@ describe("Edit Session — card-less player seats", () => {
 
 	test("a guest edits only their own seat", async () => {
 		await openForm(2)
-		expect(seatInput(11)?.disabled).toBe(true)
+		// Another person's seat name is words, never a disabled input.
+		expect(seatInput(11)?.tagName).not.toBe("INPUT")
+		expect(seatInput(11)?.textContent?.trim()).toBe("Ann")
+		expect(seatInput(12)?.tagName).toBe("INPUT")
 		expect(seatInput(12)?.disabled).toBe(false)
 		expect(document.querySelector('button[aria-label="Bench Ann"]') === null).toBe(true)
 		expect(document.querySelector('button[aria-label="Bench Bo"]') === null).toBe(false)

@@ -1,8 +1,8 @@
 /**
  * Indexing progress, written to Activity (playtest 2, §0-C).
  *
- * The composer's notice used to carry "Indexing 12 of 40 lorebook entries".
- * That moved here: while a lorebook still has entries to index, one
+ * Progress such as "Indexing 12 of 40 lorebook entries" lives here, not in the
+ * composer's notice: while a lorebook still has entries to index, one
  * `lorebook_indexing` activity per book says how far it is, to administrators
  * and to the book's owner (`activityStore.getFor` is that rule). It ends by
  * itself, when every entry is indexed or the lane goes idle.

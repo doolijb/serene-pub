@@ -17,6 +17,7 @@
  * BEFORE the transaction (`exportLibraryBooksAnchoredTo`), and a book is
  * re-imported (Forward) after it.
  */
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import { and, desc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { removedNodeDefinitionSentence } from "@serene-pub/sdk"
@@ -93,7 +94,16 @@ export const isLibraryChange = (c: unknown): c is LibraryChangePayload =>
 	!!c && typeof c === "object" && (c as { kind?: unknown }).kind === "library"
 
 /** A library write refused, as a sentence a person can read. */
-export class LibraryWriteRefusal extends Error {}
+export class LibraryWriteRefusal extends Error {
+	/** `forPeople` marks a message the people in the session can act on; unmarked messages are detail. */
+	constructor(message: string, opts?: { forPeople?: boolean }) {
+		super(message)
+		if (opts?.forPeople) forPeople(this, message)
+	}
+}
+
+/** 🚧 (D50) Back left a made lorebook in the library: a session plays on it. The message is the sentence Back's reply carries. */
+export class LibraryBookStayed extends Error {}
 
 export const LIBRARY_OFF_SENTENCE =
 	"Your library write mode is Off, so nothing is added to your library. You can change it under Settings › User."
@@ -344,7 +354,7 @@ export async function describeLibraryChange(
 			if (id === null) throw new LibraryWriteRefusal("That names no character.")
 			changesOf(input.changes)
 			const may = await personMay(db, person, "write", { kind: "character", id })
-			if (!may.ok) throw new LibraryWriteRefusal(may.reason)
+			if (!may.ok) throw new LibraryWriteRefusal(may.reason, { forPeople: true })
 			const [c] = await db
 				.select({ name: schema.characters.name })
 				.from(schema.characters)
@@ -400,7 +410,7 @@ export async function applyLibraryChange(
 			if (id === null) throw new LibraryWriteRefusal("That names no character.")
 			const changes = changesOf(input.changes)
 			const may = await personMay(db, person, "write", { kind: "character", id })
-			if (!may.ok) throw new LibraryWriteRefusal(may.reason)
+			if (!may.ok) throw new LibraryWriteRefusal(may.reason, { forPeople: true })
 			const [live] = await db
 				.select({ id: schema.characters.id })
 				.from(schema.characters)
@@ -475,8 +485,9 @@ async function writePayload(db: Db, row: Row, payload: LibraryChangePayload): Pr
  * Take one applied or accepted library change back: a made character is
  * hidden (`is_deleted`), an updated one gets its fields back, a
  * made lorebook is deleted (its export, `payload.document`, was kept for
- * Forward — see `exportLibraryBooksAnchoredTo`). Writes what it learned onto
- * the row's payload. Hand it the `tx` inside a transaction.
+ * Forward — see `exportLibraryBooksAnchoredTo`) unless a session plays on it
+ * (D50: it stays, throws, and the caller reports and skips). Writes what it
+ * learned onto the row's payload. Hand it the `tx` inside a transaction.
  */
 export async function undoLibraryChange(db: Db, row: Row): Promise<void> {
 	const p = row.payload as unknown as LibraryChangePayload
@@ -501,6 +512,18 @@ export async function undoLibraryChange(db: Db, row: Row): Promise<void> {
 			if (!p.document) {
 				console.warn("[library] a made lorebook was not exported, so Back leaves it in the library:", id)
 				return
+			}
+			// 🚧 (D50) A book a session now plays on stays: no export is kept, so Forward imports no second copy.
+			const { bookDeleteRefusal } = await import("$lib/server/sessions/bookLock")
+			const refusal = await bookDeleteRefusal(db, id, p.by)
+			if (refusal) {
+				await writePayload(db, row, { ...p, document: undefined })
+				const [book] = await db
+					.select({ name: schema.lorebooks.name })
+					.from(schema.lorebooks)
+					.where(eq(schema.lorebooks.id, id))
+					.limit(1)
+				throw new LibraryBookStayed(`${book?.name?.trim() || "A lorebook"} stayed: a session plays on it.`)
 			}
 			const { purgeLorebook } = await import("$lib/server/lorebooks/tableRegistry")
 			await purgeLorebook(db, id)
@@ -613,21 +636,24 @@ export async function exportLibraryBooksAnchoredTo(db: Db, messageIds: readonly 
  * Each row's payload keeps what it learned (the export of a deleted book), so
  * the rows the retraction takes carry it to Forward. A change that cannot be
  * taken back (the card is gone already) is reported and skipped.
- * Returns whether anything was taken back.
+ * Returns whether anything was taken back, and the sentences for the books
+ * Back left in place (`stayed`).
  */
 export async function revertLibraryChangesAnchoredTo(
 	t: Db,
 	messageIds: readonly number[]
-): Promise<{ changed: boolean }> {
+): Promise<{ changed: boolean; stayed: string[] }> {
 	const rows = await changesInForce(t, messageIds)
 	let changed = false
+	const stayed: string[] = []
 	for (const row of rows) {
 		try {
 			await undoLibraryChange(t, row)
 			changed = true
 		} catch (e) {
+			if (e instanceof LibraryBookStayed) stayed.push(e.message)
 			console.warn("[library] a library change could not be taken back:", e)
 		}
 	}
-	return { changed }
+	return { changed, stayed }
 }

@@ -357,6 +357,29 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 			"for itself. The port stays for a spec that embeds one string, the " +
 			"pair `UNFILLED_IN_PORTS` excuses from the other side."
 	},
+	{
+		subject: shapeSubject(
+			"core:shape/cue-map@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/cue-map@1")
+		),
+		reason:
+			"🚧 Where each cue sits in the speak step's audio (`core:oracle/speak@1." +
+			"cueMap`). It travels inside `meta` (`SpokenMeta`), which " +
+			"`core:outlet/attach-audio@1` keeps on the line; the separate port is " +
+			"for a pipeline that reads the map alone, and none does. Delete this " +
+			"entry when a node takes the map whole."
+	},
+	{
+		subject: shapeSubject(
+			"core:shape/spoken-as@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/spoken-as@1")
+		),
+		reason:
+			"🚧 How the voice was applied (voice, model, applied, ignored; " +
+			"`core:oracle/speak@1.spokenAs`). Like `cueMap`, it travels inside " +
+			"`meta` to `attach-audio`, so the separate port has no reader. Delete " +
+			"this entry when a node takes it whole."
+	}
 ]
 
 /**
@@ -442,27 +465,11 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"it from `session-annex`'s `version`. Closes when a core spec does."
 	},
 	{
-		subject: "core:outlet/advance-story-clock@1.to",
-		reason:
-			"🚧 M0 (2026-10-28, lane T1): the moment of the day to move the clock " +
-			"to (\"sleep until 07:00\"), the second input beside `by`. No core spec moves " +
-			"the clock to a moment; a genre's sleep or wait action does. Closes when one does."
-	},
-	{
 		subject: "core:query/cast-presences@1.atHour",
 		reason:
 			"🚧 M0 (2026-10-28, lane T3/T4): the hour whose `placements` (where each " +
 			"cast member is, by their schedule) the query answers; unwired, the present hour. " +
 			"No core spec asks for another hour; a genre's map or plans do. Closes when one does."
-	},
-	{
-		subject: "core:outlet/create-lore-entry@1.match",
-		reason:
-			"🚧 pr-6 (2026-10-25, pass 8, R-h): how a create finds the entry it would " +
-			"otherwise make — `{ entryId }`, `{ name }` or `{ key }`, matched in the book " +
-			"it writes to; two answers refuse, naming each. Optional, declared for a " +
-			"pipeline that re-files what it wrote; no core spec re-files yet. Closes when " +
-			"one does."
 	},
 	{
 		subject: "core:outlet/create-lore-entry@1.bind",
@@ -719,6 +726,86 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"The prose half of the pair above (B2): what the way " +
 			"is like, beyond its name. Same wirer, same terms — the door has " +
 			"no words about the way to give it — and the same ⏳ expiry."
+	},
+	{
+		subject: "core:oracle/speak@1.language",
+		reason:
+			"🚧 ISO 639-1 for the line (PLAN-speech-build S9). Optional: unwired, " +
+			"`dispatchSpeech` falls back to the voice's timbre language, then the " +
+			"session's, then the pub's (`resolution.language`), and a group's own " +
+			"cue language wins. No core spec states one language for the whole " +
+			"line; a genre that forces one wires it. Closes when one does."
+	},
+	{
+		subject: "core:oracle/speak@1.text",
+		reason:
+			"⏳ The one-release alias of `cues`: a bare text, read as one cue in " +
+			"the speaker's voice when `cues` is not wired. Core's speak step wires " +
+			"`cues` from `cue-lines`, so nothing fills it. Expires the release " +
+			"after speech ships: delete this entry with the port."
+	},
+	{
+		subject: "core:query/earlier-scenes@1.firsthandFor",
+		reason:
+			"🚧 The opt-in firsthand filter (`firsthandFor`, with `firsthandBy`): " +
+			"wired, the query keeps only what the speaking cast member was there " +
+			"for. No core spec wires it. ⏳ PLAN-programme-2026-11-15 §1.2 " +
+			"replaces both ports with filters inside the queries, on by default: " +
+			"delete this entry with the port when that lands."
+	},
+	{
+		subject: "core:query/earlier-scenes@1.firsthandBy",
+		reason:
+			"🚧 The opt-in firsthand filter (`firsthandFor`, with `firsthandBy`): " +
+			"wired, the query keeps only what the speaking cast member was there " +
+			"for. No core spec wires it. ⏳ PLAN-programme-2026-11-15 §1.2 " +
+			"replaces both ports with filters inside the queries, on by default: " +
+			"delete this entry with the port when that lands."
+	},
+	{
+		subject: "core:query/history-entries@1.firsthandFor",
+		reason:
+			"🚧 The opt-in firsthand filter (`firsthandFor`, with `firsthandBy`): " +
+			"wired, the query keeps only what the speaking cast member was there " +
+			"for. No core spec wires it. ⏳ PLAN-programme-2026-11-15 §1.2 " +
+			"replaces both ports with filters inside the queries, on by default: " +
+			"delete this entry with the port when that lands."
+	},
+	{
+		subject: "core:query/history-entries@1.firsthandBy",
+		reason:
+			"🚧 The opt-in firsthand filter (`firsthandFor`, with `firsthandBy`): " +
+			"wired, the query keeps only what the speaking cast member was there " +
+			"for. No core spec wires it. ⏳ PLAN-programme-2026-11-15 §1.2 " +
+			"replaces both ports with filters inside the queries, on by default: " +
+			"delete this entry with the port when that lands."
+	},
+	{
+		subject: "core:query/session-history@1.firsthandFor",
+		reason:
+			"🚧 The opt-in firsthand filter (`firsthandFor`, with `firsthandBy`): " +
+			"wired, the query keeps only what the speaking cast member was there " +
+			"for. No core spec wires it. ⏳ PLAN-programme-2026-11-15 §1.2 " +
+			"replaces both ports with filters inside the queries, on by default: " +
+			"delete this entry with the port when that lands."
+	},
+	{
+		subject: "core:query/session-history@1.firsthandBy",
+		reason:
+			"🚧 The opt-in firsthand filter (`firsthandFor`, with `firsthandBy`): " +
+			"wired, the query keeps only what the speaking cast member was there " +
+			"for. No core spec wires it. ⏳ PLAN-programme-2026-11-15 §1.2 " +
+			"replaces both ports with filters inside the queries, on by default: " +
+			"delete this entry with the port when that lands."
+	},
+	{
+		subject: "core:task/clock-step@1.unless",
+		reason:
+			"🚧 When truthy the clock does not move (`moves` false). No core " +
+			"spec wires it: a pipeline " +
+			"that re-drives a row wires `input.messageId` here so a regenerate " +
+			"never moves the clock twice. Closes when a core spec re-drives a " +
+			"row through the step."
 	}
 ]
 
@@ -1024,6 +1111,10 @@ const RUN_OPTIONS: Record<string, true | string> = {
 	// NODE_TIMEOUT_CEILING_MS). Unwired, a tethered reply that never ends
 	// runs forever.
 	timeoutCeilingMs: true,
+	// The admin's switch (Admin › Diagnostics, *Turn off step time limits*),
+	// read once at run start (`stepTimeLimitsOff`, `callTether.ts`). Unwired,
+	// the switch shows as on everywhere and no limit is lifted.
+	stepTimeLimitsOff: true,
 	// The one that motivated this file. Wired now (runTurn passes the
 	// registry's cancellation probe through), and this line is what keeps it
 	// wired: unwiring it fails here rather than in a cancelled run that

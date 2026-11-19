@@ -126,6 +126,7 @@ describe("nodeState from a pipeline", () => {
 			runId: w.session.id,
 			messageId: anchor
 		})
+		if (!("castVersionId" in out)) throw new Error("the write was refused")
 		const [row] = await testDb
 			.select()
 			.from(schema.characterVersions)

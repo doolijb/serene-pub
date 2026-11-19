@@ -245,7 +245,7 @@ export async function personMoveDestination(
 	const reading = await sessionReadingOf(db, sessionId)
 	if (!reading || reading.timelineOff) return null
 	const book = reading.lorebookId
-	const from = (await storyMoveStartOf(db, sessionId, row)).present
+	const from = await storyMoveStartOf(db, sessionId, row)
 	if (!from) return null
 
 	let to: StoryClock | null

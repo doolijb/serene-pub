@@ -41,6 +41,7 @@ import {
 	cardActionOwnerOf
 } from "$lib/server/pipelines/runtime/cardAction"
 import { normalizeSpriteName, type SpriteSetView } from "$lib/shared/sprites"
+import type { ConnectionSubject } from "$lib/server/connections/visibility"
 
 export interface SpriteFillPreview {
 	/** The card's id; absent for a cast member. */
@@ -300,6 +301,8 @@ export async function runSpriteFill(
 		setId?: number | null
 		labels?: string[] | null
 		userId: number
+		/** Who is told why a run failed (`socket.user`): an administrator reads the reason itself. */
+		reader?: ConnectionSubject | null
 		runId: string
 		signal?: AbortSignal
 		cancelSignal?: () => { by: string; reason: string } | undefined
@@ -323,7 +326,7 @@ export async function runSpriteFill(
 	const { runCardAction } = await import(
 		"$lib/server/pipelines/runtime/cardAction"
 	)
-	const { haltExplanation } = await import(
+	const { haltExplanation, receiptHaltFor, haltExplanationFor } = await import(
 		"$lib/server/pipelines/runtime/haltExplanation"
 	)
 	const labelOf = new Map(
@@ -382,7 +385,12 @@ export async function runSpriteFill(
 				...head,
 				phase: "failed",
 				drawn,
-				error: haltExplanation(receipt) ?? "The fill stopped before it finished."
+				error: receiptHaltFor(
+					req.reader,
+					"action",
+					receipt,
+					haltExplanation(receipt) ?? "The fill stopped before it finished."
+				)
 			})
 			return
 		}
@@ -403,7 +411,7 @@ export async function runSpriteFill(
 		req.report({
 			...head,
 			phase: "failed",
-			error: e instanceof Error ? e.message : String(e)
+			error: haltExplanationFor(req.reader, "action", e instanceof Error ? e.message : String(e))
 		})
 	}
 }

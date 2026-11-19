@@ -13,6 +13,7 @@ import {
 	speakerOf,
 	seatCardAsShown,
 	seatCardsAsShown,
+	cardlessSeatsAsShown,
 	type CharacterCard,
 	type CharactersSource,
 	type CharactersSourceSession
@@ -459,6 +460,26 @@ describe("the seat's cast member (s27 S2)", () => {
 		expect(cards.map((c) => c.id)).toEqual([4, 3])
 		expect(cards[0]).toBe(bo)
 		expect(cards[1].name).toBe("Adel")
+	})
+})
+
+describe("cardlessSeatsAsShown", () => {
+	test("the live card-less character seats, by their member's shown name, in payload order", () => {
+		const shown = {
+			7: { name: "Mira", nickname: "Mi", faceMediaId: 44 },
+			8: { name: "Gone", nickname: null, faceMediaId: null }
+		}
+		const out = cardlessSeatsAsShown({
+			sessionCharacters: [
+				{ character: { id: 1 }, castMemberId: null },
+				{ character: null, castMemberId: 7, removedAt: null },
+				{ character: null, castMemberId: 8, removedAt: "2026-11-17" },
+				{ character: null, castMemberId: 9 }
+			],
+			cardlessSeatShown: shown
+		})
+		expect(out).toEqual([{ name: "Mira", nickname: "Mi", avatarMediaId: 44 }])
+		expect(cardlessSeatsAsShown(null)).toEqual([])
 	})
 })
 

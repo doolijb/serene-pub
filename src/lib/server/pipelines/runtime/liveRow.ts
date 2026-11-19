@@ -61,6 +61,8 @@ import {
 	persistGenerationStatus
 } from "$lib/server/utils/generationStatus"
 import { ComposedError } from "$lib/server/connections/visibility"
+import { forPeople, peopleSentenceOf } from "$lib/server/pipelines/runtime/host.types"
+import { plainReplyFailure } from "$lib/server/pipelines/runtime/haltExplanation"
 import { isParticipantRef, type ParticipantRef, type StatusText } from "@serene-pub/sdk"
 import type { ReplyPhase } from "$lib/shared/utils/reasoningDelimiters"
 import { replyView, type ReplyFacts } from "$lib/server/messages/replyView"
@@ -487,6 +489,10 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 			if (streamed || nativeReasoning) await persist()
 		},
 		failedWith(err) {
+			// An error already marked with this sentence keeps its administrator
+			// detail: the run's end restates the sentence, not the detail.
+			const said = peopleSentenceOf(err)
+			if (said !== undefined && said === peopleSentenceOf(lastError)) return
 			lastError = err
 		},
 		async finish(end) {
@@ -503,15 +509,17 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 				// `persistGenerationErrorRow` is fenced on the row still
 				// generating — a no-op if the update already landed — and it
 				// is where the redaction rule lives: the thrown object where
-				// the host kept one, else the receipt's reason, which is the
-				// executor's or a binding's own sentence.
+				// the host kept one, else the plain reply sentence. The
+				// receipt's reason is a step's or a binding's own words and
+				// stays on the run record, never in the row.
 				await persistGenerationErrorRow(
 					io,
 					sessionId,
 					row,
 					lastError ??
-						new ComposedError(
-							end.reason ?? "the turn produced no reply"
+						forPeople(
+							new ComposedError(plainReplyFailure()),
+							plainReplyFailure()
 						),
 					{
 						queueItemId: queueItemId ?? undefined,

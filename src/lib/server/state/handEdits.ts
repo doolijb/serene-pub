@@ -95,7 +95,35 @@ type SeatFacts = {
 	id: number
 	personaId: number | null
 	player: number | null
+	/** The owner of the seat's active card (null: card-less). */
+	cardOwner: number | null
+	/** Who made a card-less seat's cast member (null: no one recorded, or it has none). */
+	memberCreator: number | null
 	name: string | null
+}
+
+/**
+ * 🚧 Whose sheet a seat is. Purpose: the one place that decides who holds a seat's sheet, so a
+ * later co-editing permission widens here only. Rule (owner, 2026-11-17, HM1: "Session owner via
+ * their own card or cast in the lorebook. Granular permissions later to allow co-editin"): a seat
+ * holding the session owner's card is the card owner's, whoever plays it. A card owned by anyone
+ * else stays their person's (the player of a player seat, the seater of a character seat).
+ * HM2 (owner, 2026-11-17: "A seat the guest made is theirs; a cast member they took or were handed
+ * stays the owner's"): a card-less seat follows who made its cast member (`memberCreatorId`, given
+ * only for a card-less seat). The person made it: theirs. Someone else made it: the session's
+ * owner holds it. No maker recorded (or no member): the person, as before.
+ */
+export function seatSheetHolder(q: {
+	cardOwnerId: number | null
+	personId: number | null
+	sessionOwnerId: number | null
+	memberCreatorId?: number | null
+}): number | null {
+	if (q.cardOwnerId != null)
+		return q.cardOwnerId === q.sessionOwnerId ? q.cardOwnerId : q.personId
+	return q.memberCreatorId != null && q.memberCreatorId !== q.personId
+		? q.sessionOwnerId
+		: q.personId
 }
 
 /** The one thing a refusal sentence is about: the owner and the slot. */
@@ -201,9 +229,14 @@ export async function handEditJudge(
 			personaId: schema.sessionPersonas.personaId,
 			userId: schema.sessionPersonas.userId,
 			seatName: schema.sessionPersonas.seatName,
-			castMemberId: schema.sessionPersonas.castMemberId
+			castMemberId: schema.sessionPersonas.castMemberId,
+			memberCreator: schema.lorebookBindings.createdBy
 		})
 		.from(schema.sessionPersonas)
+		.leftJoin(
+			schema.lorebookBindings,
+			eq(schema.lorebookBindings.id, schema.sessionPersonas.castMemberId)
+		)
 		.where(
 			and(
 				eq(schema.sessionPersonas.sessionId, sessionId),
@@ -223,13 +256,20 @@ export async function handEditJudge(
 	// A card-less seat has no card to key by: its seater is found by member
 	// (⚠ a member id, never read as a card id).
 	const seaterOfMember = new Map<number, number>()
+	// Who made each card-less character seat's member (HM2, `seatSheetHolder`).
+	const makerOfMember = new Map<number, number>()
 	for (const r of await db
 		.select({
 			characterId: schema.sessionCharacters.characterId,
 			castMemberId: schema.sessionCharacters.castMemberId,
-			seatedBy: schema.sessionCharacters.seatedByUserId
+			seatedBy: schema.sessionCharacters.seatedByUserId,
+			maker: schema.lorebookBindings.createdBy
 		})
 		.from(schema.sessionCharacters)
+		.leftJoin(
+			schema.lorebookBindings,
+			eq(schema.lorebookBindings.id, schema.sessionCharacters.castMemberId)
+		)
 		.where(
 			and(
 				eq(schema.sessionCharacters.sessionId, sessionId),
@@ -244,8 +284,10 @@ export async function handEditJudge(
 		if (r.seatedBy == null) continue
 		if (r.characterId != null && !seaterOf.has(r.characterId))
 			seaterOf.set(r.characterId, r.seatedBy)
-		if (r.characterId == null && r.castMemberId != null && !seaterOfMember.has(r.castMemberId))
+		if (r.characterId == null && r.castMemberId != null && !seaterOfMember.has(r.castMemberId)) {
 			seaterOfMember.set(r.castMemberId, r.seatedBy)
+			if (r.maker != null) makerOfMember.set(r.castMemberId, r.maker)
+		}
 	}
 
 	// 🚧 Who each seat is: the seat's cast member as read over its active card
@@ -360,6 +402,11 @@ export async function handEditJudge(
 				(r.personaId != null
 					? (characters.get(rowKey(r))?.userId ?? null)
 					: null),
+			cardOwner:
+				r.personaId != null
+					? (characters.get(rowKey(r))?.userId ?? null)
+					: null,
+			memberCreator: r.personaId == null ? (r.memberCreator ?? null) : null,
 			name:
 				(r.personaId == null
 					? r.seatName
@@ -410,6 +457,26 @@ export async function handEditJudge(
 			: seats.find((s) => s.personaId === characterId)
 	}
 
+	const sessionOwnerId = session?.userId ?? null
+	/** Whether `holder` is the person asking; the owner's view (no person) holds what HM1 gave the session's owner. */
+	const holds = (holder: number | null, hm1: boolean): boolean =>
+		(holder != null && holder === userId) ||
+		(hm1 && userId == null && role === "owner")
+	/** A seat's holder, and whether HM1 or HM2 moved it off its person. */
+	const holderOf = (
+		cardOwnerId: number | null,
+		personId: number | null,
+		memberCreatorId?: number | null
+	): { holder: number | null; hm1: boolean } => {
+		const holder = seatSheetHolder({
+			cardOwnerId,
+			personId,
+			sessionOwnerId,
+			memberCreatorId
+		})
+		return { holder, hm1: holder !== personId }
+	}
+
 	/** Whose the target is, seen from the person's role. */
 	const whose = (owner: StateOwner): "own" | "other" => {
 		if (role === "watcher") return "other"
@@ -423,9 +490,13 @@ export async function handEditJudge(
 			return role === "owner" ? "own" : "other"
 		if (owner.kind === "player_seat") {
 			const seat = seats.find((s) => s.id === owner.id)
+			const { holder, hm1 } = holderOf(
+				seat?.cardOwner ?? null,
+				seat?.player ?? null,
+				seat?.memberCreator
+			)
 			// A seat nobody is recorded as playing is nobody else's: the session's owner keeps it.
-			return mine(seat?.player ?? null) ||
-				(role === "owner" && seat?.player == null)
+			return holds(holder, hm1) || (role === "owner" && holder == null)
 				? "own"
 				: "other"
 		}
@@ -433,32 +504,116 @@ export async function handEditJudge(
 		if (role === "player") {
 			// A live seat's character is its player's, whoever owns the card (scope review 2026-11-05: card
 			// ownership alone let a card's owner reach another player's seat, and took a player's own seat
-			// from them when the card is someone else's). A character no one plays: the seater's
-			// (a live character seat), else the card owner's.
+			// from them when the card is someone else's), except the session owner's own card: that is
+			// theirs whoever plays it (HM1, 2026-11-17, `seatSheetHolder`). A character no one plays: the
+			// seater's (a live character seat), else the card owner's.
 			const played = playerSeatOf(owner)
 			if (played && played.player != null)
-				return mine(played.player) ? "own" : "other"
+				return mine(
+					holderOf(played.cardOwner, played.player, played.memberCreator)
+					.holder
+				)
+					? "own"
+					: "other"
 			// A card-less character seat is its seater's (no card owner to fall back on).
 			if (owner.kind === "seated_member" && characterId == null)
-				return mine(seaterOfMember.get(owner.id) ?? null) ? "own" : "other"
-			return characterId != null &&
-				mine(
-					seaterOf.get(characterId) ??
-						factsOfOwner(owner, characterId)?.userId ??
-						null
-				)
+				return mine(
+				holderOf(
+					null,
+					seaterOfMember.get(owner.id) ?? null,
+					makerOfMember.get(owner.id)
+				).holder
+			)
+				? "own"
+				: "other"
+			if (characterId == null) return "other"
+			const cardOwnerId = factsOfOwner(owner, characterId)?.userId ?? null
+			return mine(
+				holderOf(
+					cardOwnerId,
+					seaterOf.get(characterId) ?? cardOwnerId
+				).holder
+			)
 				? "own"
 				: "other"
 		}
 		// The session's owner: their own cards and everyone nobody plays are theirs; a live seat's player is somebody else.
 		const seat = playerSeatOf(owner)
-		return seat && seat.player != null && !mine(seat.player)
-			? "other"
-			: "own"
+		if (!seat || seat.player == null) return "own"
+		const { holder, hm1 } = holderOf(
+			seat.cardOwner,
+			seat.player,
+			seat.memberCreator
+		)
+		return holds(holder, hm1)
+			? "own"
+			: "other"
+	}
+
+	/** The session owner's card a guest plays (HM1): its name, else null. */
+	const ownersCardPlayedByGuest = (
+		owner: StateOwner
+	): { name: string | null } | null => {
+		const seat = playerSeatOf(owner)
+		const characterId = characterOf(owner)
+		const cardOwnerId = seat
+			? seat.cardOwner
+			: characterId != null
+				? (factsOfOwner(owner, characterId)?.userId ?? null)
+				: null
+		if (cardOwnerId == null || cardOwnerId !== sessionOwnerId) return null
+		const person =
+			seat && seat.player != null
+				? seat.player
+				: ((characterId != null ? seaterOf.get(characterId) : undefined) ??
+					cardOwnerId)
+		if (person === cardOwnerId) return null
+		return {
+			name:
+				seat?.name ??
+				(characterId != null
+					? (factsOfOwner(owner, characterId)?.name ?? null)
+					: null)
+		}
+	}
+
+	/** A card-less seat whose sheet HM2 moved from its person to the session's owner (the person did not make its member): its name, else null. */
+	const seatHandedToOwner = (
+		owner: StateOwner
+	): { name: string | null } | null => {
+		let person: number | null | undefined
+		let maker: number | null | undefined
+		let name: string | null = null
+		if (owner.kind === "seated_member" && characterOf(owner) == null) {
+			person = seaterOfMember.get(owner.id)
+			maker = makerOfMember.get(owner.id)
+			name =
+				links.seatedMembers?.find((s) => s.seatMemberId === owner.id)?.name ??
+				null
+		} else {
+			const seat = playerSeatOf(owner)
+			if (!seat || seat.personaId != null) return null
+			person = seat.player
+			maker = seat.memberCreator
+			name = seat.name
+		}
+		return person != null &&
+			maker != null &&
+			maker !== person &&
+			person !== sessionOwnerId
+			? { name }
+			: null
 	}
 
 	/** The words for `not-theirs` from a player's side: a seat or a played character, else the world's. */
 	const notTheirs = (target: EditTarget): string => {
+		const theirs = ownersCardPlayedByGuest(target.owner)
+		if (theirs)
+			return `${theirs.name?.trim() || "That character"} is the session owner's card, so only they change its sheet.`
+		const handed = seatHandedToOwner(target.owner)
+		// 🚧 Provisional copy: the owner has not seen this sentence.
+		if (handed)
+			return `${handed.name?.trim() || "That seat"} is not a seat you made, so only the session's owner changes its sheet.`
 		const seat = playerSeatOf(target.owner)
 		if (!seat) {
 			// 🚧 Copy proposed by the supervisor (plan §25, lane ed brief).

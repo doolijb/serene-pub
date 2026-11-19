@@ -54,6 +54,25 @@ describe("Dungeon Crawler's scripts in QuickJS", () => {
 		}
 	})
 
+	it("the rest counts its days from the session's first day, not from Year 1 (tl-4)", async () => {
+		const rest = (storyTime: unknown) =>
+			run(CORE_SCRIPTS.find((c) => c.seedKey === "core:script/dungeon-crawler-rest")!.source, {
+				session: { ownerUserId: 1, cast: { sessionPersonas: [] }, annex: { core: {} } },
+				state: {},
+				ruleset,
+				cast: { storyTime }
+			})
+		// First stamped message on 2026-03-10; the clock now two days later: Day 3.
+		const out = await rest({ now: { year: 2026, month: 3, day: 12, hour: 8, minute: 0 }, sessionStart: { year: 2026, month: 3, day: 10 } })
+		expect(out.journal).toBe("The party rests. Day 3, 08:00 → Day 3, 16:00.")
+		// Nothing stamped yet: the rest's own first reference is Day 1.
+		const bare = await rest({ now: { year: 2026, month: 3, day: 12, hour: 8, minute: 0 } })
+		expect(bare.journal).toBe("The party rests. Day 1, 08:00 → Day 1, 16:00.")
+		// A branch copies the stamps with the messages: the same start, the same label.
+		const branch = await rest({ now: { year: 2026, month: 3, day: 12, hour: 8, minute: 0 }, sessionStart: { year: 2026, month: 3, day: 10 } })
+		expect(branch.journal).toBe(out.journal)
+	})
+
 	it("read-path reads a part, or null", async () => {
 		expect(await run(READ_PATH_SCRIPT.source, { from: { a: { b: 2 } }, path: "a.b" })).toBe(2)
 		expect(await run(READ_PATH_SCRIPT.source, { from: {}, path: "x.y" })).toBeNull()

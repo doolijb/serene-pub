@@ -88,7 +88,7 @@
 							href="/document-view/sessions/{session.id}/edit"
 							class="a11y-btn a11y-btn-small"
 						>
-							Edit
+							{session.isOwner ? "Edit" : "Participants"}
 						</a>
 					{/if}
 					{#if session.isOwner}

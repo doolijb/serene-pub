@@ -299,3 +299,190 @@ describe("resolution by variable", () => {
 		expect(entry?.source).toBeUndefined()
 	}, 60_000)
 })
+
+describe("the variable block reads the layout rows once per build", () => {
+	const PARITY_A = "acme:var/parity-a@1"
+	const PARITY_B = "acme:var/parity-b@1"
+	const aRow = async (values: Record<string, unknown>) => {
+		const [row] = await db
+			.insert(schema.pipelineVariableTemplates)
+			.values({ source: "x", ...values } as never)
+			.returning()
+		return row!.id
+	}
+	const countedBuild = async () => {
+		const client = (db as unknown as { $client: { query: (...a: unknown[]) => unknown } }).$client
+		const original = client.query.bind(client)
+		let statements = 0
+		client.query = (...args: unknown[]) => {
+			const first = args[0] as string | { text?: string }
+			const sql = typeof first === "string" ? first : (first?.text ?? "")
+			if (sql.includes("pipeline_variable_templates")) statements++
+			return original(...args)
+		}
+		try {
+			const entry = await resolved()
+			return { entry, statements }
+		} finally {
+			client.query = original
+		}
+	}
+
+	it("one build issues exactly one statement on pipeline_variable_templates", async () => {
+		await setPreset({})
+		await setPub(null)
+		const first = await aRow({ variableId: WORLD_LORE, name: "Only layout", reference: "acme/only@1" })
+		const { entry, statements } = await countedBuild()
+		expect(statements).toBe(1)
+		expect(entry?.reason).toBe("default")
+		expect(entry?.name).toBe("Only layout")
+		void first
+	}, 60_000)
+
+	it("pub only is the pub's; preset and pub together is the preset's, through the batch", async () => {
+		const pubId = await aRow({
+			variableId: WORLD_LORE,
+			name: "Batch pub",
+			reference: "acme/batch-pub@1",
+			pubDefault: true
+		})
+		await aRow({ variableId: WORLD_LORE, name: "Batch preset", reference: "acme/batch-preset@1" })
+		const pubOnly = await countedBuild()
+		expect(pubOnly.entry?.reason).toBe("pub")
+		expect(pubOnly.entry?.name).toBe("Batch pub")
+		expect(pubOnly.statements).toBe(1)
+		await setPreset({ [WORLD_LORE]: "acme/batch-preset@1" })
+		const both = await countedBuild()
+		expect(both.entry?.reason).toBe("preset")
+		expect(both.entry?.name).toBe("Batch preset")
+		expect(both.statements).toBe(1)
+		await setPreset({ [WORLD_LORE]: "gone/removed@1" })
+		expect((await countedBuild()).entry?.reason).toBe("pub")
+		await setPreset({})
+		void pubId
+	}, 60_000)
+
+	it("each in-memory lookup answers as the database helper itself", async () => {
+		const PARITY_C = "acme:var/parity-c@1"
+		const PARITY_D = "acme:var/parity-d@1"
+		const { SHIPPED_VARIABLE_TEMPLATES, seedKeyFor } = await import("$lib/server/pipelines/entities/variableLayouts")
+		// A: a foreign package row, a withdrawn pub row, an own row with a reference.
+		const foreign = await aRow({
+			variableId: PARITY_A,
+			name: "Foreign",
+			reference: "o/foreign@1",
+			ownerPluginId: 9001,
+			templateId: "other:template/foreign@1"
+		})
+		const withdrawn = await aRow({
+			variableId: PARITY_A,
+			name: "Withdrawn",
+			reference: "o/withdrawn@1",
+			pubDefault: true,
+			withdrawnAt: new Date(),
+			ownerPluginId: 9002,
+			templateId: "acme:template/withdrawn@1"
+		})
+		const own = await aRow({ variableId: PARITY_A, name: "Own", reference: "o/own@1" })
+		// B: a live pub row and a package's row in the variable's own namespace.
+		const pub = await aRow({ variableId: PARITY_B, name: "Pub", reference: "o/pub@1", pubDefault: true, isImmutable: true })
+		const pkg = await aRow({
+			variableId: PARITY_B,
+			name: "Package",
+			reference: "o/pkg@1",
+			ownerPluginId: 9003,
+			templateId: "acme:template/pkg@1"
+		})
+		// An empty-string reference, and a withdrawn row that is no plugin's.
+		const empty = await aRow({ variableId: PARITY_B, name: "Empty reference", reference: "" })
+		const withdrawnOwn = await aRow({
+			variableId: PARITY_B,
+			name: "Withdrawn own",
+			reference: "o/withdrawn-own@1",
+			withdrawnAt: new Date()
+		})
+		// A reference a preset still names, to a layout deleted since.
+		const deleted = await aRow({ variableId: PARITY_B, name: "Deleted", reference: "o/deleted@1" })
+		await db.delete(schema.pipelineVariableTemplates).where(eq(schema.pipelineVariableTemplates.id, deleted))
+		// C: a disabled plugin's layout is the variable's only row.
+		const disabled = await aRow({
+			variableId: PARITY_C,
+			name: "Disabled plugin's",
+			reference: "o/disabled@1",
+			pubDefault: true,
+			ownerPluginId: 9004,
+			templateId: "acme:template/disabled@1",
+			withdrawnAt: new Date()
+		})
+		// A shipped default's seed row that sits on another variable than the one it is the default of.
+		const shipped = SHIPPED_VARIABLE_TEMPLATES.find((t) => t.isDefault && t.variableId !== WORLD_LORE)!
+		const [seedRow] = await db
+			.select()
+			.from(schema.pipelineVariableTemplates)
+			.where(eq(schema.pipelineVariableTemplates.seedKey, seedKeyFor(shipped)))
+		expect(seedRow, "the shipped default is seeded").toBeTruthy()
+		const movedFrom = seedRow!.variableId
+		await db
+			.update(schema.pipelineVariableTemplates)
+			.set({ variableId: PARITY_D })
+			.where(eq(schema.pipelineVariableTemplates.id, seedRow!.id))
+		try {
+			const all = await db.select().from(schema.pipelineVariableTemplates)
+			const variableIds = [...new Set(all.map((r: { variableId: string }) => r.variableId))] as string[]
+			expect(variableIds).toEqual(expect.arrayContaining([PARITY_A, PARITY_B, PARITY_C, PARITY_D, movedFrom]))
+
+			const { readVariableLayoutRows, variableLayoutLookups } = await import("$lib/server/pipelines/config/world")
+			const { pubLayoutOf, layoutByReference } = await import("$lib/server/pipelines/entities/variableTemplates")
+			const { defaultVariableTemplateFor } = await import("$lib/server/pipelines/boot/seedVariableTemplates")
+			const { referencedLayoutOf } = await import("$lib/server/pipelines/entities/variableLayouts")
+			const { layoutOfValue } = await import("$lib/server/pipelines/registrations/values")
+			const { isAutomaticRow } = await import("$lib/server/pipelines/config/variableLayoutsView")
+			const { getVariable } = await import("@serene-pub/sdk")
+
+			const batch = await readVariableLayoutRows(db, variableIds)
+			const look = variableLayoutLookups(batch.rows, (row, V) => isAutomaticRow(row, getVariable(V)))
+			const ids = [foreign, withdrawn, own, pub, pkg, empty, withdrawnOwn, deleted, disabled, ...all.map((r: { id: number }) => r.id)]
+			const references = [
+				...new Set([
+					...all.map((r: { reference: string | null }) => r.reference).filter((r: string | null): r is string => r != null),
+					"",
+					"o/deleted@1",
+					"never/named@1"
+				])
+			]
+			for (const V of variableIds) {
+				expect(look.pub(V), `pub ${V}`).toBe(await pubLayoutOf(db, V))
+				expect(look.defaultFor(V), `default ${V}`).toBe(await defaultVariableTemplateFor(db, V))
+				for (const ref of references) {
+					expect(look.byReference(V, ref), `byReference ${V} ${ref}`).toBe(await layoutByReference(db, V, ref))
+					expect(look.referenced(V, ref), `referenced ${V} ${ref}`).toEqual(await referencedLayoutOf(db, V, ref))
+				}
+				for (const id of [...ids, "not-an-id" as unknown as number]) {
+					expect(look.layoutOf(id, V), `layoutOf ${V} ${id}`).toEqual(await layoutOfValue(db, id, V))
+					if (typeof id === "number") {
+						const [full] = all.filter((r: { id: number }) => r.id === id)
+						expect(look.automatic(V, id), `automatic ${V} ${id}`).toBe(
+							!!full && isAutomaticRow(full, getVariable(V))
+						)
+					}
+				}
+			}
+			// The fixtures say what they are for.
+			expect(look.pub(PARITY_A)).toBeNull()
+			expect(look.byReference(PARITY_A, "o/withdrawn@1")).toBeNull()
+			expect(look.defaultFor(PARITY_A)).toBe(own)
+			expect(look.pub(PARITY_B)).toBe(pub)
+			expect(look.byReference(PARITY_B, "")).toBe(empty)
+			expect(look.byReference(PARITY_B, "o/withdrawn-own@1")).toBeNull()
+			expect(look.byReference(PARITY_B, "o/deleted@1")).toBeNull()
+			expect(look.pub(PARITY_C)).toBeNull()
+			expect(look.defaultFor(PARITY_C)).toBeNull()
+			expect(look.defaultFor(shipped.variableId)).toBe(seedRow!.id)
+		} finally {
+			await db
+				.update(schema.pipelineVariableTemplates)
+				.set({ variableId: movedFrom })
+				.where(eq(schema.pipelineVariableTemplates.id, seedRow!.id))
+		}
+	}, 60_000)
+})

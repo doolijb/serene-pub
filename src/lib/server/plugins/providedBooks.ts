@@ -1511,24 +1511,36 @@ export async function saveMark(
  * Delete the books and cards carrying this plugin's mark (`providedBooks:
  * 'delete'` on uninstall). Books by the one deletion rule (`purgeLorebook`),
  * cards the way `characters:delete` does (soft). Anything without a genuine
- * mark (a copy, a card a person made) is never touched.
+ * mark (a copy, a card a person made) is never touched. A book a session
+ * plays on is kept, as an ordinary book (its disabled mark cleared), and
+ * named in `kept`.
  */
 export async function deleteProvidedBooks(
 	db: Db,
 	pluginId: string
-): Promise<{ books: number; characters: number }> {
+): Promise<{ books: number; characters: number; kept: string[] }> {
 	const books = await db
 		.select()
 		.from(schema.lorebooks)
 		.where(sql`${schema.lorebooks.extraJson}->'provided'->>'plugin' = ${pluginId}`)
 	let deleted = 0
+	const kept: string[] = []
+	const { bookDeleteRefusal } = await import("$lib/server/sessions/bookLock")
 	for (const book of books) {
-		if (!markedBook(book.extraJson, book.uuid)) continue
-		await db.transaction(async (tx) => {
+		const mark = markedBook(book.extraJson, book.uuid)
+		if (!mark) continue
+		const stayed = await db.transaction(async (tx) => {
+			if (await bookDeleteRefusal(tx as unknown as Db, book.id, null)) {
+				const { disabled: _drop, ...rest } = mark
+				await saveMark(tx as unknown as Db, book, rest)
+				return true
+			}
 			await purgeLorebook(tx as unknown as Db, book.id)
 			await tx.delete(schema.lorebooks).where(eq(schema.lorebooks.id, book.id))
+			return false
 		})
-		deleted++
+		if (stayed) kept.push(book.name)
+		else deleted++
 	}
 	const cards = await db
 		.select({
@@ -1565,7 +1577,7 @@ export async function deleteProvidedBooks(
 				.set({ isDeleted: true })
 				.where(inArray(schema.characters.id, ids))
 		})
-	return { books: deleted, characters: ids.length }
+	return { books: deleted, characters: ids.length, kept }
 }
 
 // ── the plugin page ─────────────────────────────────────────────────────

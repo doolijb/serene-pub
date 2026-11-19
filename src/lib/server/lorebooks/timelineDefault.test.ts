@@ -11,20 +11,21 @@ describe("timelineDefaultFor", () => {
 	test.each([
 		["an unresolved genre, preset false", null, preset(false), true],
 		["an undefined genre, no preset", undefined, null, true],
+		["a required genre, no preset", required, null, true],
 		["a required genre, preset false", required, preset(false), true],
 		["a required genre, preset true", required, preset(true), true],
 		["a required genre that keeps real time, preset false", { timeline: "required", keepsTime: "real" }, preset(false), true],
 		["a story genre, preset false", story, preset(false), false],
 		["a story genre, preset true", story, preset(true), true],
-		["a story genre, nothing", story, null, true],
-		["a story genre, a preset with no defaults", story, {}, true],
+		["a story genre, nothing", story, null, false],
+		["a story genre, a preset with no defaults", story, {}, false],
 		["a real genre, nothing", real, null, false],
 		["a real genre, preset true", real, preset(true), true],
 		["a real genre, preset false", real, preset(false), false],
 		["no keepsTime, nothing", {}, null, false],
-		["a story genre, a non-boolean preset value", story, preset("no"), true],
+		["a story genre, a non-boolean preset value", story, preset("no"), false],
 		["a real genre, a non-boolean preset value", real, preset(1), false],
-		["a story genre, null defaults", story, { defaults: null }, true]
+		["a story genre, null defaults", story, { defaults: null }, false]
 	])("%s", (_name, genre, p, want) => {
 		expect(timelineDefaultFor(genre as any, p as any)).toBe(want)
 	})

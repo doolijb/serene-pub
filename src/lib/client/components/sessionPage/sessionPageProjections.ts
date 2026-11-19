@@ -28,7 +28,10 @@ import {
 	currentSpriteIn,
 	currentSpriteOf
 } from "$lib/client/utils/sprites"
-import { embeddingsStarred } from "$lib/shared/constants/embeddings"
+import {
+	EMBEDDING_CAPABILITY,
+	embeddingsStarred
+} from "$lib/shared/constants/embeddings"
 import {
 	messageEnvoySlug,
 	messageSpeaker,
@@ -70,6 +73,14 @@ import {
 	type LoreWriteMode
 } from "$lib/shared/lorebooks/loreWriteMode"
 import { composerWritingAs } from "$lib/shared/sessions/playerSeat"
+import {
+	REPLY_RUN_NAME,
+	runHoldsReruns,
+	waitForRunSentence
+} from "$lib/shared/sessions/runsInProgress"
+import type { RunInProgressV1 } from "@serene-pub/sdk"
+import type { SessionRunRecord } from "$lib/client/sessions/store/records"
+import { statusText } from "$lib/client/i18n/state.svelte"
 import { roundWaitingFor } from "$lib/client/components/sessionPage/roundWaiting"
 import type { DraftWrite } from "$lib/client/components/sessionPage/collects"
 
@@ -264,7 +275,7 @@ export function canControlMessageAs(
 			(held.length
 				? held
 				: players.filter((cp) => cp.personaId === msg.personaId)
-			).some((cp) => cp.persona?.userId === userCtx.user?.id)
+			).some((cp) => (cp.userId ?? cp.persona?.userId) === userCtx.user?.id)
 		)
 	}
 
@@ -464,46 +475,93 @@ export function headerCastKeyOf(
 	session: LoadedSession,
 	nextRef: string | null
 ): string {
-	const characters = (session?.sessionCharacters ?? [])
-		.filter((cc) => !!cc.character)
-		.map((cc) => {
-			// The seat's own ref (host-filled), else ⏳ today's card form.
-			const key =
-				seatRefOf(cc, "character") ?? `character:${cc.character.id}`
-			// The card as its cast member shows it: its own sprite sets and
-			// face over the card's (s27 S2), so one rule draws the disc.
-			const shown = seatCardAsShown(session as any, cc.character)
-			return {
-				key,
-				name: castNameOf(
-					session as any,
-					cc.character.id,
-					cc.character,
-					cc.character.name
-				),
-				// The CURRENT sprite (DESIGN-sprites §7): the face on this
-				// character's newest line, else its avatar. Derived from the
-				// loaded messages, never stored.
-				avatarSrc:
-					headerFaceOf(
-						shown,
-						currentSpriteIn(
-							currentSpriteOf(
-								cc.character.id,
-								(session?.sessionMessages ?? []) as any[]
-							),
-							(session as any)?.spriteSetOverrides?.[
-								cc.character.id
-							]
-						)
-					) ?? null,
-				isPersona: false,
-				isNext: nextRef != null && key === nextRef
-			}
+	// Who is in the session now: live seats only (a removed seat is kept for
+	// its old lines, never listed), one entry per card or card-less member, a
+	// character seat before a player seat on the same card.
+	const seenCards = new Set<number>()
+	const seenMembers = new Set<number>()
+	const out: Array<{
+		key: string
+		name: string
+		avatarSrc: string | null
+		isPersona: boolean
+		isNext: boolean
+	}> = []
+	const cardless = (
+		seat: { castMemberId?: number | null; seatName?: string | null; portraitMediaId?: number | null },
+		ref: string | null,
+		isPersona: boolean
+	) => {
+		const member = seat.castMemberId
+		if (member == null || seenMembers.has(member)) return
+		const who = messageSpeaker(session as any, {
+			castMemberId: member,
+			metadata: { speaker: ref }
+		} as any)
+		const seatName = isPersona ? seat.seatName?.trim() : ""
+		if (!who && !seatName) return
+		seenMembers.add(member)
+		out.push({
+			key: ref ?? `member:${member}`,
+			name: seatName || resolveCharacterName(who as any, (who as any)?.name ?? ""),
+			avatarSrc:
+				avatarSrc(
+					seatName && seat.portraitMediaId != null
+						? withPortrait({}, seat.portraitMediaId)
+						: (who as any)
+				) ?? null,
+			isPersona,
+			isNext: !isPersona && nextRef != null && ref === nextRef
 		})
-	const personas = (session?.sessionPersonas ?? [])
-		.filter((cp) => !!cp.persona)
-		.map((cp) => ({
+	}
+	for (const cc of session?.sessionCharacters ?? []) {
+		if ((cc as any).removedAt) continue
+		if (!cc.character) {
+			cardless(cc as any, seatRefOf(cc as any, "character"), false)
+			continue
+		}
+		if (seenCards.has(cc.character.id)) continue
+		seenCards.add(cc.character.id)
+		// The seat's own ref (host-filled), else ⏳ today's card form.
+		const key = seatRefOf(cc, "character") ?? `character:${cc.character.id}`
+		// The card as its cast member shows it: its own sprite sets and
+		// face over the card's (s27 S2), so one rule draws the disc.
+		const shown = seatCardAsShown(session as any, cc.character)
+		out.push({
+			key,
+			name: castNameOf(
+				session as any,
+				cc.character.id,
+				cc.character,
+				cc.character.name
+			),
+			// The CURRENT sprite (DESIGN-sprites §7): the face on this
+			// character's newest line, else its avatar. Derived from the
+			// loaded messages, never stored.
+			avatarSrc:
+				headerFaceOf(
+					shown,
+					currentSpriteIn(
+						currentSpriteOf(
+							cc.character.id,
+							(session?.sessionMessages ?? []) as any[]
+						),
+						(session as any)?.spriteSetOverrides?.[cc.character.id]
+					)
+				) ?? null,
+			isPersona: false,
+			isNext: nextRef != null && key === nextRef
+		})
+	}
+	for (const cp of session?.sessionPersonas ?? []) {
+		if ((cp as any).removedAt) continue
+		if (!cp.persona) {
+			cardless(cp as any, seatRefOf(cp as any, "player"), true)
+			continue
+		}
+		if (seenCards.has(cp.persona.id)) continue
+		seenCards.add(cp.persona.id)
+		out.push({
 			key: `persona:${cp.persona.id}`,
 			// The seat's cast member's own name, as a character seat's
 			// (s27 S2c); the seat's own name wins over it.
@@ -512,8 +570,9 @@ export function headerCastKeyOf(
 				avatarSrc(seatCardAsShown(session as any, cp.persona)) ?? null,
 			isPersona: true,
 			isNext: false
-		}))
-	return JSON.stringify([...characters, ...personas])
+		})
+	}
+	return JSON.stringify(out)
 }
 
 /** A state proposal row as the conversation draws it (C0b). */
@@ -559,14 +618,23 @@ export function describeProposalRowWith(
 	}
 }
 
-/** A line's vectors against the active embedding model (the old EmbeddingStatusIcon's rule). */
+/**
+ * A line's vectors against the active embedding model (the old EmbeddingStatusIcon's rule).
+ * `state` is what the server worked out for a reader who is not an administrator
+ * (their row carries no model id); it is used when present, the id otherwise.
+ */
 export function embeddingStatusIn(
 	systemSettingsCtx: SystemSettingsCtx,
-	model: string | null | undefined
+	model: string | null | undefined,
+	state?: "current" | "stale" | "none" | null
 ): ConversationLineV1["embedding"] {
 	const active = systemSettingsCtx?.settings?.activeEmbeddingModel ?? null
-	if (!embeddingsStarred(systemSettingsCtx?.capabilityDefaults) || !active)
-		return "hidden"
+	const on =
+		embeddingsStarred(systemSettingsCtx?.capabilityDefaults) ||
+		!!systemSettingsCtx?.capabilitiesReady?.includes(EMBEDDING_CAPABILITY)
+	if (!on) return "hidden"
+	if (state) return state
+	if (!active) return "hidden"
 	if (model === active) return "current"
 	return model ? "stale" : "none"
 }
@@ -605,6 +673,113 @@ function samePlainData(a: unknown, b: unknown): boolean {
 		if (!Object.hasOwn(b, k) || !samePlainData(a[k], b[k])) return false
 	}
 	return true
+}
+
+/**
+ * 🚧 The session's summaries under way, as background runs for the turn line:
+ * a scene's (one of this session's scenes) and the session's own. `id` is the
+ * activity id; `mayStop` is the viewer's own activity, or any for an admin.
+ */
+export function summaryRunsOf(input: {
+	sessionId: number | null
+	sceneActivities: readonly {
+		activityId: string
+		userId: number
+		sceneId: number
+		sceneName?: string
+		status: string
+		startedAt: string
+	}[]
+	sessionActivities: readonly {
+		activityId: string
+		userId: number
+		sessionId: number
+		status: string
+		startedAt: string
+	}[]
+	scenes: readonly { id: number; name?: string | null }[]
+	viewer: { id: number | null; isAdmin: boolean }
+}): RunInProgressV1[] {
+	const may = (userId: number) => input.viewer.isAdmin || userId === input.viewer.id
+	const since = (startedAt: string) => {
+		const at = Date.parse(startedAt)
+		return Number.isFinite(at) ? { since: at } : {}
+	}
+	const out: RunInProgressV1[] = []
+	const sceneName = new Map(input.scenes.map((s) => [s.id, s.name]))
+	for (const a of input.sceneActivities) {
+		if (a.status !== "running" || !sceneName.has(a.sceneId)) continue
+		const name = (a.sceneName ?? sceneName.get(a.sceneId) ?? "").trim()
+		out.push({
+			id: a.activityId,
+			kind: "summary",
+			name: name ? `Summarizing ${name}` : "Summarizing a scene",
+			...since(a.startedAt),
+			mayStop: may(a.userId)
+		})
+	}
+	for (const a of input.sessionActivities) {
+		if (a.status !== "running" || a.sessionId !== input.sessionId) continue
+		out.push({
+			id: a.activityId,
+			kind: "summary",
+			name: "Summarizing the session",
+			...since(a.startedAt),
+			mayStop: may(a.userId)
+		})
+	}
+	return out
+}
+
+/**
+ * 🚧 The background runs in progress, from the store's runs: an action or a
+ * routine, not bound to one line, registered (`since` set) or a routine's own
+ * frame. `readsReplyOf` names the speaker of the line that caused the run, when
+ * the page holds that line (`speakerOf` answers undefined otherwise).
+ */
+export function runsInProgressOf(
+	runs: readonly SessionRunRecord[],
+	words: {
+		statusOf(status: SessionRunRecord["status"]): string
+		speakerOf(messageId: number): string | undefined
+	},
+	summaries: readonly RunInProgressV1[]
+): RunInProgressV1[] {
+	const out: RunInProgressV1[] = []
+	for (const r of runs) {
+		if (r.kind !== "action" && r.kind !== "routine") continue
+		if (r.lineBound) continue
+		if (r.since === undefined && !r.routine) continue
+		const name = (r.name ?? r.routine?.name)?.trim()
+		if (!name) continue
+		const status = words.statusOf(r.status).trim()
+		const speaker =
+			r.readsMessageId !== undefined ? words.speakerOf(r.readsMessageId) : undefined
+		out.push({
+			id: r.runId,
+			kind: r.kind,
+			name,
+			...(status ? { status } : {}),
+			...(r.since !== undefined ? { since: r.since } : {}),
+			...(speaker ? { readsReplyOf: speaker } : {}),
+			...(r.parked ? { parked: true as const } : {}),
+			mayStop: r.mayStop === true
+		})
+	}
+	return [...out, ...summaries]
+}
+
+/**
+ * 🚧 The sentence swipe, regenerate, delete, Back and Regenerate the last turn
+ * grey with: the first run that holds re-runs (`runHoldsReruns`), by name.
+ * Undefined when none does.
+ */
+export function rerunWaitsForOf(runs: readonly SessionRunRecord[]): string | undefined {
+	const held = runs.find((r) => runHoldsReruns(r))
+	if (!held) return undefined
+	return waitForRunSentence(
+		held.kind === "reply" ? REPLY_RUN_NAME : (held.name ?? held.routine?.name ?? "a run")
+	)
 }
 
 /** What the conversation's dossier is built from: the page's stores and contexts, read as the build reads them. */
@@ -722,15 +897,18 @@ export function projectConversationDossier(
 	})
 	const describeProposalRow = (row: Sockets.State.ProposalRow) =>
 		describeProposalRowWith(stateStore, row, userCtx.user?.id ?? null)
-	const embeddingStatusOf = (model: string | null | undefined) =>
-		embeddingStatusIn(systemSettingsCtx, model)
+	const embeddingStatusOf = (
+		model: string | null | undefined,
+		state?: "current" | "stale" | "none" | null
+	) => embeddingStatusIn(systemSettingsCtx, model, state)
 	const lines: ConversationDossierV1["lines"] = {}
 	// A line's facts are rebuilt only when something they read changed —
 	// a streamed token rewrites one row's text, not who spoke every line.
 	const castKey = [
 		userCtx.user?.id,
+		// `promptDetails` reads the viewer (`isGuest`, administrator) and
+		// context debugging.
 		isGuest,
-		// `promptDetails` reads both.
 		userCtx.user?.isAdmin,
 		systemSettingsCtx.settings?.contextDebuggingEnabled,
 		// A face drawn for the box landed: the lines waiting on it rebuild.
@@ -739,6 +917,7 @@ export function projectConversationDossier(
 		lastAuthorMessage?.id,
 		canRegenerateLastMessage,
 		systemSettingsCtx.settings?.activeEmbeddingModel,
+		systemSettingsCtx.capabilitiesReady?.join(","),
 		...(session.sessionCharacters ?? []).map(
 			(cc) =>
 				`${(cc as { ref?: string | null }).ref ?? ""}:${cc.castMemberId ?? ""}:${cc.characterId}:${cc.character?.name}:${cc.character?.avatarMediaId}:${(session as any)?.castFaces?.[cc.characterId ?? -1] ?? ""}:${JSON.stringify((session as any)?.castNames?.[cc.characterId ?? -1] ?? null)}:${JSON.stringify((session as any)?.castSpriteSets?.[cc.characterId ?? -1] ?? null)}`
@@ -788,6 +967,7 @@ export function projectConversationDossier(
 			// A greeting that asks is not rerunnable (`rowAsks`).
 			(m as { parts?: unknown[] }).parts?.length,
 			(m as { embeddingModel?: string | null }).embeddingModel,
+			(m as { embeddingState?: string | null }).embeddingState,
 			!!(m as { debugMeta?: unknown }).debugMeta
 		])
 		const held = lineCache.get(m.id)
@@ -845,10 +1025,13 @@ export function projectConversationDossier(
 				right: canSwipeRight(m, greeting)
 			},
 			embedding: embeddingStatusOf(
-				(m as { embeddingModel?: string | null }).embeddingModel
+				(m as { embeddingModel?: string | null }).embeddingModel,
+				(m as { embeddingState?: "current" | "stale" | "none" | null })
+					.embeddingState
 			),
 			// Whether a prompt is on record — the prompt itself stays on the
-			// page (`prompt-details`); rows reach the widget without it.
+			// page (`prompt-details`); rows reach the widget without it. An
+			// administrator's alone (DG1, 2026-11-17).
 			promptDetails:
 				!!userCtx.user?.isAdmin &&
 				!!systemSettingsCtx.settings?.contextDebuggingEnabled &&
@@ -865,10 +1048,14 @@ export function projectConversationDossier(
 		(src.scenes.lorebookBindingList ?? []).map((b) => [b.id, b])
 	)
 	const castOf: SceneCastFaces | undefined = members.size
-		? (ids) =>
-				ids.flatMap((id) => {
+		? (ids) => {
+				// One face per person: a member named twice, or two members
+				// the same seat answers to, show once.
+				const shown = new Set<string>()
+				return ids.flatMap((id) => {
 					const b = members.get(id)
-					if (!b) return []
+					if (!b || shown.has(`b:${id}`)) return []
+					shown.add(`b:${id}`)
 					const cid = b.characterId
 					// The seat holding this member names its ref; ⏳ with no
 					// seat, the member's linked card's (card-form payload, S5).
@@ -883,6 +1070,10 @@ export function projectConversationDossier(
 								participantForRefIn(session, ref)?.avatarUrl
 							)
 						: null
+					if (ref) {
+						if (shown.has(ref)) return []
+						shown.add(ref)
+					}
 					return [
 						{
 							ref,
@@ -891,6 +1082,7 @@ export function projectConversationDossier(
 						}
 					]
 				})
+			}
 		: undefined
 	const next: ConversationDossierV1 = {
 		sessionId: session.id,
@@ -898,7 +1090,7 @@ export function projectConversationDossier(
 		// 🚧 Live scenes (§14 C): each row with its lane, boundaries, clocks
 		// and summary state; `scened` adds the lines inside a live range.
 		scenes: (sceneList as unknown as LiveSceneRow[]).map((row) =>
-			conversationSceneOf(row, castOf)
+			conversationSceneOf(row, castOf, { storyDates: src.data.storyTimeline })
 		),
 		scened: capturedMessageIds,
 		hasOlder: !!pagination?.hasMore,
@@ -925,7 +1117,8 @@ export function projectConversationDossier(
 			sessionPersonas: (session.sessionPersonas ?? []).map((cp) => ({
 				personaId: cp.personaId ?? null,
 				persona: cp.persona
-					? { userId: cp.persona.userId ?? null }
+					? // The seat's person; the card's owner only when the seat names nobody.
+						{ userId: cp.userId ?? cp.persona.userId ?? null }
 					: null
 			})),
 			sessionCharacters: (session.sessionCharacters ?? []).map((cc) => ({
@@ -990,6 +1183,22 @@ export function projectConversationDossier(
 		liveRunIds: src.data.liveRunIds,
 		// 🚧 The routine runs showing as running — names only, for the turn line.
 		runningRoutineNames: src.data.runningRoutineNames,
+		// 🚧 The background runs the turn line lists, and the sentence the re-run
+		// buttons grey with while a run holds them (absent when none does).
+		runsInProgress: runsInProgressOf(
+			src.data.runs ?? [],
+			{
+				statusOf: (status) => statusText(status),
+				// The speaker of a line this page holds; none when it is not loaded.
+				speakerOf: (id) => lines[id]?.speaker.name
+			},
+			src.data.summaryRuns ?? []
+		),
+		...(src.data.rerunWaitsFor ? { rerunWaitsFor: src.data.rerunWaitsFor } : {}),
+		// 🚧 The pub's step time limits are off (Admin › Diagnostics): administrators only, as `debugPrompts` (lane dbg-1).
+		...(userCtx.user?.isAdmin && systemSettingsCtx.settings?.stepTimeLimitsOff
+			? { stepTimeLimitsOff: true as const }
+			: {}),
 		// 🚧 Whether this pub can speak at all (server-read boolean + reason): the
 		// speak icons grey with the reason when it cannot. Read aloud Off is NOT
 		// a reason; on-demand still works.

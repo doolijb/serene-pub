@@ -6,6 +6,7 @@
 	 * this control sends `voicebank:preview`, plays the clip, and says any
 	 * refusal in place (never a toast: Layout skips `voicebank:preview:error`).
 	 */
+	import { copyText } from "$lib/client/utils/copyText"
 	import * as Icons from "@lucide/svelte"
 	import { onDestroy } from "svelte"
 	import { v4 as uuid } from "uuid"
@@ -96,12 +97,11 @@
 
 	async function copySeed() {
 		if (seed == null) return
-		try {
-			await navigator.clipboard.writeText(String(seed))
+		if (await copyText(String(seed))) {
 			copied = true
 			clearTimeout(copiedTimer)
 			copiedTimer = setTimeout(() => (copied = false), 1500)
-		} catch {
+		} else {
 			/* no clipboard: the number input still shows it */
 			editingSeed = true
 		}

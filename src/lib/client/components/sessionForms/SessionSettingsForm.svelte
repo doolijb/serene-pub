@@ -12,9 +12,9 @@
 	 *     is doing now, and its mode (Off · Review · Full) for anyone with the
 	 *     settings; an administrator also changes when it runs (R36).
 	 *
-	 * Who sees what is the server's: an owner gets the settings that reach
-	 * them and nothing a layer above locked; an administrator, in their own
-	 * session, everything — locked values read-only with the layer's reason.
+	 * Who sees what is the server's: an owner sees a setting a layer above
+	 * locked read-only with the layer's reason, as an administrator does; an
+	 * administrator, in their own session, sees everything.
 	 * A guest is answered with no groups (R1) and this draws nothing.
 	 *
 	 * Every control applies at once (`sessions:updateSetting`), settled on its
@@ -27,7 +27,8 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import SessionSettingField from "./SessionSettingField.svelte"
 	import SessionRoutineRow from "./SessionRoutineRow.svelte"
-	import { splitAdvanced } from "./sessionSettingsForm"
+	import { humanizeFieldName, isPromptRow, splitAdvanced } from "./sessionSettingsForm"
+	import PromptWordingDialog from "$lib/client/components/pipelines/PromptWordingDialog.svelte"
 	import SpeechSettingsBlock from "./SpeechSettingsBlock.svelte"
 	import { splitSpeechFields } from "./speechSettingsBlock"
 	import { getContext } from "svelte"
@@ -124,27 +125,58 @@
 		}
 	}
 
+	/** The prompt row being read (the owner's **Read the wording**, D58): its field, and the group it sits in. */
+	let wording = $state<{ field: Field; group: Group } | null>(null)
+	const wordingOption = $derived.by(() => {
+		if (!wording) return null
+		const { field } = wording
+		const value = field.value == null || field.value === "" ? null : Number(field.value)
+		return {
+			id: field.id,
+			value: Number.isNaN(value) ? null : value,
+			choices: (field.members ?? []).map((m) => ({ id: Number(m.key), label: m.label }))
+		}
+	})
+
 	const busy = (f: Field) => !!busyIds.get(f.id)
 	const refusal = (f: Field) => refusals.get(f.id) ?? null
 	const headingOf = (g: Group) => (g.kind === "genre" ? `${g.heading} settings` : g.heading)
+	/** The card's heading when it holds one prompt row, else the heading and the row's label. */
+	const wordingRowLabel = (g: Group, f: Field) =>
+		g.fields.filter((x) => isPromptRow(x)).length > 1 ? `${headingOf(g)} · ${f.label}` : headingOf(g)
 	const declOf = (f: Field) =>
 		f.address.kind === "genre" ? ((genreFieldDecls[f.address.key] as Record<string, unknown> | undefined) ?? null) : null
 </script>
 
-{#snippet fieldList(fields: Field[])}
+{#snippet fieldRow(f: Field, g: Group)}
+	<div class="flex flex-col gap-1">
+		<SessionSettingField
+			field={f}
+			{viewer}
+			busy={busy(f)}
+			refusal={refusal(f)}
+			decl={declOf(f)}
+			valueLabel={valueLabelOf?.(f) ?? null}
+			members={membersOf?.(f)}
+			onwrite={(v) => write(f, v)}
+		/>
+		{#if g.pipeline && isPromptRow(f)}
+			<button
+				type="button"
+				class="text-primary-ink w-fit text-xs underline"
+				aria-label={`Read the wording: ${f.label}`}
+				onclick={() => (wording = { field: f, group: g })}>
+				Read the wording
+			</button>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet fieldList(fields: Field[], g: Group)}
 	{@const parts = splitAdvanced(fields)}
 	<div class="flex flex-col gap-4">
 		{#each parts.front as f (f.id)}
-			<SessionSettingField
-				field={f}
-				{viewer}
-				busy={busy(f)}
-				refusal={refusal(f)}
-				decl={declOf(f)}
-				valueLabel={valueLabelOf?.(f) ?? null}
-				members={membersOf?.(f)}
-				onwrite={(v) => write(f, v)}
-			/>
+			{@render fieldRow(f, g)}
 		{/each}
 		{#if parts.advanced.length}
 			<details>
@@ -153,16 +185,7 @@
 				</summary>
 				<div class="mt-3 flex flex-col gap-4">
 					{#each parts.advanced as f (f.id)}
-						<SessionSettingField
-							field={f}
-							{viewer}
-							busy={busy(f)}
-							refusal={refusal(f)}
-							decl={declOf(f)}
-							valueLabel={valueLabelOf?.(f) ?? null}
-							members={membersOf?.(f)}
-							onwrite={(v) => write(f, v)}
-						/>
+						{@render fieldRow(f, g)}
 					{/each}
 				</div>
 			</details>
@@ -199,7 +222,7 @@
 						{#if g.description}{g.description}{/if}
 						Applies at once.
 					</p>
-					{@render fieldList(g.fields)}
+					{@render fieldList(g.fields, g)}
 				{/if}
 			</section>
 		{/each}
@@ -223,4 +246,18 @@
 			</section>
 		{/if}
 	</div>
+{/if}
+
+{#if wording && wordingOption && wording.group.pipeline}
+	<PromptWordingDialog
+		slug={wording.group.pipeline}
+		{sessionId}
+		option={wordingOption}
+		fieldId={wording.field.id}
+		rowLabel={wordingRowLabel(wording.group, wording.field)}
+		fieldLabel={humanizeFieldName}
+		canPick={wording.field.editable && !busy(wording.field)}
+		onPick={(id) => write(wording!.field, String(id))}
+		onClose={() => (wording = null)}
+	/>
 {/if}

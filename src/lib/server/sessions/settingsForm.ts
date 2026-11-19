@@ -25,8 +25,10 @@
  *    genre's field by default; a pipeline's setting when it declares
  *    `reach: 'owner'`, or (⏳ the step settings folded in here) when its step
  *    is exposed to the session (`expose.session`) and it is a plain value on
- *    a step that calls no model — unless a layer above locked it. A setting
- *    fixed at start is shown, read-only.
+ *    a step that calls no model. A setting a layer above locked
+ *    (the preset, the genre) is shown too, read-only, with that layer's reason
+ *    (owner ruling 2026-11-15, reversing R32's "nothing to the owner"), as is one
+ *    fixed at start; plumbing stays out of an owner's form either way.
  *  · An **administrator**, in their own session, sees every setting; locked
  *    and fixed ones read-only.
  *  · Anyone else — a guest — reaches nothing here (R1): what a guest
@@ -34,8 +36,12 @@
  *  · **Routines:** anyone with the settings picks each routine's mode (R37);
  *    only an administrator changes its cadence's options, Allow stacking and
  *    caps (R36).
- *  · **Model plumbing** — a connection, sampling, a loadout, prompts,
- *    templates — is never in the form, for anyone; the write refuses it too.
+ *  · **Model plumbing** — a connection, sampling, a loadout, templates — is
+ *    never in the form, for anyone; the write refuses it too. Prompts are
+ *    not plumbing here: the session's owner gets the prompt choice of each
+ *    model call that offers a choice (`promptsOffered`; two prompts or more,
+ *    or one in force that isn't its default), named after the call, and may
+ *    read its wording.
  *
  * The write (`updateSetting`) re-derives the form for the asker and finds
  * the address in it: what the asker cannot see or may not change is refused
@@ -73,6 +79,7 @@ import {
 	readEnvoySpeech
 } from "$lib/shared/sessions/speechSettings"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { writeGenreFields, writeRigour } from "$lib/server/sessions/settingsWrite"
 
 type Form = Sockets.Sessions.SettingsForm.Response
 type Group = Sockets.Sessions.SettingsForm.Group
@@ -260,7 +267,7 @@ async function genreGroup(
 	})
 	const fields: Field[] = []
 	for (const s of settings) {
-		const ownerVisible = s.reach === "owner" && !s.lockedAt
+		const ownerVisible = s.reach === "owner"
 		if (!viewer.isAdmin && !ownerVisible) continue
 		const editable = viewer.isAdmin ? !s.lockedAt && !s.fixed : s.ownerSees
 		const address: Address = { kind: "genre", key: s.key }
@@ -306,16 +313,19 @@ async function genreGroup(
 				changes: "rigour",
 				check: async (_db, value) => {
 					if (value === null) return null
-					const { getGenre } = await import("@serene-pub/sdk")
+					const { getGenre, getRuleset } = await import("@serene-pub/sdk")
+					const { rigoursPlayed } = await import("$lib/shared/rulesets/rulesOffer")
+					const { rulesetDecides } = await import("$lib/server/rulesets/methods")
 					const options: readonly string[] = (getGenre(genreId) as any)?.rigour?.options ?? ["prose"]
-					return typeof value === "string" && options.includes(value) ? null : "This genre does not play that strictly."
+					// The creation narrowing: a ruleset that decides nothing plays Words only.
+					const played = rigoursPlayed(rulesetDecides(getRuleset(String(session.primaryRuleset ?? ""))), options) ?? options
+					return typeof value === "string" && options.includes(value) && played.includes(value)
+						? null
+						: "This genre does not play that strictly."
 				},
 				write: async (tx, value) => {
 					const next = typeof value === "string" ? value : typeof s.inherited === "string" ? s.inherited : "prose"
-					await tx
-						.update(schema.sessions)
-						.set({ rigour: next as never, updatedAt: new Date() })
-						.where(eq(schema.sessions.id, session.id))
+					await writeRigour(tx, session.id, next)
 				}
 			})
 			continue
@@ -332,18 +342,11 @@ async function genreGroup(
 				// Merge over what is stored, read inside the write (a field saved
 				// from its widget meanwhile keeps its value).
 				await tx.transaction(async (t: Db) => {
-					const [row] = await t
-						.select({ genreFields: schema.sessions.genreFields })
-						.from(schema.sessions)
-						.where(eq(schema.sessions.id, session.id))
-						.limit(1)
-					const next = { ...((row?.genreFields ?? {}) as Record<string, unknown>) }
-					if (value === null || same(value, s.inherited)) delete next[s.key]
-					else next[s.key] = value
-					await t
-						.update(schema.sessions)
-						.set({ genreFields: next, updatedAt: new Date() })
-						.where(eq(schema.sessions.id, session.id))
+					await writeGenreFields(t, session.id, (cur) => {
+						if (value === null || same(value, s.inherited)) delete cur[s.key]
+						else cur[s.key] = value
+						return cur
+					})
 				})
 			}
 		})
@@ -410,18 +413,11 @@ async function envoyVoices(
 				write: async (tx, value) => {
 					const v = typeof value === "string" ? value.trim() : ""
 					await tx.transaction(async (t: Db) => {
-						const [row] = await t
-							.select({ genreFields: schema.sessions.genreFields })
-							.from(schema.sessions)
-							.where(eq(schema.sessions.id, session.id))
-							.limit(1)
-						const next = { ...((row?.genreFields ?? {}) as Record<string, unknown>) }
-						if (v) next[key] = v
-						else delete next[key]
-						await t
-							.update(schema.sessions)
-							.set({ genreFields: next, updatedAt: new Date() })
-							.where(eq(schema.sessions.id, session.id))
+						await writeGenreFields(t, session.id, (cur) => {
+							if (v) cur[key] = v
+							else delete cur[key]
+							return cur
+						})
 					})
 				}
 			})
@@ -564,17 +560,17 @@ async function pipelineGroup(
 				nodeKey: schema.pipelineNodes.nodeKey,
 				definitionId: schema.pipelineNodes.definitionId,
 				definitionVersion: schema.pipelineNodes.definitionVersion,
-				expose: schema.pipelineNodes.expose
+				expose: schema.pipelineNodes.expose,
+				// The ganged control's home (`config/panel/ganged.ts`): spine order and params refs.
+				position: schema.pipelineNodes.position,
+				config: schema.pipelineNodes.config,
+				resolvedRefs: schema.pipelineNodes.resolvedRefs
 			})
 			.from(schema.pipelineNodes)
 			.where(eq(schema.pipelineNodes.specVersionId, at.specVersionId))
 	])
 	const settingDecls = decls.filter((d) => SETTING_SLOTS.has(d.matrixSlot) && PLAIN_CONTROLS.has(d.control))
-	const nodeExpose = new Map(nodes.map((n) => [n.nodeKey, (n.expose ?? null) as { promptReach?: string } | null]))
-	// 🚧 R54: a step whose prompt choice is the owner's (`expose.promptReach`).
-	const promptDecls = decls.filter(
-		(d) => d.control === "prompts-ref" && nodeExpose.get(d.nodeKey)?.promptReach === "owner" && !!d.nodeDefinitionId
-	)
+	const promptDecls = decls.filter((d) => d.control === "prompts-ref" && !!d.nodeDefinitionId)
 	if (!settingDecls.length && !promptDecls.length) return null
 	const modelCalls = new Set(decls.filter((d) => MODEL_SLOTS.has(d.matrixSlot)).map((d) => d.nodeKey))
 	const nodeOf = new Map(nodes.map((n) => [n.nodeKey, n]))
@@ -610,7 +606,58 @@ async function pipelineGroup(
 		))
 		legacy.set(`${o.nodeKey}\u0000${o.slot}\u0000${o.path ?? ""}`, o.value)
 
+	/** One write to these addresses, on every registration of the pipeline (A9), in the caller's transaction. */
+	const writeMembers = async (tx: Db, members: Array<{ nodeKey: string; slot: string; path: string }>, value: unknown | null) => {
+		for (const m of members) {
+			for (const key of keys)
+				await patchSessionRow(
+					tx,
+					session.id,
+					key,
+					(row) => ({ values: valuesWith(row.values, m, value) as never }),
+					viewer.isAdmin ? "admin" : "owner"
+				)
+			// ⏳ The old home of a step setting is cleared, so a reset resets.
+			await tx
+				.delete(schema.pipelineNodeOverrides)
+				.where(
+					and(
+						eq(schema.pipelineNodeOverrides.specId, at.specId),
+						eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+						eq(schema.pipelineNodeOverrides.scopeId, session.id),
+						eq(schema.pipelineNodeOverrides.nodeKey, m.nodeKey),
+						eq(schema.pipelineNodeOverrides.slot, m.slot),
+						eq(schema.pipelineNodeOverrides.path, m.path)
+					)
+				)
+		}
+	}
 	const fields: Field[] = []
+	// 🚧 The ganged control (`config/panel/ganged.ts`): the members' fields are built as
+	// ever and held back; one field at the home read stands in for them.
+	const { gangedMembersOf, GANGED_PARAMS, gangedDifferenceWords, gangedReading } = await import(
+		"$lib/server/pipelines/config/panel/ganged"
+	)
+	// One gang per ganged param (`GANGED_PARAMS`), each with its own home.
+	const gangNodes = nodes.map((n) => ({
+		key: n.nodeKey,
+		position: n.position,
+		config: n.config as never,
+		resolvedRefs: n.resolvedRefs as never
+	}))
+	const gangs = Object.keys(GANGED_PARAMS).flatMap((path) => {
+		const g = gangedMembersOf(decls, gangNodes, path)
+		return g ? [{ path, ...g }] : []
+	})
+	const gangHeld: Array<{
+		d: (typeof decls)[number]
+		field: Field
+		step: NonNullable<ReturnType<typeof stepOfField>>
+		r: { value: unknown; lockedAt?: string; fixed?: boolean }
+		inherited: unknown
+		editable: boolean
+		addr: string
+	}> = []
 	for (const d of settingDecls) {
 		const node = nodeOf.get(d.nodeKey)
 		if (!node) continue
@@ -641,9 +688,10 @@ async function pipelineGroup(
 		]
 		const r = resolveExposure({ v: decl }, [...above, { layer: "session", values: sessionLayer }], { defaultReach: "admin" }).v!
 		const inherited = resolveExposure({ v: decl }, above, { defaultReach: "admin" }).v!.value
-		const ownerSees = reach === "owner" && !r.lockedAt && !plumbing && !modelStep
-		if (!viewer.isAdmin && !ownerSees && !(r.fixed && reach === "owner" && !r.lockedAt)) continue
-		const editable = viewer.isAdmin ? !r.lockedAt && !r.fixed : ownerSees && !r.fixed
+		// Who sees the row, apart from who may edit it: a locked one is the owner's, read-only (2026-11-15).
+		const ownerVisible = reach === "owner" && !plumbing && !modelStep
+		if (!viewer.isAdmin && !ownerVisible) continue
+		const editable = !r.lockedAt && !r.fixed && (viewer.isAdmin || ownerVisible)
 		const address: Address = { kind: "pipeline", registrationKey: firstKey, nodeKey: d.nodeKey, slot: d.slot, path: d.path }
 		const field: Field = {
 			id: addressId(address),
@@ -687,81 +735,184 @@ async function pipelineGroup(
 								: "Only an administrator changes this."
 					})
 		}
-		fields.push(field)
-		stepOf.set(field, {
+		const step = {
 			spec: at.slug,
 			specName: at.name,
 			nodeKey: d.nodeKey,
 			definitionId: `${node.definitionId}@${node.definitionVersion}`,
 			heading: i18nText((node.expose as { label?: unknown } | null)?.label as never) ?? d.stepHeading ?? d.typeLabel,
 			exposed: exposed && !modelStep
-		})
+		}
+		if (gangs.some((g) => g.members.includes(d))) {
+			gangHeld.push({ d, field, step, r, inherited, editable, addr })
+			continue
+		}
+		fields.push(field)
+		stepOf.set(field, step)
 		if (!editable) continue
 		located.set(field.id, {
 			field,
 			changes: "registrations",
 			write: async (tx, value) => {
 				const clear = value === null || same(value, inherited)
-				// Every registration of the pipeline (A9): one setting, however
-				// many triggers run it.
-				for (const key of keys)
-					await patchSessionRow(
-						tx,
-						session.id,
-						key,
-						(row) => ({ values: valuesWith(row.values, d, clear ? null : value) as never }),
-						viewer.isAdmin ? "admin" : "owner"
-					)
-				// ⏳ The old home of a step setting is cleared, so a reset resets.
-				await tx
-					.delete(schema.pipelineNodeOverrides)
-					.where(
-						and(
-							eq(schema.pipelineNodeOverrides.specId, at.specId),
-							eq(schema.pipelineNodeOverrides.scopeKind, "session"),
-							eq(schema.pipelineNodeOverrides.scopeId, session.id),
-							eq(schema.pipelineNodeOverrides.nodeKey, d.nodeKey),
-							eq(schema.pipelineNodeOverrides.slot, d.slot),
-							eq(schema.pipelineNodeOverrides.path, d.path)
-						)
-					)
+				await writeMembers(tx, [d], clear ? null : value)
 			}
 		})
 	}
-	// 🚧 R54: the prompt choice of each step whose prompt is the owner's — among
-	// the slot's pool, an administrator's hidden prompts left out for anyone
-	// else (the one in force stays listed). The choice, never the text.
+	// Per gang: all members shown to this viewer → the one field; some hidden → each as it was.
+	for (const gang of gangs) {
+		const held = gangHeld.filter((h) => gang.members.includes(h.d))
+		if (held.length === gang.members.length) {
+			const home = held.find((h) => h.d === gang.home)!
+			const reading = gangedReading(
+				held.map((h) => ({
+					value: h.r.value,
+					source: h.field.source,
+					changed: false,
+					overriddenHere: false,
+					writable: h.editable
+				})),
+				gang.home.authorDefault ?? true
+			)
+			const inheritedHeld = gangedReading(
+				held.map((h) => ({ value: h.inherited, source: h.field.source, changed: false, overriddenHere: false, writable: true })),
+				gang.home.authorDefault ?? true
+			).value
+			const editable = held.every((h) => h.editable)
+			const locked = held.find((h) => h.r.lockedAt)
+			const fixed = held.some((h) => h.r.fixed)
+			const field: Field = {
+				...home.field,
+				label: GANGED_PARAMS[gang.path]!.label,
+				description: reading.differing
+					? `${GANGED_PARAMS[gang.path]!.description.replace(/\.$/, "")}; ${gangedDifferenceWords(reading.differing).replace(/^S/, "s")}.`
+					: GANGED_PARAMS[gang.path]!.description,
+				value: reading.value,
+				inherited: inheritedHeld,
+				source: reading.source as Field["source"],
+				...(locked ? { lockedAt: locked.r.lockedAt as Layer } : {}),
+				...(fixed ? { fixed: true as const } : {}),
+				editable,
+				...(editable
+					? {}
+					: {
+							readOnlyReason: fixed
+								? "Chosen when the session started."
+								: locked
+									? `Set by the session's ${locked.r.lockedAt === "preset" ? "preset" : "genre"}.`
+									: "Only an administrator changes this."
+						})
+			}
+			fields.push(field)
+			stepOf.set(field, home.step)
+			if (editable)
+				located.set(field.id, {
+					field,
+					changes: "registrations",
+					write: async (tx, value) => {
+						// Each read clears on its own inherited value, as the panel's `planWrite` does.
+						for (const h of held) await writeMembers(tx, [h.d], value === null || same(value, h.inherited) ? null : value)
+					}
+				})
+		} else
+			for (const h of held) {
+				fields.push(h.field)
+				stepOf.set(h.field, h.step)
+				if (!h.editable) continue
+				located.set(h.field.id, {
+					field: h.field,
+					changes: "registrations",
+					write: async (tx, value) => {
+						const clear = value === null || same(value, h.inherited)
+						await writeMembers(tx, [h.d], clear ? null : value)
+					}
+				})
+			}
+	}
+	// The session's owner gets the prompt choice of each model call that offers
+	// a choice (`promptsOffered`: two prompts or more, or one in force that
+	// isn't the call's own default), named after the call. Hidden
+	// prompts are an administrator's, unless in force; a switched-off plugin's
+	// are nobody's, unless in force.
+	// The choice, never the text.
 	if (promptDecls.length) {
-		const { listPrompts } = await import("$lib/server/pipelines/entities/prompts")
+		const { listPrompts, promptsOffered, promptDefaultsOf } = await import("$lib/server/pipelines/entities/prompts")
+		const { loadDocument } = await import("$lib/server/pipelines/boot/store")
+		const { planGroups, modelCallsOf, callHeadingsOf } = await import("$lib/server/pipelines/config/panel/groups")
+		const doc = await loadDocument(db, at.specVersionId)
+		const callPlan = planGroups({
+			nodes: doc.nodes,
+			edges: doc.edges,
+			clauses: (doc.clauses ?? []).map((c) => ({
+				id: c.id,
+				kind: c.kind,
+				...(c.clauseId ? { clauseId: c.clauseId } : {}),
+				...(c.clauseChain ? { clauseChain: c.clauseChain } : {})
+			})),
+			modelCalls: modelCallsOf(decls)
+		})
+		const callHeadings = callHeadingsOf({ plan: callPlan, nodes: doc.nodes, decls })
+		const pools = new Map<string, Awaited<ReturnType<typeof listPrompts>>>()
+		const promptDefaults = promptDefaultsOf(decls, declared)
+		const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+		const pluginsOff = await disabledPlugins(db)
 		const plain = (v: unknown) => (isSettingDecision(v) ? v.value : v)
+		const { settingLocksOf } = await import("$lib/server/pipelines/registrations/values")
+		const locks = settingLocksOf(layers, decls)
 		for (const d of promptDecls) {
 			const addr = `${d.nodeKey}\u0000${d.slot}\u0000${d.path}`
 			const at1 = (m: Map<string, unknown>) => (m.has(addr) ? plain(m.get(addr)) : undefined)
-			const inherited =
-				at1(presetValues) ?? at1(genreValues) ?? at1(instanceValues) ?? (declared.has(addr) ? declared.get(addr) : d.authorDefault)
+			const declaredDefault = declared.has(addr) ? declared.get(addr) : d.authorDefault
+			const inherited = at1(presetValues) ?? at1(genreValues) ?? at1(instanceValues) ?? declaredDefault
 			const own = at1(sessionValues) ?? (legacy.has(addr) ? legacy.get(addr) : undefined)
-			const value = own ?? inherited
+			const lock = locks.get(addr)
+			// A layer above locked it: its value holds, the session's own stays stored and unread.
+			const value = lock ? (plain(lock.value) ?? declaredDefault) : (own ?? inherited)
 			const idOf = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null)
-			const pool = await listPrompts(db, d.nodeDefinitionId!, d.slot, at.specId)
-			const offered = pool.filter((p) => viewer.isAdmin || !p.hidden || p.id === idOf(value))
-			if (!offered.length) continue
+			const poolKey = `${d.nodeDefinitionId}\u0000${d.slot}`
+			if (!pools.has(poolKey)) pools.set(poolKey, await listPrompts(db, d.nodeDefinitionId!, d.slot, at.specId))
+			const offered = promptsOffered(pools.get(poolKey)!, {
+				specId: at.specId,
+				address: addr,
+				defaults: promptDefaults,
+				inForce: value,
+				administrator: viewer.isAdmin,
+				pluginsOff
+			})
+			// A choice of one is not a choice, unless what is in force isn't the call's own default.
+			const inForceId = idOf(value)
+			const choice =
+				offered.length >= 2 || (offered.length === 1 && inForceId === offered[0]!.id && inForceId !== (promptDefaults.get(addr) ?? null))
+			if (!choice) continue
 			const address: Address = { kind: "pipeline", registrationKey: firstKey, nodeKey: d.nodeKey, slot: d.slot, path: d.path }
 			const node = nodeOf.get(d.nodeKey)
+			const callIndex = callPlan.ownerOf(d.nodeKey)
+			const callName =
+				callPlan.calls.length >= 2 && callIndex >= 0
+					? callHeadings[callIndex]!
+					: i18nText((node?.expose as { label?: unknown } | null)?.label as never) || at.name
 			const field: Field = {
 				id: addressId(address),
 				address,
-				label: "Prompt",
+				// A call already named for its prompt (*Scene prompt*) is not named twice.
+				label: /\bprompt$/i.test(callName) ? callName : `${callName} prompt`,
 				description: "Which prompt this step writes from. Prompts are written in the prompt library; here you choose one.",
 				control: "enum",
 				members: offered.map((p) => ({
 					key: String(p.id),
-					label: p.hidden ? `${p.name} (hidden from owners)` : p.name
+					label: viewer.isAdmin && p.hidden ? `${p.name} (hidden from owners)` : p.name
 				})),
 				value: idOf(value) != null ? String(idOf(value)) : null,
-				inherited: idOf(inherited) != null ? String(idOf(inherited)) : null,
-				source: own !== undefined ? "session" : at1(presetValues) !== undefined ? "preset" : at1(genreValues) !== undefined || at1(instanceValues) !== undefined ? "genre" : "author",
+				inherited: lock ? (idOf(value) != null ? String(idOf(value)) : null) : idOf(inherited) != null ? String(idOf(inherited)) : null,
+				source: lock ? lock.layer : own !== undefined ? "session" : at1(presetValues) !== undefined ? "preset" : at1(genreValues) !== undefined || at1(instanceValues) !== undefined ? "genre" : "author",
 				reach: "owner",
-				editable: true
+				...(lock
+					? {
+							lockedAt: lock.layer,
+							editable: false,
+							readOnlyReason: `Set by the session's ${lock.layer === "preset" ? "preset" : "genre"}.`
+						}
+					: { editable: true })
 			}
 			fields.push(field)
 			stepOf.set(field, {
@@ -772,6 +923,7 @@ async function pipelineGroup(
 				heading: i18nText((node?.expose as { label?: unknown } | null)?.label as never) ?? d.stepHeading ?? d.typeLabel,
 				exposed: true
 			})
+			if (lock) continue
 			located.set(field.id, {
 				field,
 				changes: "registrations",
@@ -1237,9 +1389,11 @@ export async function updateSetting(
 			throw new SettingRefusal(`No envoy named "${envoyKey.envoySlug}" speaks in this session. Nothing was saved.`)
 		const shown = formFields(form).find((f) => f.id === id)
 		if (shown && !shown.editable) throw new SettingRefusal(`${shown.label}: ${shown.readOnlyReason ?? "it cannot be changed here."} Nothing was saved.`)
+		const { promptSlotNames } = await import("$lib/server/pipelines/entities/prompts")
+		const promptSlot = address.kind === "pipeline" && (await promptSlotNames(db)).includes(address.slot)
 		throw new SettingRefusal(
-			address.kind === "pipeline" && (MODEL_SLOTS.has(address.slot) || isModelPlumbing(address.slot) || isModelPlumbing(address.path))
-				? "What a step runs on — its connection, sampling, loadout, prompts and templates — is an administrator's, in the pipeline's own settings. Nothing was saved."
+			address.kind === "pipeline" && !promptSlot && (MODEL_SLOTS.has(address.slot) || isModelPlumbing(address.slot) || isModelPlumbing(address.path))
+				? "What a step runs on — its connection, sampling, loadout and templates — is an administrator's, in the pipeline's own settings. Nothing was saved."
 				: "That is not a setting this session offers you here. Nothing was saved."
 		)
 	}

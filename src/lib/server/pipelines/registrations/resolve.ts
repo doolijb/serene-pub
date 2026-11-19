@@ -41,6 +41,7 @@
  * unless a test asks for it (`setRegistrationCacheEnabled`), so a fixture
  * written straight to the tables is always what resolves.
  */
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
 import {
 	coreCadences,
 	effectiveRegistrations as mergeRegistrations,
@@ -379,7 +380,7 @@ export async function effectiveRegistrations(db: Db, sessionId: number): Promise
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return null
-	const genreId = session.genreId ?? "core:genre/story"
+	const genreId = session.genreId ?? STANDARD_GENRE_ID
 	const presetId = session.presetId ?? null
 	const ruleset = session.primaryRuleset ?? null
 

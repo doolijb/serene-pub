@@ -354,9 +354,9 @@ export function seatCardAsShown<
 }
 
 /**
- * 🚧 The session's character seats' cards, each as its cast member shows it
- * (`seatCardAsShown`), in payload order; a seat whose card is gone is left
- * out. Personas are not here: its callers list the cast a speaker is picked
+ * 🚧 The session's live character seats' cards, each once, as its cast member
+ * shows it (`seatCardAsShown`), in payload order; a removed seat, and a seat
+ * whose card is gone, are left out. Personas are not here: its callers list the cast a speaker is picked
  * from.
  */
 export function seatCardsAsShown<C extends CharacterCard>(
@@ -366,15 +366,63 @@ export function seatCardsAsShown<C extends CharacterCard>(
 				"castNames" | "castFaces" | "castSpriteSets"
 		  > & {
 				sessionCharacters?:
-					| readonly { character?: C | null }[]
+					| readonly { character?: C | null; removedAt?: unknown }[]
 					| null
 		  })
 		| null
 		| undefined
 ): C[] {
+	// Live seats only (a removed seat is kept for its old lines), each card once.
 	const out: C[] = []
-	for (const link of session?.sessionCharacters ?? [])
-		if (link.character) out.push(seatCardAsShown(session, link.character))
+	const seen = new Set<unknown>()
+	for (const link of session?.sessionCharacters ?? []) {
+		if (!link.character || link.removedAt || seen.has(link.character.id))
+			continue
+		seen.add(link.character.id)
+		out.push(seatCardAsShown(session, link.character))
+	}
+	return out
+}
+
+/**
+ * 🚧 The session's card-less character seats as their cast member shows them
+ * (`cardlessSeatShown`, by member id): its name, nickname and face, in payload
+ * order, in a card's shape so the cast list draws them as it draws a card. A
+ * seat that has left, or has no entry, is left out.
+ */
+export function cardlessSeatsAsShown(
+	session:
+		| {
+				sessionCharacters?:
+					| readonly {
+							character?: unknown
+							castMemberId?: number | null
+							removedAt?: unknown
+					  }[]
+					| null
+				cardlessSeatShown?: Readonly<
+					Record<
+						number,
+						{ name: string; nickname: string | null; faceMediaId: number | null }
+					>
+				> | null
+		  }
+		| null
+		| undefined
+): CharacterCard[] {
+	const out: CharacterCard[] = []
+	const seen = new Set<number>()
+	for (const link of session?.sessionCharacters ?? []) {
+		if (link.character || link.removedAt || link.castMemberId == null) continue
+		const shown = session?.cardlessSeatShown?.[link.castMemberId]
+		if (!shown || seen.has(link.castMemberId)) continue
+		seen.add(link.castMemberId)
+		out.push({
+			name: shown.name,
+			nickname: shown.nickname,
+			...(shown.faceMediaId != null ? { avatarMediaId: shown.faceMediaId } : {})
+		} as CharacterCard)
+	}
 	return out
 }
 

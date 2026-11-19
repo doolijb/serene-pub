@@ -996,6 +996,22 @@ const sortObjects = (text: string) =>
 		})
 		.join("\n")
 
+/** A History list of dated rows, read back as the object keyed by date that 0.5 printed. */
+const historyRowsAsKeyed = (text: string) =>
+	text
+		.split("\n")
+		.map((line) => {
+			if (!line.startsWith("[{") || !line.endsWith("}]")) return line
+			try {
+				const rows = JSON.parse(line) as Array<{ date?: unknown; content?: unknown }>
+				if (!rows.every((r) => typeof r.date === "string" && "content" in r)) return line
+				return JSON.stringify(Object.fromEntries(rows.map((r) => [r.date, r.content])))
+			} catch {
+				return line
+			}
+		})
+		.join("\n")
+
 const DEPARTED: Array<{
 	fixture: ParityFixture
 	because: string
@@ -1013,10 +1029,15 @@ const DEPARTED: Array<{
 			"listed ascending ahead of every other key of a JSON object, so " +
 			"0.5 printed its oldest year-only entry first — the opposite of " +
 			"the order it sorted. 0.6 heads it `Year 1180`, which keeps its " +
-			"place (plan A20 b). Stated way: the same two entries under the " +
-			"same dates, the year-only heading named.",
+			"place (plan A20 b). Since 2026-11-15 History is a list of rows, " +
+			"each with its own `date` and `content` (owner: every dated row " +
+			"carries `date` and `dateDelta`), so two entries on one date no " +
+			"longer share a key. Stated way: the same two entries under the " +
+			"same dates, the year-only heading named, as rows.",
 		normalise: (prompt) =>
-			sortObjects(prompt.replace(/"Year (-?\d+)"/g, '"$1"'))
+			sortObjects(
+				historyRowsAsKeyed(prompt).replace(/"Year (-?\d+)"/g, '"$1"')
+			)
 	},
 	{
 		fixture: entityCooccurrence,
@@ -1285,8 +1306,8 @@ describe("the parity corpus", () => {
 		 * touched — and they must then be byte-identical. A dropped entry, a
 		 * changed body, a different block anywhere else in the prompt all fail.
 		 * For `session/history-entries` it is: **the same two entries under the
-		 * same dates, the year-only one headed `Year 1180`** — read back as
-		 * `1180`, then sorted the same way.
+		 * same dates, the year-only one headed `Year 1180`, printed as rows** —
+		 * read back as the keyed object and `1180`, then sorted the same way.
 		 */
 		const { readFileSync } = await import("node:fs")
 		const { goldenPathFor, pipelinePreview } = await import(

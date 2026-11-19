@@ -11,6 +11,7 @@
  * an administrator has switched off, so the payload this module builds is a
  * proposal: it names both, and the preset wins. See `sessionsCreateHandler`.
  */
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
 import type { StoredSwapContribution } from "$lib/shared/swaps"
 import { settingValueOf, type SessionCreationMode } from "@serene-pub/sdk"
 import { creationModeBlocker } from "./creationModes"
@@ -24,13 +25,12 @@ import {
 } from "./applyPresetDefaults"
 
 /**
- * The F29 floor: the genre every build answers for, stated here rather than
- * imported from the server-only `sessionGenres` module. When `sessions:genres`
+ * The F29 floor: the genre every build answers for, defined once in the shared
+ * `standardGenre` module and re-exported here. When `sessions:genres`
  * returns nothing — a registry that never synced — the flow behaves as a
  * single-genre install, which is the standard genre alone.
  */
-/** The genre a session with none is read as — **Story** since 2026-10-19 (was Chat, which is the assistant now). */
-export const STANDARD_GENRE_ID = "core:genre/story"
+export { STANDARD_GENRE_ID }
 
 /**
  * The Guide genre — one envoy answering about the app, no characters. Stated
@@ -477,6 +477,12 @@ export interface CreateSessionInput {
 	 * `lorebookId` — the kit wins and no book is sent.
 	 */
 	starterKit?: Sockets.StarterKits.Ref | null
+	/**
+	 * The chosen `lorebookId` is a live provided lorebook: it is sent as
+	 * `starterKit`, since a session starts from a copy of it in its notes and
+	 * never reads it.
+	 */
+	lorebookIsProvided?: boolean
 	/** 🚧 Rules (PLAN-rulesets §4): absent or null, the server's default (W4-A). */
 	primaryRuleset?: string | null
 	/** 🚧 How strict (§21): absent or null, the genre's default. */
@@ -519,12 +525,17 @@ export function buildCreatePayload(
 	input: CreateSessionInput
 ): Sockets.Sessions.Create.Params {
 	const characterIds = [...input.characterIds]
+	const starterKit: Sockets.StarterKits.Ref | null =
+		input.starterKit ??
+		(input.lorebookIsProvided && input.lorebookId != null
+			? { lorebookId: input.lorebookId }
+			: null)
 	return {
 		session: {
 			name: input.name.trim(),
 			scenario: (input.scenario ?? "").trim(),
 			...(input.swaps?.length ? { swaps: input.swaps } : {}),
-			lorebookId: input.starterKit ? null : (input.lorebookId ?? null),
+			lorebookId: starterKit ? null : (input.lorebookId ?? null),
 			genreId: input.genreId,
 			// The preset picks the genre server-side: a `genreId` above that
 			// disagrees with it loses, and a null here is the preset-less
@@ -543,7 +554,7 @@ export function buildCreatePayload(
 			characterIds.map((id, i) => [id, i])
 		),
 		tags: input.tags ?? [],
-		...(input.starterKit ? { starterKit: input.starterKit } : {})
+		...(starterKit ? { starterKit } : {})
 	}
 }
 
@@ -568,7 +579,8 @@ export function applyPresetFill(
  * for a genre with a lorebook step and a rules offer, of the world a session
  * reads and the rules it plays — ONE of
  * - `book`: an existing lorebook (own, shared or provided), sent as
- *   `lorebookId`; its own rules are adopted, a book on Freeform brings none
+ *   `lorebookId` (a provided one as `starterKit`: the session starts from a
+ *   copy of it); its own rules are adopted, a book on Freeform brings none
  *   and the person's rules pick travels beside it (fix7, ★§22-1);
  * - `blank`: no lorebook — the session's own book is made on the rules picked
  *   (no `lorebookId`, `primaryRuleset`); a ruleset holds nothing (stateless);
@@ -695,6 +707,11 @@ export class StartSessionFlow {
 	 * the lorebook list.
 	 */
 	lorebookRules = $state<string | null>(null)
+	/**
+	 * The chosen lorebook is a provided one (`CreateSessionInput.lorebookIsProvided`).
+	 * Said by the component that holds the lorebook list, like `lorebookRules`.
+	 */
+	lorebookIsProvided = $state(false)
 	/**
 	 * 🚧 The starter lorebook chosen on the Lorebook card instead of a book
 	 * (PLAN-lorebook-kinds ruling 8). Its rules ride `lorebookRules` (the
@@ -1055,6 +1072,7 @@ export class StartSessionFlow {
 		this.fields = { ...this.fields, lorebookId: null }
 		this.starterKit = null
 		this.lorebookRules = null
+		this.lorebookIsProvided = false
 		this.rulesPick = rulesId
 	}
 
@@ -1101,6 +1119,10 @@ export class StartSessionFlow {
 			swaps: this.fields.swaps,
 			lorebookId: this.fields.lorebookId,
 			starterKit: this.starterKit,
+			// A next chapter and a branch keep the lorebook they follow.
+			lorebookIsProvided:
+				this.lorebookIsProvided &&
+				(this.mode === "new" || this.mode === "new-world"),
 			// A lorebook's (or a kit's) own rules are adopted server-side
 			// whatever is sent; a book on Freeform brings none, so the
 			// pick travels (fix7).

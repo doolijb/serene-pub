@@ -15,7 +15,7 @@ import { sessionBusy } from "$lib/server/sessions/rewind"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { CLOSE_OUT_REFUSALS } from "$lib/shared/sessions/archive"
-import { fileClosingScenes, runSceneSummaries } from "./scenes"
+import { fileClosingScenes, runSceneSummaries, sceneIdsOpenToRuns } from "./scenes"
 
 /** Close out (§B-6): refusals in order — missing, notOwner, notRegistered, busy, nothing; then the scenes, then their summaries in the background through the registration. */
 export async function closeOutSession(opts: {
@@ -62,7 +62,7 @@ export async function closeOutSession(opts: {
 		{ sessionId, fromMessageId: stretch.fromMessageId, throughMessageId: stretch.throughMessageId },
 		emitToUser
 	)
-	void runSceneSummaries(sceneIds, userId, emitToUser, {
+	void runSceneSummaries(await sceneIdsOpenToRuns(sceneIds), userId, emitToUser, {
 		via: { specId: reg.pipeline, registrationKey: reg.key, minAge: minAgeOf(reg) }
 	})
 	return { sceneIds }

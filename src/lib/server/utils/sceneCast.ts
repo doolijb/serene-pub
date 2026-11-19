@@ -15,6 +15,7 @@
  */
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import type { RedlineAuthor, RedlineCause } from "$lib/server/lorebooks/redlines"
 
 // The shared `db` is reached through a lazy dynamic import rather than a
 // top-level one, matching the other db-helper modules in this directory
@@ -33,6 +34,13 @@ import * as schema from "$lib/server/db/schema"
 
 async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
+}
+
+/** The Edit history record a cast write keeps: who, why, and the cast before when the caller already holds it. */
+export type SceneCastRedline = {
+	by: RedlineAuthor
+	cause: RedlineCause
+	before?: Partial<SceneCast>
 }
 
 export interface SceneCast {
@@ -140,7 +148,6 @@ export { EMPTY_CAST }
  * holds both roles (absorb remaps each independently, and its tests assert the
  * survivor ends up in both), which is precisely why the unique index is on
  * (scene, binding, ROLE). Callers that do want "present beats mentioned" —
- * scenes:process and sessions:summarize via reconcileParticipantsAndMentioned,
  * graphBuilder via its admit() precedence — already apply it upstream. Folding
  * that rule in here instead would silently discard a caller's real data.
  *
@@ -149,11 +156,19 @@ export { EMPTY_CAST }
  * tempId map). The FK is the backstop: an id that isn't a real binding fails
  * the insert rather than silently persisting as a dangling reference, which is
  * the entire point of the join table.
+ *
+ * With `redline`, a written role whose member set changed (compared sorted and
+ * deduped, so the same members in another order is no change) is kept in the
+ * scene's Edit history as one row, on the same handle after the insert: each
+ * changed role's list in stored order, before (the caller's `before`, else the
+ * stored cast read once ahead of the delete) and after. A write that changes
+ * no role records nothing; without `redline` nothing extra runs.
  */
 export async function writeSceneCast(
 	sceneId: number,
 	cast: Partial<SceneCast>,
-	dbInstance?: Db
+	dbInstance?: Db,
+	redline?: SceneCastRedline
 ): Promise<void> {
 	const database = dbInstance ?? (await defaultDb())
 	const roles: Array<[schema.SceneCharacterRole, number[]]> = []
@@ -162,6 +177,12 @@ export async function writeSceneCast(
 	if (cast.mentionedCharacters !== undefined)
 		roles.push(["mentioned", [...new Set(cast.mentionedCharacters)]])
 	if (roles.length === 0) return
+
+	const stored =
+		redline &&
+		roles.some(([role]) => !redline.before?.[CAST_KEY[role]])
+			? await readSceneCast(sceneId, database)
+			: undefined
 
 	await database.delete(schema.sceneCharacters).where(
 		and(
@@ -184,6 +205,39 @@ export async function writeSceneCast(
 	if (rows.length > 0) {
 		await database.insert(schema.sceneCharacters).values(rows)
 	}
+
+	if (!redline) return
+	const before: Record<string, unknown> = {}
+	const after: Record<string, unknown> = {}
+	for (const [role, written] of roles) {
+		const key = CAST_KEY[role]
+		const was = redline.before?.[key] ?? stored?.[key] ?? []
+		if (sameMembers(was, written)) continue
+		before[key] = was
+		after[key] = written
+	}
+	const keys = Object.keys(after)
+	if (keys.length === 0) return
+	const { recordRedline } = await import("$lib/server/lorebooks/redlines")
+	await recordRedline(database, {
+		sceneId,
+		before,
+		after,
+		keys,
+		cause: redline.cause,
+		by: redline.by
+	})
+}
+
+const CAST_KEY = {
+	participant: "participantCharacters",
+	mentioned: "mentionedCharacters"
+} as const
+
+const sameMembers = (a: number[], b: number[]): boolean => {
+	const x = [...new Set(a)].sort((p, q) => p - q)
+	const y = [...new Set(b)].sort((p, q) => p - q)
+	return x.length === y.length && x.every((id, i) => id === y[i])
 }
 
 /**

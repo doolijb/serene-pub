@@ -22,6 +22,7 @@
  * (and its price) for an admin only.
  */
 
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
 import { and, eq, isNull, max } from "drizzle-orm"
 import { resolveConfig, type ImageSeriesItemV1, type OverrideRow } from "@serene-pub/sdk"
 import {
@@ -36,6 +37,7 @@ import { addToMemberGallery, fileForOwner, getMediaByUuid } from "$lib/server/me
 import { canEditCastMember } from "$lib/server/cast/memberAccess"
 import { mayFillSprites } from "$lib/server/sprites/attach"
 import type { SpriteOwner } from "$lib/server/sprites"
+import type { ConnectionSubject } from "$lib/server/connections/visibility"
 import { money, perImagePrice, pictureCount } from "$lib/server/sprites/fillAction"
 import {
 	cardActionInput,
@@ -110,7 +112,13 @@ export async function styleOverrides(
 
 // ── The outlet's write ──────────────────────────────────────────────────
 
-export class OfferMediaRefusal extends Error {}
+export class OfferMediaRefusal extends Error {
+	/** `forPeople` marks a message the people in the session can act on; unmarked messages are detail. */
+	constructor(message: string, opts?: { forPeople?: boolean }) {
+		super(message)
+		if (opts?.forPeople) forPeople(this, message)
+	}
+}
 
 export interface OfferMediaResult {
 	offered: Array<{ mediaId: number; key: string | null }>
@@ -141,7 +149,8 @@ export async function offerMediaToGallery(
 	const characterId = input.characterId!
 	if (!(await mayFillSprites(db, input.userId, characterId)))
 		throw new OfferMediaRefusal(
-			"only the card's owner or an admin can add pictures to its gallery."
+			"only the card's owner or an admin can add pictures to its gallery.",
+			{ forPeople: true }
 		)
 	const items = Array.isArray(input.media)
 		? input.media
@@ -172,7 +181,8 @@ export async function offerMediaToGallery(
 		}
 		if (file.userId !== input.userId || file.characterId != null)
 			throw new OfferMediaRefusal(
-				"a picture handed to it is neither yours nor this card's."
+				"a picture handed to it is neither yours nor this card's.",
+				{ forPeople: true }
 			)
 		// Provenance: the picture becomes the card's file — its visibility,
 		// its gallery. Only a file nobody else claims is stamped.
@@ -193,7 +203,8 @@ async function offerMediaToMemberGallery(
 	const member = await canEditCastMember(db, input.castMemberId!, input.userId)
 	if (!member)
 		throw new OfferMediaRefusal(
-			"only someone who can edit this cast member's lorebook can add pictures to its gallery."
+			"only someone who can edit this cast member's lorebook can add pictures to its gallery.",
+			{ forPeople: true }
 		)
 	const items = Array.isArray(input.media)
 		? input.media
@@ -230,7 +241,8 @@ async function offerMediaToMemberGallery(
 			file.userId === member.bookOwnerId && file.lorebookId === member.lorebookId
 		if (file.userId !== input.userId && !isMembers)
 			throw new OfferMediaRefusal(
-				"a picture handed to it is neither yours nor this cast member's."
+				"a picture handed to it is neither yours nor this cast member's.",
+				{ forPeople: true }
 			)
 		let fileId = file.id
 		if (file.userId !== member.bookOwnerId)
@@ -457,6 +469,8 @@ export async function runPortrait(
 		count?: unknown
 		style?: unknown
 		userId: number
+		/** Who is told why a run failed (`socket.user`): an administrator reads the reason itself. */
+		reader?: ConnectionSubject | null
 		runId: string
 		signal?: AbortSignal
 		cancelSignal?: () => { by: string; reason: string } | undefined
@@ -467,7 +481,7 @@ export async function runPortrait(
 	const style = portraitStyleOf(req.style)
 	const head = { ...cardActionOwnerOf(req), runId: req.runId, count }
 	const { runCardAction } = await import("$lib/server/pipelines/runtime/cardAction")
-	const { haltExplanation } = await import(
+	const { haltExplanation, receiptHaltFor, haltExplanationFor } = await import(
 		"$lib/server/pipelines/runtime/haltExplanation"
 	)
 	let phase: PortraitProgress["phase"] = "drawing"
@@ -515,7 +529,12 @@ export async function runPortrait(
 			req.report({
 				...head,
 				phase: "failed",
-				error: haltExplanation(receipt) ?? "The portrait stopped before it finished."
+				error: receiptHaltFor(
+					req.reader,
+					"action",
+					receipt,
+					haltExplanation(receipt) ?? "The portrait stopped before it finished."
+				)
 			})
 			return
 		}
@@ -534,7 +553,7 @@ export async function runPortrait(
 		req.report({
 			...head,
 			phase: "failed",
-			error: e instanceof Error ? e.message : String(e)
+			error: haltExplanationFor(req.reader, "action", e instanceof Error ? e.message : String(e))
 		})
 	}
 }

@@ -29,36 +29,78 @@
 	/** Unsaved edits per plugin — only touched fields are sent. */
 	let drafts = $state<Record<string, Record<string, unknown>>>({})
 	let errors = $state<Record<string, string | null>>({})
-	/** Saves in flight, so their answers can be acknowledged. */
-	let pending = $state(0)
+	/** Saves in flight, per plugin, so each answer is acknowledged on its own. */
+	let pending = $state<Record<string, number>>({})
+	/**
+	 * One round is the saves in flight from the moment the first one is sent
+	 * until the last answers: "Settings saved" is said only of a round in
+	 * which something saved and nothing failed.
+	 */
+	let roundSaved = 0
+	let roundFailed = false
+	let anyPending = $derived(Object.values(pending).some((n) => n > 0))
 	let dirty = $derived(
 		Object.values(drafts).some((d) => Object.keys(d).length > 0)
 	)
 
+	/** One answer in for a plugin; ends the round when it was the last. */
+	function answered(pluginId: string, saved: boolean) {
+		const left = (pending[pluginId] ?? 0) - 1
+		if (left > 0) pending[pluginId] = left
+		else delete pending[pluginId]
+		if (saved) roundSaved += 1
+		else roundFailed = true
+		endRound()
+	}
+	function endRound() {
+		if (Object.keys(pending).length) return
+		if (roundSaved > 0 && !roundFailed)
+			notify.success({
+				source: "socket:pluginUserSettings:list",
+				title: "Settings saved"
+			})
+		roundSaved = 0
+		roundFailed = false
+	}
+
+	/** A fresh view replaces what is shown; drafts and errors are not its to touch. */
 	function handleList(res: Sockets.PluginUserSettings.List.Response) {
 		plugins = res.plugins
-		// A fresh view supersedes every draft: it reflects the save that just
-		// landed, or the card was just opened.
-		drafts = {}
-		if (pending > 0) {
-			pending -= 1
-			if (pending === 0) {
-				errors = {}
-				notify.success({
-					source: "socket:pluginUserSettings:list",
-					title: "Settings saved"
-				})
-			}
+	}
+	/**
+	 * A save landed. Another tab's save is not this tab's pending, so it
+	 * leaves this tab's typed values alone.
+	 */
+	function handleSet(res: Sockets.PluginUserSettings.Set.Response) {
+		if (!pending[res.pluginId]) return
+		answered(res.pluginId, true)
+		if (!pending[res.pluginId]) {
+			delete drafts[res.pluginId]
+			delete errors[res.pluginId]
 		}
 	}
+	/**
+	 * A refusal keeps the typed values and names why. The socket layer's
+	 * generic refusal names no plugin: every save still in flight failed.
+	 */
 	function handleSetError(res: Sockets.PluginUserSettings.Set.Response) {
-		if (res.error) errors[res.pluginId] = res.error
-		pending = Math.max(0, pending - 1)
+		const failed = res.pluginId ? [res.pluginId] : Object.keys(pending)
+		for (const pluginId of failed) {
+			if (!pending[pluginId]) continue
+			if (res.error) errors[pluginId] = res.error
+			if (res.pluginId) answered(pluginId, false)
+			else {
+				delete pending[pluginId]
+				roundFailed = true
+			}
+		}
+		if (!res.pluginId) endRound()
 	}
 
 	$effect(() =>
 		requestWithInterest("pluginUserSettings:list", {}, handleList)
 	)
+	useInterest<"pluginUserSettings:set">("pluginUserSettings:set", handleSet)
 	useInterest<"pluginUserSettings:set:error">(
 		"pluginUserSettings:set:error",
 		handleSetError
@@ -67,21 +109,22 @@
 	function edit(pluginId: string, key: string, value: unknown) {
 		drafts[pluginId] = { ...(drafts[pluginId] ?? {}), [key]: value }
 	}
+	/** A (re)send for a plugin: its old error is being retried. */
+	function send(pluginId: string, values: Record<string, unknown>) {
+		pending[pluginId] = (pending[pluginId] ?? 0) + 1
+		delete errors[pluginId]
+		socket.emit("pluginUserSettings:set", { pluginId, values })
+	}
 	/** One Save for the card: each plugin with edits is written on its own. */
 	function save() {
 		for (const [pluginId, draft] of Object.entries(drafts)) {
 			if (!Object.keys(draft).length) continue
-			pending += 1
-			socket.emit("pluginUserSettings:set", { pluginId, values: draft })
+			send(pluginId, draft)
 		}
 	}
 	/** Clear the person's own value, so they read the instance's again. */
 	function useDefault(pluginId: string, key: string) {
-		pending += 1
-		socket.emit("pluginUserSettings:set", {
-			pluginId,
-			values: { [key]: null }
-		})
+		send(pluginId, { [key]: null })
 	}
 	const nameOf = (name: unknown) =>
 		i18nTextIn(name as any) ?? String(name ?? "")
@@ -121,6 +164,7 @@
 								<button
 									type="button"
 									class="btn btn-sm preset-tonal"
+									disabled={!!pending[p.pluginId]}
 									onclick={() => useDefault(p.pluginId, key)}
 								>
 									Use the default for {i18nTextIn(
@@ -141,7 +185,7 @@
 				<button
 					type="button"
 					class="btn preset-filled-primary-500"
-					disabled={!dirty || pending > 0}
+					disabled={!dirty || anyPending}
 					onclick={save}
 				>
 					Save

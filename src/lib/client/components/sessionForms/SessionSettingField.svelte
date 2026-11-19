@@ -125,12 +125,12 @@
 		<!-- Read-only: the value's name and why (§6.17), never a disabled control. -->
 		<p class="text-surface-600-400 text-xs" id="{id}-label">{field.label}</p>
 		{#if isJsonType}
-			<pre class="bg-surface-100-900 overflow-x-auto whitespace-pre-wrap rounded-base p-2 font-mono text-xs" aria-labelledby="{id}-label" data-testid="session-setting-json-readonly">{prettyJson(field.value) || shown}</pre>
+			<pre class="bg-surface-100-900 overflow-x-auto whitespace-pre-wrap rounded-base p-2 font-mono text-xs" aria-labelledby="{id}-label" aria-describedby={field.readOnlyReason ? `${id}-reason` : undefined} data-testid="session-setting-json-readonly">{prettyJson(field.value) || shown}</pre>
 		{:else}
-			<p class="text-sm" aria-labelledby="{id}-label">{shown}</p>
+			<p class="text-sm" aria-labelledby="{id}-label" aria-describedby={field.readOnlyReason ? `${id}-reason` : undefined}>{shown}</p>
 		{/if}
 		{#if field.readOnlyReason}
-			<p class="text-surface-600-400 text-xs" data-testid="session-setting-readonly">{field.readOnlyReason}</p>
+			<p class="text-surface-600-400 text-xs" id="{id}-reason" data-testid="session-setting-readonly">{field.readOnlyReason}</p>
 		{/if}
 	{:else if field.control === "boolean"}
 		<label class="flex min-h-11 items-center gap-2 text-sm pointer-fine:min-h-0" for={id}>

@@ -72,10 +72,13 @@ Run these from the repo root:
 
 ```bash
 npm run check   # svelte-check — type errors and Svelte-specific diagnostics
+npx tsc --noEmit -p .  # type-checks every file, including the integration tests that `npm run check` skips (incremental; the cache is under node_modules/.cache/tsc)
 npm run lint     # prettier --check — formatting
 npm run test     # vitest — unit and integration tests
 npm run sdk:test # the SDK suite, if you changed anything in serene-pub-sdk
 ```
+
+An integration test's `createTestDb()` loads a copy of a database the run builds once by replaying every migration; `migratedTestDb()` replays them itself. In a `vi.mock("$lib/server/db", …)`, return `testDbModule(db)` rather than spreading the real module, which opens a second database on disk. `SERENE_PUB_TEST_REPORT=<file> npm test` also writes a json report (per-file timings) and prints the slowest imports.
 
 `npm run format` (prettier --write) will fix most formatting issues automatically. If you're touching connection adapters, pipelines, or embeddings/RAG, add or update a test alongside the change where practical — see `src/lib/server/connectionAdapters/BaseConnectionAdapter.test.ts` for the existing style.
 

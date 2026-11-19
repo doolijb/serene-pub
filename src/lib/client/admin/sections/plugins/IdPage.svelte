@@ -160,12 +160,18 @@
 			),
 			interest.declareInterest<"plugins:uninstall">(
 				"plugins:uninstall",
-				() => {
+				(res) => {
 					if (!uninstalling) return
 					uninstalling = false
 					edits.forget()
 					settingsDraft = {}
-					notify.success({ title: "Plugin uninstalled" })
+					const kept = res.keptBooks ?? []
+					notify.success({
+						title: "Plugin uninstalled",
+						description: kept.length
+							? `${kept.length} provided ${kept.length === 1 ? "lorebook stayed because sessions play" : "lorebooks stayed because sessions play"} on ${kept.length === 1 ? "it" : "them"}: ${kept.join(", ")}.`
+							: undefined
+					})
 					void goto("/admin/plugins", { replaceState: true })
 				}
 			)

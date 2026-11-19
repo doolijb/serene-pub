@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import { defineRuleset } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -128,6 +129,17 @@ describe("cast-presences at an hour", () => {
 	test("no clock places nobody", async () => {
 		const w = await world(null)
 		expect(await at(w.session.id)).toEqual([])
+	})
+
+	test("with the timeline off a stored session clock places nobody by a schedule", async () => {
+		const w = await world()
+		expect(await at(w.session.id)).toEqual([{ bindingId: w.wrenBinding.id, where: "work" }])
+		await db
+			.update(schema.lorebooks)
+			.set({ timelineEnabled: false })
+			.where(eq(schema.lorebooks.id, w.session.lorebookId!))
+		expect(await at(w.session.id)).toEqual([])
+		expect(await at(w.session.id, { hour: 19, day: "today" })).toEqual([])
 	})
 
 	test("a member holding no schedule is left out (Mara above), and a genre with none gets []", async () => {

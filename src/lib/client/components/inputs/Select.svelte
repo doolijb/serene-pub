@@ -73,6 +73,9 @@
 		/** Visually hides the label without hiding it from assistive tech, for
 		 *  inline controls whose visible label belongs to a sibling field. */
 		labelHidden?: boolean
+		/** The control's accessible name where the visible label alone is
+		 *  shared by several controls on the page: it names which one. */
+		accessibleName?: string
 		disabled?: boolean
 		required?: boolean
 		/** Paints the invalid ring. Pair it with `describedBy` pointing at the
@@ -100,6 +103,7 @@
 		value = $bindable(),
 		placeholder,
 		labelHidden = false,
+		accessibleName,
 		disabled = false,
 		required = false,
 		invalid = false,
@@ -291,6 +295,7 @@
 				? 'pr-16'
 				: 'pr-8'}"
 			aria-describedby={describedBy}
+			aria-label={accessibleName}
 		/>
 		<!-- Both buttons: `top-1/2` + `-translate-y-1/2`, never `inset-y-0`.
 		     Skeleton ships base styles for these parts
@@ -331,7 +336,7 @@
 		{/if}
 		<Combobox.Trigger
 			class="absolute end-1.5 top-1/2 -translate-y-1/2 transform-none cursor-pointer"
-			aria-label="Show {label} options"
+			aria-label="Show {accessibleName ?? label} options"
 		>
 			<Icons.ChevronDown size={16} />
 		</Combobox.Trigger>

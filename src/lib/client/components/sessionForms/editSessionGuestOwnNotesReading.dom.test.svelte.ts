@@ -171,19 +171,14 @@ const reading = () =>
 	document.querySelector('[data-testid="session-lorebook-reading"]')
 
 describe("Edit Session — a guest on a session's own notes", () => {
-	test("sees the Line and Story clock read-only, and Save sends no reading", async () => {
+	test("a guest's Edit session has no Settings tab and sends no lorebooks:lines request", async () => {
 		await openForm({ lorebookId: null, userId: 2 })
-		expect(
-			emitted.some(
-				([e, d]) => e === "lorebooks:lines" && d.lorebookId === OWN
-			)
-		).toBe(true)
-		await answerLines(OWN)
-		const text = reading()?.textContent ?? ""
-		expect(text).toContain("Line")
-		expect(text).toContain("Story clock")
-		// Read-only: nothing to pick a line with.
-		expect(reading()!.querySelector("input[role='combobox']")).toBeNull()
+		await tick()
+		flushSync()
+		expect(emitted.some(([e]) => e === "lorebooks:lines")).toBe(false)
+		expect(linesKey(OWN)).toBeUndefined()
+		expect(reading()).toBeNull()
+		expect(document.getElementById("session-panel-settings")).toBeNull()
 		;(
 			[...document.querySelectorAll("button")].find(
 				(b) => b.textContent?.trim() === "Save"
@@ -194,14 +189,6 @@ describe("Edit Session — a guest on a session's own notes", () => {
 			.filter(([e]) => e === "sessions:update")
 			.at(-1)?.[1]
 		expect(sent).toBeTruthy()
-		for (const k of [
-			"lorebookBranchId",
-			"storyClockYear",
-			"storyClockMonth",
-			"storyClockDay",
-			"storyClockHour",
-			"storyClockMinute"
-		])
-			expect(sent.session).not.toHaveProperty(k)
+		expect(sent.session).toEqual({ id: 7 })
 	})
 })

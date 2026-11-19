@@ -322,7 +322,7 @@ describe("every activity error write", () => {
 	const FILES = [
 		"src/lib/server/sockets/scenes.ts",
 		"src/lib/server/sockets/summarize.ts",
-		"src/lib/server/sockets/narrativeGraph.ts"
+		"src/lib/server/sockets/narrativeGraph.build.ts"
 	]
 
 	test("is composed by activityError, or names no caught error", () => {

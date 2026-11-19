@@ -57,6 +57,7 @@ import { socketWants } from "./interest"
 // on top of it, so access to the session never becomes access to somebody
 // else's receipts.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { pipelineReaderOf } from "$lib/server/pipelines/config/panel/scopes"
 // What a preview turn needs that this file never needed before: which lane
 // counts as the conversation. Who is due to speak is the run's decision,
 // previewed through `entities/speaker.ts` where it is needed — a second copy
@@ -74,6 +75,11 @@ import { entrySourceHash } from "$lib/server/annotations"
 import type { EntryTypeId } from "$lib/shared/entries/types"
 import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
 import { askerOf } from "./refusable"
+import {
+	registrationValueRefs,
+	sessionRegistrationKeys
+} from "$lib/server/pipelines/registrations/values"
+import { patchSessionRow, valuesWith } from "$lib/server/sessions/settingsForm"
 import { attachedOrOwnBookOf } from "$lib/server/lorebooks/ownBook"
 import { memberFormOn } from "$lib/server/state/memberForm"
 import {
@@ -121,6 +127,11 @@ async function pubSecret(): Promise<string> {
  * The session's creation pipeline is one it runs, but only while creating:
  * once the session is created the scope stays the session's and is read-only,
  * with the sentence saying why (owner ruling 2026-09-30).
+ *
+ * G6 (2026-11-16): "In another person's session an administrator is a guest."
+ * So with a `sessionId` the asker does not own (or that does not exist), the
+ * viewer is not an administrator: the write path refuses it as it refuses a guest.
+ * Without a `sessionId` nothing changes.
  */
 async function viewerFor(
 	socket: any,
@@ -135,7 +146,7 @@ async function viewerFor(
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (session?.userId !== userId) return { userId, isAdmin }
+	if (session?.userId !== userId) return { userId, isAdmin: false }
 	if (slug != null) {
 		const { sessionPipelines, CREATION_READ_ONLY_NOTE } = await import(
 			"$lib/server/pipelines/entities/sessionPipelines"
@@ -150,6 +161,29 @@ async function viewerFor(
 }
 
 /**
+ * Who reads a pipeline's prompts and settings from here (owner ruling D58,
+ * 2026-11-16): with a `sessionId`, the session's owner or no one (`null`);
+ * without one, an administrator or `null`.
+ * `viewerFor` is not the answer — it carries `sessionId` for the owner only and
+ * says nothing about a guest.
+ */
+async function readerFor(socket: any, sessionId?: number) {
+	return pipelineReaderOf({
+		// G6: "In another person's session an administrator is a guest."
+		isAdmin: !!socket.user!.isAdmin && sessionId == null,
+		ownsSession:
+			sessionId != null &&
+			(await checkSessionAccess(sessionId, socket.user!.id)).isOwner
+	})
+}
+
+/** The sentence a non-reader is told (the siblings' own wording). */
+const noReaderSentence = (sessionId?: number) =>
+	sessionId == null
+		? "Access denied. Only admin users can manage pipelines."
+		: "Only the session's owner sees its settings."
+
+/**
  * Re-read the whole view; the single place a mutation's answer is built.
  *
  * The one `namespaceView` both emitters below share, so a cascade and an own
@@ -160,6 +194,9 @@ async function buildView(
 	slug: string,
 	sessionId?: number
 ): Promise<Sockets.Pipelines.Get.Response> {
+	// D58 (2026-11-16): the owner of the session, or an administrator; no one else.
+	if (!(await readerFor(socket, sessionId)))
+		return { error: noReaderSentence(sessionId) }
 	const viewer = await viewerFor(socket, sessionId, slug)
 	const pipeline = await namespaceView(
 		db,
@@ -285,13 +322,22 @@ export const pipelinesGet: Handler<
  * 🚧 One prompt's wording, for the prompt dialog (owner ask 2026-10-13: "so
  * prompts can be previewed, i.e. in a popout").
  *
- * The permission is the view's own: the server rebuilds the `pipelines:get`
- * view for this viewer and session, finds the option, and answers only for a
- * prompt that option offers (one of its choices, or its current value). So a
- * member reads exactly the prompts their session settings let them pick, and a
- * prompt id from anywhere else is refused rather than read. Only the fields
- * the step declares are sent — the editor's rule, and the graph builder's
- * shared rows are why.
+ * Who reads (owner ruling D58, 2026-11-16): "The session's owner picks and may
+ * read the wording; a guest sees nothing; outside a session only an
+ * administrator." The rule is checked here, first, in the two sentences
+ * `pipelines:get` uses.
+ *
+ * Two addresses, exactly one per request:
+ * - `optionId` — a panel option; the server rebuilds the `pipelines:get` view
+ *   for this viewer and session, finds the option, and answers only for a
+ *   prompt that option offers (one of its choices, or its current value);
+ * - `fieldId` — the session settings form's field for a prompt row (owner
+ *   only): the form is rebuilt for the asker, and the prompt must be one of
+ *   that field's members, which already leaves out an administrator's hidden
+ *   prompts unless one is in force (R54).
+ * Either way a prompt id from anywhere else is refused rather than read. Only
+ * the fields the step declares are sent — the editor's rule, and the graph
+ * builder's shared rows are why.
  */
 export const pipelinesPromptWording: Handler<
 	Sockets.Pipelines.PromptWording.Params,
@@ -302,6 +348,7 @@ export const pipelinesPromptWording: Handler<
 		const echo = {
 			slug: params.slug,
 			optionId: params.optionId,
+			fieldId: params.fieldId,
 			promptId: params.promptId
 		}
 		const refuse = (error: string) => {
@@ -309,24 +356,10 @@ export const pipelinesPromptWording: Handler<
 			emitToUser("pipelines:promptWording:error", res)
 			return res
 		}
-		try {
-			const view = await buildView(socket, params.slug, params.sessionId)
-			if (!view.pipeline) return refuse(view.error ?? "That pipeline is not available.")
-			const { groupOptions } = await import(
-				"$lib/server/pipelines/config/panel/groups"
-			)
-			const option: any = groupOptions((view.pipeline as any).groups ?? []).find(
-				(o) => o.id === params.optionId
-			)
-			if (!option || option.control !== "prompts-ref")
-				return refuse("That setting does not choose a prompt.")
-			const offered =
-				option.value === params.promptId ||
-				((option.choices ?? []) as Array<{ id: number }>).some(
-					(c) => c.id === params.promptId
-				)
-			if (!offered)
-				return refuse("That prompt is not one this step offers here.")
+		const NOT_A_PROMPT = "That setting does not choose a prompt."
+		const NOT_OFFERED = "That prompt is not one this step offers here."
+		/** The tail both addresses share: read the row, answer with the declared fields. */
+		const answer = async (promptFields: string[]) => {
 			const [row] = await db
 				.select()
 				.from(schema.pipelinePrompts)
@@ -334,9 +367,7 @@ export const pipelinesPromptWording: Handler<
 				.limit(1)
 			if (!row) return refuse("That prompt no longer exists.")
 			const all = (row.fields ?? {}) as Record<string, string>
-			const declared = ((option.promptFields ?? []) as string[]).length
-				? (option.promptFields as string[])
-				: Object.keys(all)
+			const declared = promptFields.length ? promptFields : Object.keys(all)
 			const res: Sockets.Pipelines.PromptWording.Response = {
 				...echo,
 				name: row.name,
@@ -346,6 +377,67 @@ export const pipelinesPromptWording: Handler<
 			}
 			emitToUser("pipelines:promptWording", res)
 			return res
+		}
+		try {
+			const reader = await readerFor(socket, params.sessionId)
+			if (!reader) return refuse(noReaderSentence(params.sessionId))
+			if ((params.optionId == null) === (params.fieldId == null))
+				return refuse(NOT_A_PROMPT)
+
+			if (params.fieldId != null) {
+				if (params.sessionId == null || reader !== "owner")
+					return refuse(noReaderSentence(params.sessionId ?? 0))
+				const { settingsFormBuild } = await import(
+					"$lib/server/sessions/settingsForm"
+				)
+				const { form } = await settingsFormBuild(db, params.sessionId, {
+					userId: socket.user!.id,
+					isAdmin: !!socket.user!.isAdmin
+				})
+				if (form.error) return refuse(form.error)
+				const field = form.groups
+					.filter((g: any) => g.pipeline === params.slug)
+					.flatMap((g: any) => g.fields as any[])
+					.find((f: any) => f.id === params.fieldId)
+				if (!field || field.address?.kind !== "pipeline")
+					return refuse(NOT_A_PROMPT)
+				const { published, declarations } = await import(
+					"$lib/server/pipelines/config/panel/declarations"
+				)
+				const at = await published(db, params.slug)
+				const decl: any = at
+					? (await declarations(db, at.specVersionId)).find(
+							(d: any) =>
+								d.nodeKey === field.address.nodeKey &&
+								d.slot === field.address.slot
+						)
+					: undefined
+				if (!decl || decl.control !== "prompts-ref") return refuse(NOT_A_PROMPT)
+				if (
+					!((field.members ?? []) as Array<{ key: string }>).some(
+						(m) => m.key === String(params.promptId)
+					)
+				)
+					return refuse(NOT_OFFERED)
+				return await answer((decl.promptFields ?? []) as string[])
+			}
+
+			const view = await buildView(socket, params.slug, params.sessionId)
+			if (!view.pipeline) return refuse(view.error ?? "That pipeline is not available.")
+			const { groupOptions } = await import(
+				"$lib/server/pipelines/config/panel/groups"
+			)
+			const option: any = groupOptions((view.pipeline as any).groups ?? []).find(
+				(o) => o.id === params.optionId
+			)
+			if (!option || option.control !== "prompts-ref") return refuse(NOT_A_PROMPT)
+			const offered =
+				option.value === params.promptId ||
+				((option.choices ?? []) as Array<{ id: number }>).some(
+					(c) => c.id === params.promptId
+				)
+			if (!offered) return refuse(NOT_OFFERED)
+			return await answer((option.promptFields ?? []) as string[])
 		} catch (err) {
 			// `refusal` speaks for a write ("could not be saved"); this is a
 			// read, so only its sentences meant for a person pass through.
@@ -819,8 +911,8 @@ export const pipelinesCreatePrompt: Handler<
 				),
 				fields: params.fields ?? {},
 				// Written here, so it sorts to the top of *this* pipeline's
-				// picker next time. Grouping only — it stays selectable
-				// everywhere the node is reused.
+				// picker next time, and another pipeline's call does not offer it
+				// (`promptsOffered`); a write of one it does not offer is refused.
 				createdForSpecId: specId
 			})
 			promptId = made.id
@@ -954,10 +1046,10 @@ export const pipelinesDeletePrompt: Handler<
 			// reference check in `deletePrompt` does.
 			//
 			// "Your own selection" has two homes: inside a session it is the
-			// session's override row; outside one it is an administrator's
-			// value on the genre's defaults or in the pipeline's instance
-			// values (R50) — `deletePrompt` still refuses every other
-			// reference.
+			// session's registration value (and, for a ⏳ leftover, its override
+			// row); outside one it is an administrator's value on the genre's
+			// defaults or in the pipeline's instance values (R50) —
+			// `deletePrompt` still refuses every other reference.
 			const mine: any[] = []
 			if (viewer.sessionId != null) {
 				const own = await db
@@ -993,11 +1085,41 @@ export const pipelinesDeletePrompt: Handler<
 				viewer.sessionId == null
 					? await ownGenreRefs(socket, params.slug, row.id, [slot])
 					: []
+			// The session's own registration values that select this prompt.
+			const sessionRefs: Awaited<
+				ReturnType<typeof registrationValueRefs>
+			> = []
+			if (viewer.sessionId != null) {
+				const keys = new Set(
+					await sessionRegistrationKeys(db, viewer.sessionId, params.slug)
+				)
+				sessionRefs.push(
+					...(await registrationValueRefs(db, [slot])).filter(
+						(r) =>
+							r.scopeKind === "session" &&
+							r.scopeRef === String(viewer.sessionId) &&
+							r.value === row.id &&
+							keys.has(r.key)
+					)
+				)
+			}
 			await deletePrompt(db, row.id, {
 				ignoreOverrideIds: new Set(mine.map((o) => o.id)),
-				ignoreRegistrationRefs: await ignoringRefs(ownRefs)
+				ignoreRegistrationRefs: await ignoringRefs([
+					...ownRefs,
+					...sessionRefs
+				])
 			})
 			await releaseRefs(params.slug, ownRefs)
+			const origin = viewer.isAdmin ? "admin" : "owner"
+			for (const ref of sessionRefs)
+				await patchSessionRow(
+					db,
+					viewer.sessionId!,
+					ref.key,
+					(r) => ({ values: valuesWith(r.values, ref, null) as never }),
+					origin
+				)
 			for (const row of mine)
 				await db
 					.delete(schema.pipelineNodeOverrides)
@@ -1651,7 +1773,9 @@ async function validateTemplateDraft(draft: {
 	const result = validateTemplateContext(
 		draft.engine,
 		draft.source,
-		contractKeys
+		contractKeys,
+		undefined,
+		{ variableLayout: draft.kind === "variable" }
 	)
 	// A context template is judged where it renders (typed templates P5):
 	// against the typed scope of every published step of its node definition,
@@ -5143,7 +5267,7 @@ export const pipelinesPreviewRetrieval: Handler<
 		if (!access.hasAccess) return refuse("No such conversation.")
 		// The preview quotes the session's lorebook, which is its owner's: a
 		// guest may play in the session without reading the owner's lore.
-		if (!access.isOwner && !socket.user?.isAdmin)
+		if (!access.isOwner)
 			return refuse("Only the conversation's owner can preview its lore.")
 
 		const session = await previewCastFor(sessionId)
@@ -5279,12 +5403,7 @@ export const pipelinesPreviewRetrieval: Handler<
 					(receipt?.haltReason ? ` — ${receipt.haltReason}` : "")
 			)
 
-		// The gate above let an administrator through who is not the owner;
-		// the entry read must say so too, or it refuses them its owner-only
-		// read and every row's facts come back empty (R55).
-		const { entries, read } = await retrievalEntriesFor(sessionId, userId, {
-			asAdmin: !access.isOwner && !!socket.user?.isAdmin
-		})
+		const { entries, read } = await retrievalEntriesFor(sessionId, userId)
 		const res: Sockets.Pipelines.PreviewRetrieval.Response = {
 			sessionId,
 			explanation: explainRetrieval(receipt, entries, {
@@ -5940,10 +6059,9 @@ export const pipelinesCancelRun: Handler<
 			return res
 		}
 
-		const { cancel, cancelAs, runKindOf, runLineBoundOf, runSessionOf } = await import(
+		const { cancel, cancelAs } = await import(
 			"$lib/server/pipelines/runtime/runRegistry"
 		)
-		const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
 		const { found, allowed } = cancel(params.runId, userId)
 		let res: { ok: boolean; found: boolean; error?: string }
 		if (!found) {
@@ -5951,24 +6069,13 @@ export const pipelinesCancelRun: Handler<
 		} else if (allowed) {
 			res = { ok: true, found: true }
 		} else {
-			// Not the starter: a waiting reply is the room's to stop (any member);
-			// any other run in a session, bar a line-bound one, is the owner's.
-			const sessionId = runSessionOf(params.runId)
+			// Not the starter: `personMay` is the one rule for who may stop a run
+			// (it is the first page's `mayStop` too). Stopping takes back nothing that landed.
+			const { actingPersonFor, personMay } = await import("$lib/server/auth/actingPerson")
 			const person = await actingPersonFor(db, { via: "press", userId })
-			let may = false
-			if (person && sessionId !== undefined) {
-				if (runKindOf(params.runId) === "reply") {
-					may = (
-						await personMay(db, person, "write", {
-							kind: "reply-run",
-							sessionId,
-							runId: params.runId
-						})
-					).ok
-				} else if (!runLineBoundOf(params.runId)) {
-					may = (await personMay(db, person, "write", { kind: "session", id: sessionId })).ok
-				}
-			}
+			const may =
+				person !== null &&
+				(await personMay(db, person, "write", { kind: "run", runId: params.runId })).ok
 			if (may) {
 				// False when the run finished during the reads above: a late cancel, not a stop.
 				const stopped = cancelAs(params.runId, `user:${userId}`, "the run was cancelled")

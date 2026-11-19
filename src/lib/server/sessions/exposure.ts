@@ -16,8 +16,8 @@
  * Each layer may set a value, **lock** it (no layer below may change it) or
  * leave it open, and place an owner-open setting on the start form
  * (`askAtStart`). A genre's field reaches the owner unless it says
- * `reach: 'admin'`; one a layer above locked shows its value, read-only, to an
- * administrator and nothing to the owner (R1).
+ * `reach: 'admin'`; one a layer above locked shows its value read-only, with the
+ * layer's reason, to whoever it reaches (the owner and an administrator).
  *
  * ## The rules a session plays (R32)
  *

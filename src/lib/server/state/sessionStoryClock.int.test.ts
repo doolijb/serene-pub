@@ -34,11 +34,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -175,12 +175,40 @@ describe("1 · where the clock starts", () => {
 		expect(await clockRow(s)).toMatchObject({ year: 2, month: 7, day: null })
 	})
 
-	test("a book with no present leaves the clock unset: it follows the line", async () => {
+	test("a book with no present starts the session at today's date (no time of day)", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] })
+		vi.setSystemTime(new Date("2026-11-15T12:00:00Z"))
+		try {
+			const b = await book()
+			const s = await create(b)
+			const row = await clockRow(s)
+			expect(row).toMatchObject({ year: 2026, month: 11, hour: null, minute: null })
+			expect(row.day).toBeGreaterThanOrEqual(14)
+			expect(row.day).toBeLessThanOrEqual(16)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	test("a book with no present but a dated Beginning starts the session at its latest date; the book's clock stays unset", async () => {
 		const b = await book()
+		const { WORLD_LORE_TYPE_ID } = await import("$lib/shared/entries/types")
+		for (const fields of [{ year: 4 }, { year: 8, month: 2 }])
+			await testDb.insert(schema.lorebookEntries).values({
+				lorebookId: b.lorebook.id,
+				typeId: WORLD_LORE_TYPE_ID,
+				typeVersion: 1,
+				position: ++n,
+				title: null,
+				content: "…",
+				fields
+			})
 		const s = await create(b)
-		expect((await clockRow(s)).year).toBeNull()
-		await b.dated({ year: 9 })
-		expect(await sessionNow(s)).toEqual({ year: 9 })
+		expect(await clockRow(s)).toEqual({ year: 8, month: 2, day: null, hour: null, minute: null })
+		expect(await bookNow(b)).toBeNull()
+		// A clock named on the create still wins.
+		const t = await create(b, { storyClockYear: 2 })
+		expect(await clockRow(t)).toMatchObject({ year: 2 })
 	})
 
 	test("a clock is a date on this book's calendar: the book never switches under it (the book lock)", async () => {
@@ -260,8 +288,8 @@ describe("3–4 · advance", () => {
 
 	test("a session with no clock of its own starts from its line's present", async () => {
 		const b = await book()
-		const s = await create(b)
 		await b.dated({ year: 8, month: 3 })
+		const s = await create(b)
 		const { advanceSessionStoryClock } = await import("$lib/server/state/storyTime")
 		expect((await advanceSessionStoryClock(db(), s, 1, "years")).clock).toEqual({ year: 9, month: 3 })
 	})
@@ -296,13 +324,21 @@ describe("3–4 · advance", () => {
 		expect(await clockRow(s)).toMatchObject({ year: 5, month: 1, day: 12 })
 	})
 
-	test("a move by an amount on a story with no clock starts on its first day", async () => {
+	test("a move by an amount on a story with no clock and no present is refused, nothing written", async () => {
 		const b = await book()
 		const s = await create(b)
-		const { advanceSessionStoryClock } = await import("$lib/server/state/storyTime")
-		const done = await advanceSessionStoryClock(db(), s, 1, "days")
-		expect(done.from).toEqual({ year: 1, month: 1, day: 1, hour: 0, minute: 0 })
-		expect(await clockRow(s)).toEqual({ year: 1, month: 1, day: 2, hour: 0, minute: 0 })
+		// An existing session with no date: clear the clock the create wrote.
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: null, storyClockMonth: null, storyClockDay: null, storyClockHour: null, storyClockMinute: null })
+			.where(eq(schema.sessions.id, s))
+		const { advanceSessionStoryClock, StoryClockRefusal } = await import("$lib/server/state/storyTime")
+		const before = await clockRow(s)
+		await expect(advanceSessionStoryClock(db(), s, 1, "days")).rejects.toThrow(StoryClockRefusal)
+		await expect(advanceSessionStoryClock(db(), s, 1, "days")).rejects.toThrow(
+			"This story has no date yet, so its clock can't move. Set the story clock in the lorebook's Book settings first."
+		)
+		expect(await clockRow(s)).toEqual(before)
 	})
 
 	test("the pipeline outlet advances it, and halts on a refusal", async () => {

@@ -221,11 +221,10 @@ describe("Edit Session — Line and Story clock on a session's own notes", () =>
 		expect(reading()).toBeNull()
 	})
 
-	test("a guest reads the lines too (read-only; see editSessionGuestOwnNotesReading)", async () => {
+	test("a guest reads nothing here (no Settings tab; see editSessionGuestOwnNotesReading)", async () => {
 		await openForm({ lorebookId: null, userId: 2 })
-		expect(linesKey(OWN)).toBeDefined()
-		await answerLines(OWN)
-		expect(reading()).not.toBeNull()
+		expect(linesKey(OWN)).toBeUndefined()
+		expect(reading()).toBeNull()
 	})
 
 	test("an attached session shows its reading as before", async () => {

@@ -349,12 +349,13 @@ describe.each([
 		expect(first("kits")).toBeGreaterThan(order.lastIndexOf("shared"))
 	})
 
-	test("a plugin row is read directly, in the new mode", async () => {
+	test("a plugin row is started from, in the new mode: sent as a starter lorebook", async () => {
 		await render(rules)
 		await click(3)
 		const sent = startPayload()[0]
 		expect(sent.mode ?? "new").toBe("new")
-		expect((sent.session ?? sent).lorebookId).toBe(3)
+		expect((sent.session ?? sent).lorebookId ?? null).toBeNull()
+		expect(sent.starterKit).toEqual({ lorebookId: 3 })
 	})
 
 	test("someone with only shared books still sees them, under the own-notes line", async () => {

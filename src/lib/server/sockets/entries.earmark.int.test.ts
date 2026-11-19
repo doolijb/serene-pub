@@ -358,7 +358,7 @@ describe("entries:earmark", () => {
 		])
 	})
 
-	test("a guest of the session answers for an entry of the session's own book, with no refusal", async () => {
+	test("a guest of the session is refused an entry of the session's own book (G2), the owner answers", async () => {
 		const w = await world()
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const { ownBookFor } = await import("$lib/server/lorebooks/ownBook")
@@ -367,8 +367,12 @@ describe("entries:earmark", () => {
 		const guest = await createTestUser(testDb, `earmark-guest-${++n}`)
 		await testDb.insert(schema.sessionGuests).values({ sessionId: w.session.id, userId: guest.id })
 		const { r, result } = await ask(guest.id, note.id)
-		await expect(result).resolves.toEqual({ entryId: note.id, lorebookId: own.id, notice: null })
-		expect(r.sent.map((s) => s.event)).toEqual(["entries:earmark"])
+		await expect(result).rejects.toThrow("Entry not found or access denied.")
+		expect(JSON.stringify(r.sent)).not.toContain("The Old Mill")
+		expect(r.sent.map((s) => s.event)).not.toContain("entries:earmark")
+		const mine = await ask(w.user.id, note.id)
+		await expect(mine.result).resolves.toEqual({ entryId: note.id, lorebookId: own.id, notice: null })
+		expect(mine.r.sent.map((s) => s.event)).toEqual(["entries:earmark"])
 	})
 
 	test("leaves out the session's name for an asker who cannot open the session", async () => {

@@ -1,9 +1,10 @@
 /**
  * The session data panel's read (`sessions:annexInspect`, owner-approved
  * 2026-09-26), through the real handler over PGlite:
- *  1. the session's owner and an administrator are answered; a member who
- *     is not the owner is refused by sentence (and so is anyone asking
- *     after a session that does not exist);
+ *  1. only the session's owner is answered — an administrator who owns it
+ *     too included; anyone else, an administrator in another's session
+ *     (G6: a guest) or not in it included, is refused by sentence (and so is
+ *     anyone asking after a session that does not exist);
  *  2. declared keys are grouped by owner (core first), each with its
  *     declaration and stored value; an unset key says so; another genre's
  *     field is not this session's;
@@ -41,9 +42,13 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	autoEnqueueSession: async () => {}
 }))
 
+const REFUSAL = "Only the session's owner can see its stored data."
+
 let ownerId: number
 let guestId: number
 let adminId: number
+let adminGuestId: number
+let adminOwnedSessionId: number
 let sessionId: number
 
 async function install(pluginId: string, fields: unknown[]) {
@@ -89,6 +94,11 @@ beforeAll(async () => {
 		.update(schema.users)
 		.set({ isAdmin: true })
 		.where(eq(schema.users.id, adminId))
+	adminGuestId = (await createTestUser(db, "annex-inspect-admin-guest")).id
+	await db
+		.update(schema.users)
+		.set({ isAdmin: true })
+		.where(eq(schema.users.id, adminGuestId))
 
 	await install("acme.dice", [
 		annexField({
@@ -131,6 +141,14 @@ beforeAll(async () => {
 		.returning()
 	sessionId = session.id
 	await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
+	await db
+		.insert(schema.sessionGuests)
+		.values({ sessionId, userId: adminGuestId })
+	const [adminOwned] = await db
+		.insert(schema.sessions)
+		.values({ userId: adminId, isGroup: false, name: "admin's own" } as any)
+		.returning()
+	adminOwnedSessionId = adminOwned.id
 })
 
 afterAll(async () => {
@@ -144,9 +162,32 @@ describe("sessions:annexInspect — who may read it", () => {
 		expect(emits[0]!.data.sessionId).toBe(sessionId)
 	})
 
-	it("answers an administrator who is not in the session", async () => {
-		const emits = await ask({ id: adminId, isAdmin: true })
+	it("answers an administrator in a session they own", async () => {
+		const emits = await ask({ id: adminId, isAdmin: true }, adminOwnedSessionId)
 		expect(emits.map((e) => e.event)).toEqual(["sessions:annexInspect"])
+	})
+
+	it("refuses an administrator who is not in the session — G6, by sentence", async () => {
+		const emits = await ask({ id: adminId, isAdmin: true })
+		expect(emits).toEqual([
+			{
+				event: "sessions:annexInspect:error",
+				data: { sessionId, error: REFUSAL }
+			}
+		])
+		expect(JSON.stringify(emits)).not.toContain("sk-live-123")
+		expect(JSON.stringify(emits)).not.toContain("from before")
+	})
+
+	it("refuses an administrator who is a guest of the session — G6", async () => {
+		const emits = await ask({ id: adminGuestId, isAdmin: true })
+		expect(emits).toEqual([
+			{
+				event: "sessions:annexInspect:error",
+				data: { sessionId, error: REFUSAL }
+			}
+		])
+		expect(JSON.stringify(emits)).not.toContain("from before")
 	})
 
 	it("refuses a member who is not the owner, by sentence, with nothing else", async () => {
@@ -154,10 +195,7 @@ describe("sessions:annexInspect — who may read it", () => {
 		expect(emits).toEqual([
 			{
 				event: "sessions:annexInspect:error",
-				data: {
-					sessionId,
-					error: "Only the session's owner or an administrator can see its stored data."
-				}
+				data: { sessionId, error: REFUSAL }
 			}
 		])
 	})
@@ -165,7 +203,7 @@ describe("sessions:annexInspect — who may read it", () => {
 	it("refuses a session that does not exist with the same sentence", async () => {
 		const emits = await ask({ id: guestId }, 999_999)
 		expect(emits[0]!.event).toBe("sessions:annexInspect:error")
-		expect(emits[0]!.data.error).toMatch(/owner or an administrator/)
+		expect(emits[0]!.data.error).toBe(REFUSAL)
 	})
 })
 

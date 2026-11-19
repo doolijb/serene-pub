@@ -7,7 +7,8 @@
  * newest line, whether a reply is generating, the genre's shape, who the
  * viewer is and speaks as.
  */
-import { onDestroy, onMount, untrack } from "svelte"
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
+import { getContext, onDestroy, onMount, untrack } from "svelte"
 import { runProgress } from "$lib/client/stores/runProgress.svelte"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import { createPendingReplies } from "$lib/client/components/sessionPage/pendingReply.svelte"
@@ -45,6 +46,10 @@ import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { rewindStateOf, withStackReplaced, type RewindState } from "$lib/shared/sessions/rewind"
 import { sessionStore } from "$lib/client/sessions/store/sessionStore.svelte"
 import { generatingOf, rewindOf, runningRoutineNamesOf } from "$lib/client/sessions/store/derive"
+import {
+	rerunWaitsForOf,
+	summaryRunsOf
+} from "$lib/client/components/sessionPage/sessionPageProjections"
 import type { SessionPayload } from "$lib/client/sessions/store/records"
 import {
 	asksToJoin,
@@ -55,6 +60,7 @@ import {
 	BENCHED_ONLY_OWNER,
 	ownCardlessPlayerSeats
 } from "$lib/shared/sessions/playerSeat"
+import { storedGuestSeatSwitches } from "$lib/shared/sessions/guestSeats"
 import {
 	resolvePlayerLabel,
 	storedPlayerLabel
@@ -288,7 +294,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		genreReplied &&
 			genreRow === null &&
 			!!(session as any)?.genreId &&
-			(session as any).genreId !== "core:genre/story"
+			(session as any).genreId !== STANDARD_GENRE_ID
 	)
 	// A capability the shape omits (or caps at zero) does not exist for the
 	// session: no persona requirement on send, no character-response mechanics.
@@ -456,6 +462,27 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		runningRoutineNamesOf(sessionStore.runsOf(sessionId)).join("\u0000")
 	)
 
+	/**
+	 * 🚧 The runs the session store holds for this session (registered runs and a
+	 * routine's own frames): what the dossier's `runsInProgress` and
+	 * `rerunWaitsFor` are projected from.
+	 */
+	const storeRuns = $derived(sessionStore.runsOf(sessionId))
+	// The summarize activities live in the shell's contexts (`Layout.svelte`); read once, at init.
+	const sceneSummarizesCtx = getContext<SceneSummarizesCtx | undefined>("sceneSummarizesCtx")
+	const sessionSummarizesCtx = getContext<SessionSummarizesCtx | undefined>("sessionSummarizesCtx")
+	/** 🚧 This session's summaries under way (a scene's, the session's), as background runs. */
+	const summaryRuns = $derived(
+		summaryRunsOf({
+			sessionId,
+			sceneActivities: sceneSummarizesCtx?.activities ?? [],
+			sessionActivities: sessionSummarizesCtx?.activities ?? [],
+			scenes: sessionStore.scenesOf(sessionId),
+			viewer: { id: userCtx.user?.id ?? null, isAdmin: !!userCtx.user?.isAdmin }
+		})
+	)
+	const rerunWaitsFor = $derived(rerunWaitsForOf(storeRuns))
+
 	// The author's newest line — keyed on role, never on a persona (F1): a
 	// persona-less genre's user line has no personaId (`swipeControls.ts`).
 	/**
@@ -519,11 +546,21 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		isBenchedOnly ? (isGuest ? BENCHED_ONLY_GUEST : BENCHED_ONLY_OWNER) : null
 	)
 
+	/**
+	 * 🚧 A guest with *bring their own* off is offered no seat or persona: the
+	 * server refuses both (G3). Read from the saved switch; the owner is
+	 * never frozen.
+	 */
+	const canBringOwn: boolean = $derived(
+		!isGuest || storedGuestSeatSwitches(session?.metadata).bringOwn
+	)
+
 	// Whether to show the add persona CTA: a guest with no voice here — no
 	// card and no named card-less seat (`asksToJoin`, the one rule). A mode
 	// with no persona system has nothing to add.
 	let showAddPersonaCTA: boolean = $derived(
 		!isBenchedOnly &&
+		canBringOwn &&
 		asksToJoin({
 			isGuest,
 			personasInMode,
@@ -544,6 +581,7 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	 */
 	let showTakeSeatCTA: boolean = $derived(
 		!isBenchedOnly &&
+		canBringOwn &&
 		offersSeat({
 			isGuest,
 			personasInMode,
@@ -563,7 +601,9 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 	let userPersonasInSession = $derived.by(() => {
 		if (!session?.sessionPersonas || !userCtx.user?.id) return []
 		return session.sessionPersonas.filter(
-			(cp) => cp.persona?.userId === userCtx.user?.id && !cp.removedAt
+			(cp) =>
+				(cp.userId ?? cp.persona?.userId) === userCtx.user?.id &&
+				!cp.removedAt
 		)
 	})
 
@@ -961,20 +1001,20 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 				// Initial load or session switch — restore draft only on first load
 				const isFirstLoad = !sessionStore.session(sessionId)
 				sessionStore.load(msg.session, msg.pagination)
-				// The first load is the truth for routine runs: one held from before
-				// (a run that died with the server, an end frame a dropped socket
-				// missed) and absent now is gone, or its line would stay up forever.
-				const runningNow = new Set((msg.routineRuns ?? []).map((f) => f.runId))
+				// The first load is the truth for runs in progress: a registered or routine run
+				// held from before (a run that died with the server, an end frame a dropped
+				// socket missed) and absent now is gone, or its line would stay up forever.
+				const runningNow = new Set((msg.runsInProgress ?? []).map((f) => f.runId))
 				for (const held of sessionStore.runsOf(sessionId))
-					if (held.routine && !runningNow.has(held.runId))
+					if ((held.routine || held.since !== undefined) && !runningNow.has(held.runId))
 						sessionStore.mergeRunStatus({
 							sessionId,
 							runId: held.runId,
 							kind: held.kind,
 							status: null,
-							routine: held.routine
+							...(held.routine ? { routine: held.routine } : {})
 						})
-				for (const frame of msg.routineRuns ?? []) sessionStore.mergeRunStatus(frame)
+				for (const frame of msg.runsInProgress ?? []) sessionStore.mergeRunStatus(frame)
 				if (isFirstLoad && msg.userDraft) writeDraft(msg.userDraft)
 				loadingOlderMessages = false
 				// Autopopulate panels for any channel already present in the
@@ -1349,6 +1389,18 @@ export function createSessionPageData(d: SessionPageDataDeps) {
 		},
 		get liveRunIds(): string[] {
 			return liveRunKey ? liveRunKey.split(",") : []
+		},
+		/** 🚧 The session's store runs, for the dossier's `runsInProgress`. */
+		get runs() {
+			return storeRuns
+		},
+		/** 🚧 This session's summaries under way, as `RunInProgressV1`s. */
+		get summaryRuns() {
+			return summaryRuns
+		},
+		/** 🚧 The sentence swipe, regenerate, delete and Back grey with while a run holds them. */
+		get rerunWaitsFor(): string | undefined {
+			return rerunWaitsFor
 		},
 		get runningRoutineNames(): string[] {
 			return runningRoutineKey ? runningRoutineKey.split("\u0000") : []

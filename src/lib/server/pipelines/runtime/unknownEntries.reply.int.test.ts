@@ -7,6 +7,7 @@
  * unless the member has an active tie to it; a narrator turn reads everything.
  * The Lair's half is `sessions.lairUnknownEntries.int.test.ts`.
  */
+import { appendFileSync } from "node:fs"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createHash } from "crypto"
 import fs from "fs/promises"
@@ -206,8 +207,8 @@ async function reply(w: World, turn: Record<string, unknown>) {
 
 const asMira = (w: World) => ({ kind: "respond", characterId: w.cardId })
 
-/** The notes of the `unknown-entries` node on the newest reply run. */
-async function unknownEntriesNotes(w: World) {
+/** The notes of each lore-lane node (world lore, character lore, history) on the newest reply run. */
+async function loreLaneNotes(w: World) {
 	const runs = await db
 		.select({
 			receipt: schema.pipelineRuns.receipt,
@@ -219,13 +220,19 @@ async function unknownEntriesNotes(w: World) {
 	const run = runs
 		.filter((r) => r.specSlug === "core:spec/story-respond")
 		.at(-1)!
-	const node = ((run.receipt as { nodes: any[] }).nodes ?? []).find((x) =>
-		/unknownEntries/.test(String(x.nodeKey))
-	)
-	return node ? ((node.notes as string[] | undefined) ?? []) : null
+	return ((run.receipt as { nodes: any[] }).nodes ?? [])
+		.filter((x) =>
+			/\.(worldLore|characterLore|historyEntries)\.read$/.test(String(x.nodeKey))
+		)
+		.map((x) => (x.notes as string[] | undefined) ?? [])
 }
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex")
+/** kn-2 lane evidence: with `KN2_SHA_LOG` set, each prompt's sha line is also appended there. */
+const kn2Note = (line: string) => {
+	console.info(line)
+	if (process.env.KN2_SHA_LOG) appendFileSync(process.env.KN2_SHA_LOG, line + "\n")
+}
 
 /** Where two prompts first part, with the words around it. */
 const firstDifference = (a: string, b: string) => {
@@ -295,21 +302,19 @@ describe("Story's own turn and the knowledge filter", () => {
 		const second = await world()
 		const b = await reply(second, asMira(second))
 		expect(b.prompt).toContain(SECRET)
-		console.info(
+		kn2Note(
 			`[unknown-entries story baseline] sha256=${sha(a.prompt)} statements=${a.statements} (second world ${sha(b.prompt)}, ${b.statements})`
 		)
 		expect(firstDifference(a.prompt, b.prompt)).toBe("identical")
 	})
 
-	it("b: the node's receipt holds the nothing-marked sentence", async () => {
+	it("b: each lore-lane node's receipt holds the nothing-marked sentence", async () => {
 		const w = await world()
 		await reply(w, asMira(w))
-		const notes = await unknownEntriesNotes(w)
-		expect(
-			notes,
-			"no unknown-entries node on the run's receipt"
-		).not.toBeNull()
-		expect(notes!.join(" ")).toContain(NOTHING_MARKED_RECEIPT)
+		const lanes = await loreLaneNotes(w)
+		expect(lanes.length, "no lore-lane node on the run's receipt").toBeGreaterThan(0)
+		for (const notes of lanes)
+			expect(notes.join(" ")).toContain(NOTHING_MARKED_RECEIPT)
 	})
 
 	it("c: marked and untied, her own turn lacks the entry", async () => {
@@ -319,7 +324,8 @@ describe("Story's own turn and the knowledge filter", () => {
 			entryId: w.entryId,
 			notCommonKnowledge: true
 		})
-		const { prompt } = await reply(w, asMira(w))
+		const { prompt, statements } = await reply(w, asMira(w))
+		kn2Note(`[kn-2 story c] sha256=${sha(prompt)} statements=${statements}`)
 		expect(prompt).not.toContain(SECRET)
 	})
 
@@ -330,7 +336,8 @@ describe("Story's own turn and the knowledge filter", () => {
 			entryId: w.entryId,
 			notCommonKnowledge: true
 		})
-		const { prompt } = await reply(w, { kind: "respond" })
+		const { prompt, statements } = await reply(w, { kind: "respond" })
+		kn2Note(`[kn-2 story d] sha256=${sha(prompt)} statements=${statements}`)
 		expect(prompt).toContain(SECRET)
 	})
 
@@ -348,7 +355,8 @@ describe("Story's own turn and the knowledge filter", () => {
 			entryId: w.entryId,
 			kind: "knows"
 		})
-		const { prompt } = await reply(w, asMira(w))
+		const { prompt, statements } = await reply(w, asMira(w))
+		kn2Note(`[kn-2 story e] sha256=${sha(prompt)} statements=${statements}`)
 		expect(prompt).toContain(SECRET)
 	})
 })

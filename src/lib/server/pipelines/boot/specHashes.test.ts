@@ -206,7 +206,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '1ba28f5858a4c3')
 	// Moved 2026-11-11 (sense-clk2, owner ruling "Remove it"): the per-reply tick is gone — no `tick` node, no `clock` junction, no `clock.moves.advance`; Story's clock is moved by the round tick (one default owner). Edited in place. (was "e396fa6e5ffb8")
 	// Moved 2026-11-15 (time-t6f): `gather.unknownEntries.read` (`core:query/unknown-entries@1`) placed, its exclusions wired into the `on` branch's `eligible`. Edited in place. (was "12007bbfaccef3")
-	"core:spec/story-respond@1.21.0": "132e6d51cab887",
+	// Moved 2026-11-16 (kn-2a): `gather.unknownEntries.read` is gone; the reads take `knownToSpeaker` by default. Back to the pre-time-t6f pin. (was "132e6d51cab887")
+	"core:spec/story-respond@1.21.0": "12007bbfaccef3",
 	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
@@ -1885,7 +1886,8 @@ const PUBLISHED: Record<string, string> = {
 	// Moved 2026-10-28 (speech build, lane D; pinned by lane V): the speech tail is the delver branch's last steps (nested, so only a line a delver spoke is read) — `cue` (cue-lines), then the `readAloud` junction on the session's `speechReadAloud` (make/play, each speak → attach {replace}). Proven speech-only: the document with those five nodes, their edges and the clause removed and the later nodes' and clauses' positions shifted back, hashes back to the old pin. (was 'c4fe814f1e089')
 	// Moved 2026-10-29 (speech follow-ups A3): the speech tail is removed from the reply — replies are spoken by their own run (speak-message) once they settle. Back to the pre-tail pin; proven by the sdk-tests copy of the same removal (the tail restored in a scratch copy digests to the old value). (was '73fa4f3b363fb')
 	// Moved 2026-11-15 (time-t6f): the delver voice places `unknownEntries` (`core:query/unknown-entries@1`) and wires its exclusions into its `eligible`. Edited in place. (was "c4fe814f1e089")
-	"core:spec/lair-reply@1.0.0": "14fa075cce73ab",
+	// Moved 2026-11-16 (kn-2a): the delver voice no longer places `unknownEntries`; its reads take `knownToSpeaker` by default. Back to the pre-time-t6f pin. (was "14fa075cce73ab")
+	"core:spec/lair-reply@1.0.0": "c4fe814f1e089",
 	// NEW 2026-10-21 (Lair rewrite L3, D5): a seat taken, told to the GM in the Sanctum.
 	"core:spec/lair-welcome@1.0.0": "1bf873c4b48d0b",
 	// NEW 2026-10-21 (Lair rewrite L3, D7): routines — the keeper (Story's

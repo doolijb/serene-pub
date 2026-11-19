@@ -28,6 +28,7 @@ const fired = vi.hoisted(() => [] as Array<Record<string, any>>)
 const lines = vi.hoisted(() => [] as Array<Record<string, any>>)
 const stored = vi.hoisted(() => new Map<string, Record<string, unknown>>())
 const scripts = vi.hoisted(() => ({ on: true }))
+const published = vi.hoisted(() => ({ values: {} as Record<string, unknown> }))
 
 vi.mock("$lib/server/pipelines/routines/run", () => ({
 	routineQueue: {
@@ -46,6 +47,7 @@ vi.mock("$lib/server/pipelines/routines/state", () => ({
 		stored.set(`${sessionId}:${key}`, state)
 	}
 }))
+vi.mock("$lib/server/pipelines/entities/publishedValues", () => ({ publishedValues: async () => published.values }))
 vi.mock("$lib/server/pipelines/scripts/chains", () => ({ scriptsEnabledFor: async () => scripts.on }))
 
 const fakeDb = {
@@ -68,6 +70,7 @@ beforeEach(() => {
 	lines.length = 0
 	stored.clear()
 	scripts.on = true
+	published.values = {}
 	runs.setRoutinesEnabled(true)
 	interaction._resetInteractions()
 })
@@ -135,6 +138,23 @@ describe("turn and round moments", () => {
 		fired.length = 0
 		await evaluateMoments(fakeDb, SESSION, moment, { at: 1, fromRoutine: { sessionId: SESSION, registrationKey: other.key, depth: 1 } }, resolvedOf(reckoning, other))
 		expect(fired).toEqual([])
+	})
+
+	it("a routine's `when` (R31) is asked once it is due: true fires; false does not, says why, and keeps its cadence state", async () => {
+		const gated = routine(everyNTurns({ n: 2 }), "acme:spec/gated", { when: { on: "state.world.weather", equals: "storm" } } as never)
+		const plain = routine(everyNTurns({ n: 2 }), "acme:spec/plain")
+		const turn = (n: number) => turnMoments(n, n)[0]!
+		published.values = { state: { world: { weather: "clear" } } }
+		await evaluateMoments(fakeDb, SESSION, [{ moment: turn(2) }], { at: 1 }, resolvedOf(gated, plain))
+		expect(fired.map((f) => f.pipeline)).toEqual(["acme:spec/plain"])
+		expect(lines).toHaveLength(1)
+		expect(lines[0]).toMatchObject({ kind: "skipped", reason: expect.stringContaining("`when`"), firing: { registrationKey: gated.key } })
+		const before = stored.get(`${SESSION}:${gated.key}`)
+		published.values = { state: { world: { weather: "storm" } } }
+		fired.length = 0
+		await evaluateMoments(fakeDb, SESSION, [{ moment: turn(2) }], { at: 2 }, resolvedOf(gated))
+		expect(fired.map((f) => f.pipeline)).toEqual(["acme:spec/gated"])
+		expect(before).toBeUndefined()
 	})
 
 	it("on an event, narrowed by its own fields", async () => {

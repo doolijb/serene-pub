@@ -20,6 +20,7 @@ import { desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { sessionEvents } from "@serene-pub/sdk"
+import { ADMINISTRATOR_SUGGESTION } from "$lib/server/utils/administratorSuggestion"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -426,6 +427,65 @@ describe("a person's message, saved through the pipeline", () => {
 				(c) => (c.payload as any).cause?.kind === "user"
 			)
 		).toHaveLength(0)
+	})
+
+	it("a save refused by wiring: an administrator reads the reason, anyone else the plain sentence and the suggestion", async () => {
+		const { compile, spec } = await import("@serene-pub/sdk")
+		const C = await import("@serene-pub/contracts")
+		const { storyGenre } = await import("@serene-pub/core-catalog")
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		// A person's message is never narration: the host's refusal names the
+		// step, and nothing marks it for people.
+		const doc = compile(
+			spec("test:spec/chat-wiring-save", { version: "1.0.0" })
+				.inlet("input", C.messageOffered.v1(), {
+					genre: storyGenre,
+					event: sessionEvents.messageOffered
+				})
+				.outlet("save", ($: any) =>
+					C.createMessage.v1({
+						text: $.input.text,
+						channel: $.input.channel,
+						role: "user",
+						narration: true
+					})
+				)
+				.build()
+		)
+		await saveDocument(db as never, doc as never, { name: "Wiring save", publish: true })
+		const base = await chatPreset()
+		const [preset] = await db
+			.insert(schema.sessionPresets)
+			.values({
+				name: "Wiring",
+				genreId: "core:genre/story",
+				bindings: {
+					...(base.bindings as object),
+					[sessionEvents.messageOffered]: { spec: "test:spec/chat-wiring-save" }
+				}
+			} as any)
+			.returning()
+		const { writeLegacyPresetChanges } = await import("$lib/server/pipelines/registrations/presetRows")
+		await writeLegacyPresetChanges(
+			db as any,
+			{ id: preset.id, genreId: "core:genre/story" },
+			{ bindings: { [sessionEvents.messageOffered]: { spec: "test:spec/chat-wiring-save" } } } as any
+		)
+		const sessionId = await makeSession("wiring", preset.id)
+		const { sessionMessagesSendPersonaMessageHandler } = await import("$lib/server/sockets/sessions")
+		const sendAs = async (isAdmin: boolean) =>
+			(await sessionMessagesSendPersonaMessageHandler.handler(
+				{ user: { id: userId, isAdmin }, io: {} } as any,
+				{ sessionId, personaId: null, content: "Keep me." } as any,
+				emit
+			)) as any
+		const member = await sendAs(false)
+		expect(member.accepted).toBeUndefined()
+		expect(member.refused).toBe(`Your message could not be saved. Your text was kept. ${ADMINISTRATOR_SUGGESTION}`)
+		const admin = await sendAs(true)
+		expect(admin.refused).toMatch(/narration/)
+		expect(admin.refused).not.toContain(ADMINISTRATOR_SUGGESTION)
+		expect(await userRows(sessionId)).toHaveLength(0)
 	})
 
 	it("a save that never answers is stopped and refused — or, if its row landed after all, accepted", async () => {

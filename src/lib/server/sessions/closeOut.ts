@@ -4,30 +4,21 @@
  * `emitToUser` and so lives in `sockets/sessionArchive.ts` — a domain module never imports sockets/.
  */
 import { and, desc, eq, gt, isNotNull, ne, sql } from "drizzle-orm"
-import { closeOutAction } from "@serene-pub/core-catalog"
-import { parseActionIdentity, type EffectiveRegistration } from "@serene-pub/sdk"
+import type { EffectiveRegistration } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { DEFAULT_CHANNEL } from "$lib/server/messages/channels"
 import { liveMessageWhere } from "$lib/server/messages/store"
-import { effectiveRegistrations } from "$lib/server/pipelines/registrations/resolve"
+import { summaryRegistrationOf } from "$lib/server/pipelines/registrations/summaryRegistration"
 import { settledLineOf } from "$lib/server/sessions/settle"
 import { playHasWritten } from "$lib/server/sessions/bookLock"
 import type { CatchUpOffer } from "$lib/shared/sessions/archive"
 
-/** The session's close-out registration: the effective `action` registration whose identity's key is `closeOutAction.key`, mode not "off"; null when none. */
+/** The session's close-out registration: its summarizer of kind "close-out" (the effective `action` registration on `closeOutAction`'s key, mode not "off"); null when none. */
 export async function closeOutRegistrationOf(
 	db: Db,
 	sessionId: number
 ): Promise<EffectiveRegistration | null> {
-	const resolved = await effectiveRegistrations(db, sessionId)
-	return (
-		resolved?.effective.find(
-			(r) =>
-				r.trigger.family === "action" &&
-				parseActionIdentity((r.trigger as { action?: unknown }).action)?.key === closeOutAction.key &&
-				r.mode !== "off"
-		) ?? null
-	)
+	return (await summaryRegistrationOf(db, sessionId, "close-out"))?.registration ?? null
 }
 
 /** What a close-out would summarize: the live lines on `main` with id > max(settle line, the newest closed scene's close); null when none. */

@@ -119,3 +119,52 @@ one function without breaking its transaction or lock; a migration seems needed.
 Your final message is the report (the lead saves it as `plans/REPORT-ss-2-<date>.md`): the inventory with
 file:line; what each store holds after the lane; the fold's rules and what it does to each stored shape; every
 new name; changed files; tests with results; open ★; **Noticed, not done**. Under about 800 words.
+
+## Cold review corrections (2026-11-16) — these rule over the text above. This lane is now `ss-2a`
+
+**Scope cut:** this lane builds **A (for the step-value store only) and B**. Section C (one writer for
+`genre_fields` / `rigour`) is lane `ss-2b`, not launched, and **C's summaries bullet is dropped** (the 2026-11-12/13
+rulings recorded in `sessions/summariesToRoutine.ts` 1–27 already settle it, and the reconcile already runs).
+Tests and docs under "Done means" / D that belong to C are not this lane's.
+
+**Corrected locations** (`src/lib/server/`): the form writes the registration value and deletes the override at
+`sessions/settingsForm.ts` 700–728 (step params) and 771–801 (Prompt), layering the old override **under** the
+registration value at 598–610, 637–641; panel write `pipelines/config/panel/write.ts` 480–503, clear 549–558;
+panel layering `panel/read.ts` 87–159, resolve 425–437 (override first: the odd one out); run order
+`pipelines/config/world.ts` 1019–1029 before 1066–1113. `sockets/sessions.ts` is split: handlers the brief
+names are in `sockets/sessions.update.ts`, `sessions.pipelines.ts`. The highest migration is **0168**.
+
+**A wrong premise corrected:** preset and genre scopes do **not** use `pipeline_node_overrides` any more (config
+writes go to `setGenreValue` / `setInstanceValue`, `panel/write.ts` 454–478; only session rows are written and
+read, `world.ts` 1071–1072). After the fold the table has no rows and no writer. Do not drop it; offer one ★:
+retire the table and its readers later.
+
+**Readers and guards the inventory must include, and keep working after the fold** (add to Files owned):
+- `utils/resolveTaskConfig.ts` 153–184 (`sessionSamplingPick`) reads the session-scope sampling override
+  directly: it must read the surviving store, so task sampling keeps the session's pick (test).
+- `sockets/pipelines.ts` 960–1005: deleting a prompt treats only override rows as "your own selection": the
+  session's own registration value must count the same way (test: a session owner deletes a prompt they
+  selected in that session).
+- `pipelines/config/named.ts` 1285–1350 (culls session connection rows); delete guards that scan overrides:
+  `pipelines/entities/prompts.ts` ~521, `entities/contextTemplateFit.ts` ~445, `config/variableLayoutsView.ts`
+  ~946, `config/library.ts` ~437.
+
+**The fold's rule, exactly:**
+- Per (registration key, address): move the override's value into that key's session layer **only where that
+  layer has no usable value** (the run skips a registration value of `null`, `world.ts` ~977, and a prompt value
+  that is not a number, ~983: in both the override wins today, so it is moved over it). Each run reads its own
+  registration key, else the first (`registrations/values.ts` 72–75): map accordingly. Dropped registrations do
+  not count.
+- **Connection rows at session scope are never read** (`world.ts` ~1075, `read.ts` ~430): delete them, do not
+  move them.
+- A session has a registration layer only when its effective registrations run that pipeline
+  (`registrations/values.ts` 69–99). An override for a spec with **no session-effective registration**: stop and
+  report with counts (do not invent a layer, do not delete the row).
+- Build the fold from `registrationValueLayers` and `addressedValues`. Its test: for each session and key, the
+  session-scope values the run's world resolves are **the same before and after** the fold; a second boot
+  changes nothing.
+- **Where it lives:** a per-boot idempotent pass in `pipelines/boot/` (pattern `replyTickDrop.ts` 1–30,
+  registered in `bootstrap.ts` 432–436), run after the registrations projection and refit. Not a
+  `db/dataUpgrades/` entry (those are pinned to a migration).
+
+**Done means, added:** the task-sampling test and the prompt-delete test above.

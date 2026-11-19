@@ -173,7 +173,8 @@ export const attachmentsBegin: Handler<
 				"sessionId" in scope
 					? await attachmentReaders(db, {
 							sessionId: scope.sessionId,
-							userId
+							userId,
+							subject: socket.user
 						})
 					: undefined
 			const opened = await beginTrayUpload(db, {
@@ -421,6 +422,7 @@ export const attachmentsReaders: Handler<
 			const readers = await attachmentReaders(db, {
 				sessionId: params.sessionId,
 				userId,
+				subject: socket.user,
 				...(typeof params.channel === "string"
 					? { channel: params.channel }
 					: {})

@@ -605,8 +605,6 @@ declare global {
 			name?: string
 			participantCharacters: number[]
 			mentionedCharacters: number[]
-			suggestedParticipantCharacters?: string[]
-			suggestedMentionedCharacters?: string[]
 			raw: string
 		}
 		startedAt: string

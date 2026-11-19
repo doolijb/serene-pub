@@ -837,9 +837,10 @@ export const pluginsUninstall: Handler<
 		}
 		// 🚧 (M2c) The books (and their cards) the plugin provided stay unless the
 		// admin chose to delete them; absent = keep. Only rows carrying its mark.
+		let keptBooks: string[] = []
 		if (params.providedBooks === "delete") {
 			const { deleteProvidedBooks } = await import("$lib/server/plugins/providedBooks")
-			await deleteProvidedBooks(db, params.pluginId)
+			keptBooks = (await deleteProvidedBooks(db, params.pluginId)).kept
 		} else {
 			// 🚧 (M2e) Kept books come back into view as ordinary books: nothing stays hidden with no page to switch it on.
 			const { clearDisabledOnKeptBooks } = await import("$lib/server/plugins/providedBooks")
@@ -862,7 +863,7 @@ export const pluginsUninstall: Handler<
 		else await syncWidgetStylesQuietly()
 		await pushPresets(socket)
 		await pushScripts(socket)
-		return { plugins: await emitList(emitToUser) }
+		return { plugins: await emitList(emitToUser), keptBooks }
 	}
 }
 
@@ -1433,7 +1434,9 @@ export const pluginUserSettingsList: Handler<
  * path writes a person's row and an instance value belongs in
  * `plugins:setSettings`. A null (or "" for a secret) clears the person's own
  * value, so they read the instance's again. A successful write re-syncs the
- * manager, so their next hook call carries it.
+ * manager, so their next hook call carries it. A success answers with the
+ * refreshed `pluginUserSettings:list`, then on `pluginUserSettings:set`
+ * naming the plugin whose save landed; a refusal answers on `:set:error`.
  */
 export const pluginUserSettingsSet: Handler<
 	Sockets.PluginUserSettings.Set.Params,
@@ -1470,6 +1473,7 @@ export const pluginUserSettingsSet: Handler<
 			settings: pluginUserSettingsView(row.manifest, row.settings, applied.next)
 		}
 		emitToUser("pluginUserSettings:list", await userSettingsPayload(userId))
+		emitToUser("pluginUserSettings:set", res)
 		return res
 	}
 }

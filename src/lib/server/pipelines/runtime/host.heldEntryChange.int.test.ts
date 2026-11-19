@@ -210,7 +210,7 @@ const ownBookOf = async (sessionId: number) => {
 
 describe("a change to an attached lorebook's entry is held under Review changes and Off", () => {
 	it.each<Mode>(["review", "off"])(
-		"%s: the lorebook is untouched; one held amendment; only this session reads it",
+		"%s, a lorebook with no date at all (undatable): the lorebook is untouched; one held amendment, undated; only this session reads it",
 		async (mode) => {
 			const w = await world({ mode })
 			const other = await sessionOn(w.user.id, w.book.id)
@@ -330,6 +330,50 @@ describe("a change to an attached lorebook's entry is held under Review changes 
 		const [held] = await heldRows((await ownBookOf(w.session.id)).id)
 		expect(held).toMatchObject({ year: 3, month: 2, day: 5 })
 		expect((await readBy(w.session.id, vault.id)).category).toBe("Vaults")
+	})
+
+	it("no clock but dated history (dated by history): the held amendment carries the newest history day", async () => {
+		const w = await world({ mode: "review" })
+		for (const fields of [
+			{ year: 3, month: 2, day: 9 },
+			{ year: 7, month: 4, day: 1 }
+		])
+			await db.insert(schema.lorebookEntries).values({
+				lorebookId: w.book.id,
+				typeId: HISTORY_TYPE_ID,
+				typeVersion: 1,
+				position: ++n,
+				title: null,
+				content: "…",
+				fields
+			})
+		const message = await messageIn(w.session.id)
+		const vault = await place(w.book.id, "The Vault")
+		await (
+			await hostFor(w.session.id, w.user.id, `run-${w.suffix}`)
+		).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		const [held] = await heldRows((await ownBookOf(w.session.id)).id)
+		expect(held).toMatchObject({ year: 7, month: 4, day: 1 })
+		expect((await readBy(w.session.id, vault.id)).category).toBe("Vaults")
+		const { retractStateAnchoredTo } = await import("$lib/server/state/write")
+		const undone = await db.transaction(async (tx) =>
+			retractStateAnchoredTo(tx as unknown as Db, message.id, "leaves", {
+				leavingWith: [message.id]
+			})
+		)
+		expect(undone.changed).toBe(true)
+		expect(await heldRows((await ownBookOf(w.session.id)).id)).toEqual([])
+	})
+
+	it("undatable (a timeline, no date at all): the held amendment is undated", async () => {
+		const w = await world({ mode: "review" })
+		await messageIn(w.session.id)
+		const vault = await place(w.book.id, "The Vault")
+		await (
+			await hostFor(w.session.id, w.user.id, `run-${w.suffix}`)
+		).commit!({ entry: vault.id, fields: { category: "Vaults" } }, UPDATE)
+		const [held] = await heldRows((await ownBookOf(w.session.id)).id)
+		expect(held).toMatchObject({ year: null, month: null, day: null })
 	})
 
 	it("two changes to one field in two turns: the second's base is the first's value", async () => {

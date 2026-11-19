@@ -155,10 +155,10 @@ export async function providedOwnerNames(
 }
 
 /**
- * 🚧 (m2e-F-D) The one decider for "a person may not edit this book": the refusal sentence when the book is
- * a primer row (`kind = "starter_kit"`, its OWN genuine provided mark, the mark's owner present), else null.
- * Called at the socket doors that act for a person, never by the syncs or the admin disable/enable.
- * Takes the `db` (or `tx`) it is handed.
+ * The one decider for "a person may not edit this lorebook": the refusal sentence when the lorebook is a
+ * live provided lorebook (its OWN genuine provided mark, the mark's owner present; any book kind, disabled
+ * or not), else null. Called at the socket doors that act for a person, never by the syncs or the admin
+ * disable/enable. Takes the `db` (or `tx`) it is handed.
  */
 export async function primerRowEditProblem(
 	db: Db,
@@ -166,14 +166,13 @@ export async function primerRowEditProblem(
 ): Promise<string | null> {
 	const [book] = await db
 		.select({
-			kind: schema.lorebooks.kind,
 			uuid: schema.lorebooks.uuid,
 			extraJson: schema.lorebooks.extraJson
 		})
 		.from(schema.lorebooks)
 		.where(eq(schema.lorebooks.id, lorebookId))
 		.limit(1)
-	if (!book || book.kind !== "starter_kit") return null
+	if (!book) return null
 	const mark = markedBook(book.extraJson, book.uuid)
 	if (!mark || !(await providedOwnerPresent(db, mark.plugin))) return null
 	if (mark.plugin === "core") return primerRowEditRefusal(null)
@@ -270,6 +269,18 @@ export function shownLorebook(
 	const extra = table.extraJson as SQL
 	const uuid = table.uuid as SQL
 	return sql`NOT (coalesce(${extra}->'provided'->>'uuid' = ${uuid}::text, false) AND coalesce(${extra}->'provided'->>'disabled' = 'true', false))`
+}
+
+/**
+ * TRUE when the row is a live provided lorebook: its provided mark is its own (`plugin`, `slug` and `version`
+ * strings, `uuid` the row's) and the mark's owner is present (`core` always, a plugin while its `plugins` row
+ * exists). One expression, so a select that already reads the row carries the fact with no statement of its
+ * own. Disabled or not makes no difference. The SQL twin of `markedBook` plus `providedOwnerPresent`; not a
+ * read permission.
+ */
+export function liveProvidedBookSql(table: typeof schema.lorebooks = schema.lorebooks): SQL<boolean> {
+	const mark = sql`${table.extraJson}->'provided'`
+	return sql<boolean>`coalesce(json_typeof(${mark}->'plugin') = 'string' AND json_typeof(${mark}->'slug') = 'string' AND json_typeof(${mark}->'version') = 'string' AND ${mark}->>'uuid' = ${table.uuid}::text AND (${mark}->>'plugin' = 'core' OR EXISTS (SELECT 1 FROM ${schema.plugins} WHERE ${schema.plugins.pluginId} = ${mark}->>'plugin')), false)`
 }
 
 /** 🚧 (M2e) Whether a mark's owner is present: core always, a plugin while its row exists. */

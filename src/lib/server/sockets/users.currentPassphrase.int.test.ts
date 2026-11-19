@@ -22,11 +22,11 @@ import { releaseDataDir } from "$lib/server/utils/testDb"
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -122,6 +122,125 @@ describe("users:current:setPassphrase — re-authentication gap (PGlite integrat
 		})
 		expect(tokens.length).toBeGreaterThan(0)
 		expect(tokens.every((t) => t.expiresAt <= new Date())).toBe(true)
+	})
+})
+
+describe("users:current:setPassphrase — turn accounts on in the same press", () => {
+	test("enableAccounts turns accounts on before the sockets are disconnected", async () => {
+		const { usersCurrentSetPassphrase } = await import("./users")
+		const user = await makeUser("setpass-enable-user")
+		await testDb
+			.update(schema.users)
+			.set({ isAdmin: true })
+			.where(eq(schema.users.id, user.id))
+		await testDb
+			.insert(schema.systemSettings)
+			.values({ id: 1, isAccountsEnabled: false })
+			.onConflictDoUpdate({
+				target: schema.systemSettings.id,
+				set: { isAccountsEnabled: false }
+			})
+
+		const { calls, emitToUser, io } = makeOrderedSpies()
+		await usersCurrentSetPassphrase.handler(
+			{ user: { id: user.id, isAdmin: true }, io },
+			{ passphrase: VALID_PASSPHRASE, enableAccounts: true } as any,
+			emitToUser
+		)
+
+		const settings = await testDb.query.systemSettings.findFirst({
+			where: eq(schema.systemSettings.id, 1)
+		})
+		expect(settings?.isAccountsEnabled).toBe(true)
+		expect(calls[0]).toBe("emit:users:current:setPassphrase")
+		expect(calls.at(-1)).toBe(`disconnect:user_${user.id}`)
+		expect(calls).toContain("emit:systemSettings:updateAccountsEnabled")
+	})
+
+	async function logbookRows() {
+		await new Promise((r) => setTimeout(r, 300))
+		return (await testDb.select().from(schema.adminLogbook)).filter(
+			(r) => r.event === "systemSettings:updateAccountsEnabled"
+		)
+	}
+
+	async function resetAccounts() {
+		await testDb.delete(schema.adminLogbook)
+		await testDb
+			.insert(schema.systemSettings)
+			.values({ id: 1, isAccountsEnabled: false })
+			.onConflictDoUpdate({
+				target: schema.systemSettings.id,
+				set: { isAccountsEnabled: false }
+			})
+	}
+
+	test("the one-press turn-on is recorded in the admin logbook, once", async () => {
+		const { usersCurrentSetPassphrase } = await import("./users")
+		const user = await makeUser("setpass-logbook-user")
+		await resetAccounts()
+		const { emitToUser, io } = makeOrderedSpies()
+		await usersCurrentSetPassphrase.handler(
+			{ user: { id: user.id, isAdmin: true }, io },
+			{ passphrase: VALID_PASSPHRASE, enableAccounts: true } as any,
+			emitToUser
+		)
+		expect(await logbookRows()).toHaveLength(1)
+	})
+
+	test("a direct emit of the event still logs exactly one row", async () => {
+		const { runHandler } = await import("./runHandler")
+		const { systemSettingsUpdateAccountsEnabled } = await import(
+			"./systemSettings"
+		)
+		const user = await makeUser("setpass-direct-user")
+		const passphrase = await import(
+			"$lib/server/providers/users/passphrase"
+		)
+		await passphrase.set({
+			userId: user.id.toString(),
+			passphrase: VALID_PASSPHRASE
+		})
+		await resetAccounts()
+		const { emitToUser, io } = makeOrderedSpies()
+		await runHandler(
+			{ user: { id: user.id, isAdmin: true }, io },
+			systemSettingsUpdateAccountsEnabled,
+			{ enabled: true },
+			emitToUser
+		)
+		expect(await logbookRows()).toHaveLength(1)
+	})
+
+	test("a non-admin's enableAccounts sets the passphrase and nothing else", async () => {
+		// Without the `isAdmin` guard in setPassphrase, runHandler would run the
+		// inner handler, which throws "Unauthorized" before any emit or write; the
+		// guard is pinned by the absence of the `:error` emit that unguarded
+		// dispatch would send through `io`.
+		const { usersCurrentSetPassphrase } = await import("./users")
+		const user = await makeUser("setpass-nonadmin-user")
+		await resetAccounts()
+		const { calls, emitToUser, io } = makeOrderedSpies()
+		const errors: string[] = []
+		const spyIo = {
+			to: (room: string) => ({
+				emit: (event: string) => errors.push(event),
+				disconnectSockets: () => io.to(room).disconnectSockets()
+			})
+		}
+		const res = await usersCurrentSetPassphrase.handler(
+			{ user: { id: user.id, isAdmin: false }, io: spyIo } as any,
+			{ passphrase: VALID_PASSPHRASE, enableAccounts: true } as any,
+			emitToUser
+		)
+		const settings = await testDb.query.systemSettings.findFirst({
+			where: eq(schema.systemSettings.id, 1)
+		})
+		expect(settings?.isAccountsEnabled).toBe(false)
+		expect(calls).not.toContain("emit:systemSettings:updateAccountsEnabled")
+		expect(errors).toEqual([])
+		expect(await logbookRows()).toHaveLength(0)
+		expect(res.success).toBe(true)
 	})
 })
 

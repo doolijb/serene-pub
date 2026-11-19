@@ -24,6 +24,8 @@ import { and, eq } from "drizzle-orm"
 import { sessionEvents, type Receipt } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
+import { receiptHaltFor } from "$lib/server/pipelines/runtime/haltExplanation"
+import type { ConnectionSubject } from "$lib/server/connections/visibility"
 
 /** How long a save may take before the person is told it did not land. Under the client's 10 s. */
 export const SAVE_TIMEOUT_MS = 8000
@@ -34,6 +36,9 @@ export const NOTHING_SAVES =
 
 /** The sentence when the save took too long. */
 export const SAVE_TOO_SLOW = "Saving your message took too long, so it was not sent. Your text was kept."
+
+/** The sentence for a save that stopped without saying why. */
+const UNSAVED_DEFAULT = "Your message could not be saved. Your text was kept."
 
 export interface OfferedMessage {
 	sessionId: number
@@ -46,6 +51,8 @@ export interface OfferedMessage {
 	trayItemIds: string[]
 	replyTo?: number | null
 	io?: SessionIo
+	/** Who is told why a save refused (`socket.user`): an administrator reads the reason itself. */
+	reader?: ConnectionSubject | null
 	/** Tests only: how long to wait for the save. */
 	timeoutMs?: number
 }
@@ -74,18 +81,22 @@ export async function messagesCreatedBy(db: Db, runId: string): Promise<number[]
 	return rows.map((r) => r.entityId)
 }
 
-/** Why a finished save did not save, as the sentence the person reads. */
-export function refusalOf(receipt: Receipt | undefined): string | null {
+/**
+ * Why a finished save did not save, as the sentence `reader` reads: a refusal
+ * marked for people as written, an administrator the reason, anyone else the
+ * save's plain sentence and the suggestion.
+ */
+export function refusalOf(
+	receipt: Receipt | undefined,
+	reader?: ConnectionSubject | null
+): string | null {
 	if (!receipt) return null
 	if (receipt.outcome === "ok") return null
-	const failed = receipt.nodes?.find((n) => n.result !== "ok" && n.reason)
-	const raw = receipt.haltReason ?? failed?.reason ?? ""
-	// A host refusal names the node it was raised at (`save: …`): the person
-	// reads the sentence, not the node key.
-	const sentence = raw.replace(/^[a-z][\w-]*: /i, "").trim()
 	if (receipt.outcome === "cancelled")
 		return "Your message was not saved — the save was stopped. Your text was kept."
-	return sentence || "Your message could not be saved. Your text was kept."
+	const failed = receipt.nodes?.find((n) => n.result !== "ok" && n.reason)
+	const raw = (receipt.haltReason ?? failed?.reason ?? "").trim()
+	return receiptHaltFor(reader, "save", receipt, raw || UNSAVED_DEFAULT)
 }
 
 /**
@@ -193,7 +204,7 @@ export async function offerMessage(db: Db, m: OfferedMessage): Promise<OfferOutc
 	const dispatched = settled.dispatched
 	if (!dispatched) return { refused: NOTHING_SAVES }
 	if (dispatched.refused) return { refused: `${dispatched.refused} Your text was kept.`, runId }
-	const refusal = refusalOf(dispatched.receipt)
+	const refusal = refusalOf(dispatched.receipt, m.reader)
 	const [messageId] = await messagesCreatedBy(db, dispatched.receipt?.runId ?? runId)
 	if (refusal && messageId === undefined) return { refused: refusal, runId }
 	return { accepted: true, runId, messageId: messageId ?? null }

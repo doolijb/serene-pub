@@ -161,14 +161,16 @@ describe("Edit Session — the read-only Lorebook line", () => {
 		expect(hasShare()).toBe(false)
 	})
 
-	test("a guest sees only the name", async () => {
+	test("a guest has no lorebook line: the form is the participants view only", async () => {
 		await openForm({ lorebookId: 12, userId: 2 })
-		expect(lineText()).toBe("Shared Atlas")
+		expect(line()).toBeNull()
+		expect(document.body.textContent).not.toContain("Shared Atlas")
+		expect(hasShare()).toBe(false)
 	})
 
-	test("a guest of an own-book session sees Session notes, and no Share", async () => {
+	test("a guest of an own-book session has no notes line and no Share", async () => {
 		await openForm({ lorebookId: null, userId: 2 })
-		expect(lineText()).toBe("Session notes")
+		expect(line()).toBeNull()
 		expect(hasShare()).toBe(false)
 	})
 

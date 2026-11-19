@@ -8,7 +8,7 @@ import { answerSummarize, type SummaryKind } from "./summarize"
 import { guardWidgetRequests } from "./askers"
 import type { WidgetRequestHandler } from "$lib/shared/widgets/context"
 
-function page(over: { opensScenes?: boolean; gap?: boolean } = {}) {
+function page(over: { opensScenes?: boolean; gap?: boolean; owner?: boolean; onNotes?: boolean } = {}) {
 	const did: Array<string> = []
 	let open = false
 	return {
@@ -24,12 +24,32 @@ function page(over: { opensScenes?: boolean; gap?: boolean } = {}) {
 			summarizeOpen: () => open,
 			startSelection: () => did.push("start selection"),
 			hasScene: (id: number) => id === 11,
-			processScene: (id: number) => did.push(`process ${id}`)
+			processScene: (id: number) => did.push(`process ${id}`),
+			isSessionOwner: () => over.owner ?? true,
+			onNotes: () => over.onNotes ?? true
 		}
 	}
 }
 
 describe("answerSummarize", () => {
+	test("a guest on the session's notes is refused before any selection", () => {
+		const { did, deps } = page({ owner: false })
+		expect(() => answerSummarize({ kind: "world", messageIds: [1] }, deps)).toThrow(
+			"the session's notes are the session owner's"
+		)
+		expect(() => answerSummarize({ kind: "world" }, deps)).toThrow("the session's notes are the session owner's")
+		expect(did).toEqual([])
+	})
+
+	test("a guest on an attached lorebook, and the owner on the notes, are not refused", () => {
+		const guest = page({ owner: false, onNotes: false })
+		answerSummarize({ kind: "world", messageIds: [1] }, guest.deps)
+		expect(guest.did).toEqual(["select 1", "open world"])
+		const owner = page({ owner: true, onNotes: true })
+		answerSummarize({ kind: "world", messageIds: [1] }, owner.deps)
+		expect(owner.did).toEqual(["select 1", "open world"])
+	})
+
 	test("selects the lines not yet in a scene and opens the modal; an unknown kind is world", () => {
 		const { did, deps } = page()
 		answerSummarize({ kind: "scene", messageIds: [1, 2, 3] }, deps)

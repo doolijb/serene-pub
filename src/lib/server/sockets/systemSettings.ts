@@ -11,6 +11,8 @@ import { refusable } from "./refusable"
 import { isLoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 import { emitToInterested } from "./utils/broadcastHelpers"
 import { socketWants } from "./interest"
+import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
+import { syncStepTimeLimitsNotice } from "$lib/server/notifications/stepTimeLimitsOff"
 
 /**
  * The whole system-settings view, as one function, so every cascade that
@@ -49,7 +51,10 @@ export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.G
 				charaVaultTokenIv: false,
 				charaVaultTokenAuthTag: false,
 				// Boot markers are the server's own bookkeeping (startup/bootMarkers.ts).
-				bootMarkers: false
+				bootMarkers: false,
+				// The hash of the operator's recovery key is a credential's fingerprint:
+				// only the boot pass reads it (startup/recovery.ts), never a client.
+				recoveryKeyHash: false
 			}
 		}),
 		db.query.ollamaSettings.findFirst({
@@ -101,12 +106,10 @@ export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.G
 		 * not a setting, it is a resolution.
 		 *
 		 * ⚠ For a host-backed connection this string is
-		 * `api::<baseUrl>::<model>`, so it names a base URL — and this
-		 * event has no role gate. That exposure is unchanged from the
-		 * column it replaces (which carried the same composite string
-		 * to everyone) and is carried forward deliberately rather than
-		 * widened: redacting it would blank the badge for every
-		 * non-admin on a shared instance.
+		 * `api::<baseUrl>::<model>`, so it names a base URL. This event has no
+		 * role gate; `CONNECTION_IDENTITY_KEYS` removes the field for every
+		 * recipient who is not an administrator, who read the mark from the
+		 * `embeddingState` on their message rows.
 		 */
 		activeEmbeddingModel:
 			(await resolveEmbeddingTarget(db))?.modelId ?? null,
@@ -257,6 +260,41 @@ export const systemSettingsUpdateContextDebuggingEnabled: Handler<
 		}
 	}
 }
+
+/**
+ * 🚧 **Turn off step time limits** (Admin › Diagnostics; owner 2026-11-15, lane dbg-1): off by default. While on,
+ * runs that start pass `stepTimeLimitsOff` to the executor, which applies no step limit and no ceiling; Stop still
+ * ends every run. Every admin's Diagnostics card and Turn line read it, so every interested socket hears the change;
+ * administrators get a standing notice and the Overview an item until it is switched off.
+ */
+export const systemSettingsUpdateStepTimeLimitsOff: Handler<
+	Sockets.SystemSettings.UpdateStepTimeLimitsOff.Params,
+	Sockets.SystemSettings.UpdateStepTimeLimitsOff.Response
+> = refusable(
+	"systemSettings:updateStepTimeLimitsOff",
+	async (socket, params, emitToUser) => {
+		if (!socket.user?.isAdmin)
+			throw new Error("Only an administrator can turn step time limits on or off.")
+		if (typeof params?.enabled !== "boolean") throw new Error("Say on or off.")
+		await db
+			.update(schema.systemSettings)
+			.set({ stepTimeLimitsOff: params.enabled })
+			.where(eq(schema.systemSettings.id, 1))
+		await syncStepTimeLimitsNotice(params.enabled)
+		markAdminOverviewStale()
+		const res: Sockets.SystemSettings.UpdateStepTimeLimitsOff.Response = {
+			success: true,
+			enabled: params.enabled
+		}
+		emitToUser("systemSettings:updateStepTimeLimitsOff", res)
+		const io = socket.io
+		const open = io?.sockets?.sockets
+		if (open && [...open.values()].some((s: any) => socketWants(s, "systemSettings:get")))
+			emitToInterested(io, "systemSettings:get", await buildSystemSettingsGet())
+		return res
+	},
+	"Step time limits could not be changed."
+)
 
 export const systemSettingsUpdateAccountsEnabled: Handler<
 	Sockets.SystemSettings.UpdateAccountsEnabled.Params,
@@ -638,6 +676,7 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateScriptsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateRoutineCaps, emitToUser)
 	register(socket, systemSettingsUpdateContextDebuggingEnabled, emitToUser)
+	register(socket, systemSettingsUpdateStepTimeLimitsOff, emitToUser)
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)
 	register(socket, systemSettingsUpdateDefaultLanguage, emitToUser)

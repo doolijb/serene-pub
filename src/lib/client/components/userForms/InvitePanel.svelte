@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import { realTime } from "$lib/client/utils/realTime.svelte"
 	/**
 	 * Creating and sharing invites (plan 27 §2–§3).
@@ -144,8 +145,12 @@
 
 	async function copyLink() {
 		if (!link) return
-		await navigator.clipboard.writeText(link)
-		notify.success({ title: "Invite link copied" })
+		if (await copyText(link))
+			notify.success({ title: "Invite link copied" })
+		else
+			notify.error({
+				title: "Could not reach the clipboard. Select the text and copy it."
+			})
 	}
 </script>
 

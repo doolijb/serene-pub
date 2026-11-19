@@ -180,14 +180,14 @@ Example dialogue:
 
 All of these may be empty, so wrap each in `{{#if …}}`. Use triple braces, `{{{…}}}`, for every one. A value written out by a variable layout prints the same in `{{characters}}` and `{{{characters}}}`, but other text in double braces is escaped (a quote becomes `&quot;`), so triple braces stay the habit.
 
-- **`currentDate`**: the date in the story (a date value, see [Dates in a layout](#dates-in-a-layout)), from the session's [story clock](./pipelines.md#the-story-clock) or its lorebook's present. Empty when the session reads no dated lorebook. The Default template places it last in the system block: the top of the prompt is the part a model's server can reuse from one turn to the next, and the date is the one value there that changes on its own.
+- **`currentDate`**: the date in the story (a date value, see [Dates in a layout](#dates-in-a-layout)), from the session's [story clock](./pipelines.md#the-story-clock) or its lorebook's present. Empty when the session reads no dated lorebook. With the lorebook's [timeline](./lorebook-time.md#a-lorebooks-timeline) off it is empty, and so are `storyCalendar` and every row's `date` and `dateDelta`, whatever clock or dated history the lorebook still stores. The Default template places it last in the system block: the top of the prompt is the part a model's server can reuse from one turn to the next, and the date is the one value there that changes on its own.
 - **`instructions`**: the step's prompt (see [Pipelines → Prompts](./pipelines.md#prompts)).
 - **`characters`**: a card for every seat in play, plus the speaker, trimmed by the session's **Character detail** setting where the genre has one (see [Character detail](./group-sessions.md#character-detail)). At **Name and description**, cards other than the speaker's leave out personality; at **Only whoever is speaking**, only the speaker's card is there.
 - **`personas`**: the cards of the people playing.
 - **`characterLore`**: the character lore chosen for this turn, as a list of entries, each with its title, the cast member it belongs to and its text. It holds only what the one speaking may know: their own private entries and those of characters a person plays. The narrator gets entries bound to nobody, or to cast members without a card. Character lore reaches the model **only because the template places `{{{characterLore}}}`**: nothing adds it to the cards, so a template that leaves it out sends no character lore at all.
 - **`scenario`**: the session's scenario.
-- **`worldLore`**: the world lore chosen for this turn, most relevant first.
-- **`history`** 🚧: a list of summaries of earlier parts of the story, newest first, each `{ date, dateDelta, content }`. Absent when there are none. With a story clock set, the date delta says how far each day is from the story's now. See [Dates in a layout](#dates-in-a-layout).
+- **`worldLore`**: the world lore chosen for this turn, most relevant first. On a cast member's own turn it leaves out the entries that member does not know, unless the step's **Only what the speaker knows** is off (see [What a character does not know](./pipelines.md#what-a-character-does-not-know)).
+- **`history`** 🚧: a list of summaries of earlier parts of the story, newest first, each `{ date, dateDelta, content }`, printed by the shipped layout as one JSON object per row. Absent when there are none, and when the lorebook's timeline is off. With a story clock set, the date delta says how far each day is from the story's now. See [Dates in a layout](#dates-in-a-layout).
 - **`earlierScenes`** 🚧: the summaries of this session's finished scenes whose lines are no longer in the prompt, oldest first, each `{ name, summary, date, dateDelta }`, under the heading _Earlier in the story:_. Empty until the conversation is long enough to be cut, and in a pipeline that doesn't read earlier scenes. See [Earlier in the story](#earlier-in-the-story).
 - **`storyCalendar`** 🚧: how the lorebook's calendar runs (months, weekdays, leap rule, eras). Absent for a free-form book. No shipped template places it; see [Dates in a layout](#dates-in-a-layout).
 - **`relationshipsPerspectives`** and **`relationshipsKnown`**: how the speaking character sees the others, and how they are seen in return (plus well-known figures marked **legendary**). Built fresh for whoever is speaking, whenever the speaker is bound in the session's lorebook (or, with none, its **Session notes**).
@@ -264,7 +264,7 @@ A layout the template names itself comes before all of these. If it names one th
 
 **Reading a shipped layout.** Each one is written one tag or one JSON key per line, indented the way the value nests. Two Handlebars rules keep that layout out of the prompt. A tag alone on its line (`{{#each …}}`, `{{/if}}`) leaves nothing behind, not even its line break. Where the prompt has no line breaks at all, such as the minified world lore and history, a `~` inside a tag swallows the whitespace beside it: `{{~#each x~}}` on both sides, `{{~else}}` before it. So a line that starts with `{{~` continues the one above, and the indentation is for you, not the model. A duplicate keeps the same shape, and the same rules apply to anything you write in it.
 
-**A layout is written for its variable's shape.** Each variable declares its shape (a list, an object, a date), and its layouts are written for that shape. 🚧 If a step hands down a value that doesn't fit (a flat string where the variable declares a list), the value is not written through the layout: it is written as it came, and the run's receipt names the variable and says why. Flattening a value in a step is strongly discouraged; a custom step that must do it should expect its variable's layouts to be bypassed.
+**A layout is written for its variable's shape.** Each variable declares its shape (a list, an object, a date), and its layouts are written for that shape. 🚧 If a step hands down a value that doesn't fit (a flat string where the variable declares a list), the value is not written through the layout: the variable prints its plain default instead (its heading and fence included), or nothing when the plain default cannot render that value either, and the run's receipt names the variable and says which. Flattening a value in a step is strongly discouraged; a custom step that must do it should expect its variable's layouts to be bypassed.
 
 #### Dates in a layout
 
@@ -274,7 +274,7 @@ Next to a date, a row may carry a **date delta**: the row's date minus the sessi
 
 Two helpers print them as plain text. Use the triple stash in Handlebars.
 
-- `formatDate` prints the calendar's spelling when the value carries names (`Moonday, 3 Thaw, Year 412 AR`, with a time as `, 22:30`), else `412-03-05`, `412-03`, or `Year 412` for a year alone (a time as ` 22:30`).
+- `formatDate` prints the calendar's spelling when the value carries names (`Moonday, 3 Thaw, Year 412 AR`, with a time as `, 22:30`), else `412-03-05`, `412-03`, or `Year 412` for a year alone (a time as ` 22:30`). A date the book's calendar cannot place (month 13 of twelve) prints as `Year 412, Mo. 13, Day 5` (a time as `, 22:30`), the same on every dated row and on the current date.
 - `formatDateDelta` prints the sign and the parts compactly: `-0y 2m 3d`, `+1y 0m 0d`, `0y 0m 0d`, `-0y 0m 2d 3h 15min`. Null parts are left out.
 
 Both print nothing for null or for a value that isn't a date. They are named apart from the fields because in Handlebars `{{date}}` inside a row would call a helper named `date`, and Liquid already has a `date` filter.
@@ -282,13 +282,13 @@ Both print nothing for null or for a value that isn't a date. They are named apa
 In Handlebars, inside `{{~#each history~}}`:
 
 ```
-"{{{formatDate date}}}{{#if dateDelta}} ({{{formatDateDelta dateDelta}}}){{/if}}":{{{jsonValue content indent=0}}}
+{"date":{{{jsonValue (formatDate date) indent=0}}}{{#if dateDelta}},"dateDelta":"{{{formatDateDelta dateDelta}}}"{{/if}},"content":{{{jsonValue content indent=0}}}}
 ```
 
 In Liquid, the same row:
 
 ```
-"{{ date | formatDate }}{% if dateDelta %} ({{ dateDelta | formatDateDelta }}){% endif %}":{{ content | jsonValue: indent: 0 }}
+{"date":{{ date | formatDate | jsonValue: indent: 0 }}{% if dateDelta %},"dateDelta":"{{ dateDelta | formatDateDelta }}"{% endif %},"content":{{ content | jsonValue: indent: 0 }}}
 ```
 
 **Where dates are.** Three variables carry them, and no other does:
@@ -297,9 +297,9 @@ In Liquid, the same row:
 - **`earlierScenes`** rows are `{ name, summary, date, dateDelta }`. A scene's date is the story clock when it opened (day and time), and none when it opened with no clock.
 - **`currentDate`** is the date value itself.
 
-**What the shipped layouts print.** History prints `"412-03-03 (-0y 0m 2d)"` with a clock set and `"412-03-03"` without one; in a book with a declared calendar the date is spelled through it, `"Moonday, 3 Thaw, Year 412 AR (-0y 0m 2d)"`, the same spelling as the current date. Earlier scenes add the delta when there is one (`"dateDelta":"-0y 0m 3d"`) and don't print the date, since an automatic scene name already carries it. Current date is unchanged. The added words are layout text and don't count against the history budget. The distance has nothing to do with an entry's **Decay**: it never reads the rate, and the rate never reaches the prompt.
+**What the shipped layouts print.** History prints a JSON list, newest first, one object per row: `{"date":"412-03-03","dateDelta":"-0y 0m 2d","content":"The wall fell."}`. The `dateDelta` is there only with a clock set, and two rows on one date are two objects. In a book with a declared calendar the date is spelled through it, `"date":"Moonday, 3 Thaw, Year 412 AR"`, the same spelling as the current date, and a name holding a quote or a backslash is escaped. Earlier scenes add the delta when there is one (`"dateDelta":"-0y 0m 3d"`) and don't print the date, since an automatic scene name already carries it. Current date is unchanged. The added words are layout text and don't count against the history budget. The distance has nothing to do with an entry's **Decay**: it never reads the rate, and the rate never reaches the prompt.
 
-**Telling the model how the calendar runs.** The `storyCalendar` variable (`core:var/story-calendar@1`) holds the lorebook's calendar: months with their lengths, weekdays, the leap rule and eras. The day's periods and seasons aren't included. It is absent for a free-form book. Its shipped layout, **Parts**, prints `Months: Thaw (30 days), …`, `Weekdays: …`, `Leap day: every 4 years, in month 2` and `Eras: BR, counting down; AR from year 1`. No shipped template prints it; add `{{{storyCalendar}}}` to a template to use it.
+**Telling the model how the calendar runs.** The `storyCalendar` variable (`core:var/story-calendar@1`) holds the lorebook's calendar: months with their lengths, weekdays, the leap rule and eras. The day's periods and seasons aren't included. It is absent for a free-form book. Its shipped layout, **Parts**, prints `Months: Thaw (30 days), …`, `Weekdays: …`, `Leap day: every 4 years, in month 2` (🚧 the real calendar's exceptions, every 100 and every 400 years, aren't printed yet) and `Eras: BR, counting down; AR from year 1`. No shipped template prints it; add `{{{storyCalendar}}}` to a template to use it.
 
 ### The postHistory object
 
@@ -308,8 +308,8 @@ The **post-history reminder** is a block of reminders placed near the end of the
 - **`targetIndex`**: which message the reminder goes before. Set by the prompt-building step's **Post-history depth**: **0**, the default, is the end — right after the newest message, just before the line the model continues; _N_ is _N_ messages earlier.
 - **`hasContent`**: true when there is something to remind and the trigger (below) allows it, so one check gates the whole block.
 - **`instructions`**: the prompt's **Post-history instructions**.
-- **`charInstructions`**: the speaking character's own **Post-History Instructions** (see [Characters](./characters.md)).
-- **`exampleDialogue`**: one of the speaking character's **Example Dialogues**, placed here rather than at the top because a model deep into a conversation benefits more from seeing them just before it writes. A character with several shows the same one on every turn of a session (each session and speaker gets its own pick), so the prompt does not change from turn to turn for no reason.
+- **`charInstructions`**: the speaking character's own **Post-history instructions** (see [Characters](./characters.md)).
+- **`exampleDialogue`**: one of the speaking character's **Example dialogues**, placed here rather than at the top because a model deep into a conversation benefits more from seeing them just before it writes. A character with several shows the same one on every turn of a session (each session and speaker gets its own pick), so the prompt does not change from turn to turn for no reason.
 
 **The trigger.** The step's **Post-history token trigger** holds the whole block back until the conversation is that long, since a reminder two messages after the instructions is noise. Reply pipelines ship with it at **3000** tokens, and so do the actions that write prose from the conversation (a side character's line, Story's **Look**, the Lair's **Trigger trap** and **Reveal**). **Narrate** and short structured calls (answering a form, Story's **Ask**, **Rest** and **Time passes**, the Lair's room drafting, the tool loop) use 0, so their reminder is always there: for them it carries the direction or the answer format, not a nudge back into character.
 
@@ -388,7 +388,7 @@ An entry's **Priority** (see [Lorebooks](./lorebooks.md)) adds a bonus. Entries 
 - The most recent messages are always included.
 - A **Pinned** entry is always included.
 - The relationship blocks and `postHistory` don't depend on what retrieval chose.
-- `{{{worldLore}}}` and `{{{characterLore}}}` are in order of relevance, not lorebook order, so the first entry can change from turn to turn. `{{{history}}}` is newest first, each headed by its date (`412-03-05`, `412-03`, or `Year 412`).
+- `{{{worldLore}}}` and `{{{characterLore}}}` are in order of relevance, not lorebook order, so the first entry can change from turn to turn. `{{{history}}}` is newest first, each row an object whose `date` is `412-03-05`, `412-03`, or `Year 412`. On a character's own turn a day it was in only some of the scenes of reads as the summaries of the scenes it was in, and a day it was in none of is left out (see [Only the scenes a character was in](./pipelines.md#only-the-scenes-a-character-was-in)).
 - When the model's context window is full, nothing more is added that turn. **Context Tokens** in the [sampling config](./connections.md#sampling-configs) sets the window.
 - When the conversation itself no longer fits, its oldest messages are left out: enough to free about a quarter of the budget at once, starting at a message kept for the next turns, so the start of the prompt stays the same until the conversation outgrows it again. The run inspector's **Prompt** tab says how many were left out.
 - How much of the conversation is read in the first place follows the context window too, not a count of messages: a reply reads about twice what the window could hold (up to 2,000 messages), so a long session never loses a message off its start on every turn just because it passed a fixed number. Steps that ask the model a question rather than continue the story (answering a form, Story's **Ask**, the Lair's room drafting) still read the newest **100**, set by the history read's **Limit** in [Admin › Pipelines](./pipelines.md).
@@ -397,11 +397,12 @@ An entry's **Priority** (see [Lorebooks](./lorebooks.md)) adds a bonus. Entries 
 
 🚧 When the oldest messages are left out, the summaries of the scenes they belonged to take their place, in the `{{{earlierScenes}}}` block (_Earlier in the story:_), which the Default template places after `{{{history}}}`.
 
-- **Which scenes.** Every finished scene on the main channel that has lost at least one of its lines from the prompt, has a saved summary (yours, or one **Summarize finished scenes** saved), and isn't compiled into a history entry yet. A scene that lost only its first lines is included too, so the model may read its last lines twice. A scene made by selecting messages counts from its first selected message. Oldest first, each with its name.
+- **Which scenes.** Every finished scene on the main channel that has lost at least one of its lines from the prompt, has a saved summary (yours, or one **Summarize finished scenes** saved), and isn't compiled into a history entry yet (with the timeline off, compiled ones count too). A scene that lost only its first lines is included too, so the model may read its last lines twice. A scene made by selecting messages counts from its first selected message. Oldest first, each with its name.
 - **Which summaries don't count.** One being written, one waiting for review, one that failed, one marked out of date, and one **Back** took back (it returns with **Forward**). The scenes around it still show.
-- **Its own share of the window.** The block may take **Share — earlier scenes** of the window (0.15 by default, on the **Earlier scenes** step). When the summaries don't fit, the oldest are left out first.
+- **Its own share of the window.** The block may take **Share — earlier scenes** of the window (0.15 by default, on the **Earlier scenes** step). When the summaries don't fit, the oldest are left out first. With no usable window size to measure against, the share can't be worked out and every scene that lost a line shows (up to the newest 200).
 - **Nothing else moves.** No message is left out because a summary exists. The cut that decides where the conversation starts counts the block, so the start of the prompt still stays the same from turn to turn.
-- **Once compiled**, a scene leaves this block and reaches the prompt as history does, when retrieval chooses its history entry.
+- **Once compiled**, a scene leaves this block and reaches the prompt as history does, when retrieval chooses its history entry. While the lorebook keeps no timeline there is no history in the prompt, so compiled scenes stay in this block, each with its own summary and no date (see [What you won't see](./lorebook-time.md#what-you-wont-see)).
+- **Whose scenes.** On a character's own turn, only the scenes whose cast lists that character; a turn that is no one character's shows them all (see [Only the scenes a character was in](./pipelines.md#only-the-scenes-a-character-was-in)).
 - **Who reads it.** Story's reply, **Narrate** and a side character's turn, and the Dungeon Crawler's Narrator. The Lair's turns don't (see [The Lair](./genre-lair.md)). In a pipeline that doesn't read earlier scenes the block is empty.
 - **Checking what happened.** The run inspector's **Prompt** tab names the scenes whose summaries were included and how many older ones were left out. To stop it, leave **Earlier in the story** out under [Prompt blocks](./pipelines.md#prompt-blocks).
 

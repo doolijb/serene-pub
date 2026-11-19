@@ -48,13 +48,16 @@
 	}>({ year: null, month: null, day: null, hour: null, minute: null })
 
 	function edit() {
-		const d = present?.date
+		// No present: where a new session on the book would start, date
+		// parts only; with neither, the inputs start empty (never Year 1).
+		const d = present?.date ?? openBookTime.start?.date
+		const timed = present?.date != null
 		draft = {
-			year: d?.year ?? 1,
+			year: d?.year ?? null,
 			month: d?.month ?? null,
 			day: d?.day ?? null,
-			hour: d?.hour ?? null,
-			minute: d?.minute ?? null
+			hour: timed ? (d?.hour ?? null) : null,
+			minute: timed ? (d?.minute ?? null) : null
 		}
 		editing = true
 	}

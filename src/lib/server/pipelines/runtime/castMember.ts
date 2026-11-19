@@ -251,12 +251,15 @@ export async function writeCastMember(
 		/** The turn's message; undefined when none. */
 		messageId?: number
 	}
-): Promise<{
-	id: number
-	castVersionId: number
-	castMemberId: number
-	coalesced: boolean
-}> {
+): Promise<
+	| {
+			id: number
+			castVersionId: number
+			castMemberId: number
+			coalesced: boolean
+	  }
+	| { written: false; castMemberId: number; notes: string[] }
+> {
 	const { sessionId } = input
 	const { loreWriteRefusal } = await import("$lib/server/messages/writes")
 	const noLore = await loreWriteRefusal(db, sessionId)
@@ -288,40 +291,55 @@ export async function writeCastMember(
 	)
 		refuse("A voice")
 
-	const { writeCastVersion } = await import("$lib/server/characters/versions")
+	const { writeCastVersion, CastMemberLockRefusal } = await import(
+		"$lib/server/characters/versions"
+	)
 	const { routineRunOf } = await import("$lib/server/pipelines/routines/runs")
 	const runId = input.runId != null ? String(input.runId) : null
-	const { version, coalesced } = await db.transaction(async (tx: Db) =>
-		writeCastVersion(tx, {
-			member: id,
-			changes: asked as Parameters<typeof writeCastVersion>[1]["changes"],
-			writtenBy:
-				input.runId != null
-					? `run:${input.runId}`
-					: `session:${sessionId}`,
-			redline: {
-				by: {
-					run: {
-						sessionId,
-						messageId: input.messageId ?? null,
-						runId,
-						shownAs: routineRunOf(runId)?.shownAs?.name?.trim() || null
-					}
+	let written: Awaited<ReturnType<typeof writeCastVersion>>
+	try {
+		written = await db.transaction(async (tx: Db) =>
+			writeCastVersion(tx, {
+				member: id,
+				changes: asked as Parameters<
+					typeof writeCastVersion
+				>[1]["changes"],
+				writtenBy:
+					input.runId != null
+						? `run:${input.runId}`
+						: `session:${sessionId}`,
+				redline: {
+					by: {
+						run: {
+							sessionId,
+							messageId: input.messageId ?? null,
+							runId,
+							shownAs:
+								routineRunOf(runId)?.shownAs?.name?.trim() ||
+								null
+						}
+					},
+					cause: "routine"
 				},
-				cause: "routine"
-			},
-			// A run names its OWN turn message: its later lines (a death's-door
-			// table row) must not seal it — the same rule clock moves and
-			// world-row state use (`ownAnchor`, state/write.ts `anchorFor`).
-			session: {
-				id: sessionId,
-				messageId: input.messageId,
-				...(input.runId != null && input.messageId != null
-					? { ownAnchor: true }
-					: {})
-			}
-		})
-	)
+				// A run names its OWN turn message: its later lines (a death's-door
+				// table row) must not seal it — the same rule clock moves and
+				// world-row state use (`ownAnchor`, state/write.ts `anchorFor`).
+				session: {
+					id: sessionId,
+					messageId: input.messageId,
+					...(input.runId != null && input.messageId != null
+						? { ownAnchor: true }
+						: {})
+				}
+			})
+		)
+	} catch (err) {
+		// A locked member is left as it is: a note, never a halt.
+		if (err instanceof CastMemberLockRefusal)
+			return { written: false, castMemberId: id, notes: [err.message] }
+		throw err
+	}
+	const { version, coalesced } = written
 	return {
 		id: version.id,
 		castVersionId: version.id,

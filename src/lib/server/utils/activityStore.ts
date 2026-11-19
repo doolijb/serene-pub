@@ -1,3 +1,4 @@
+import { ADMINISTRATOR_SUGGESTION } from "./administratorSuggestion"
 import { v4 as uuidv4 } from "uuid"
 import { messageWithoutQueryText, withoutQueryText } from "$lib/server/db/errors"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
@@ -17,7 +18,7 @@ import {
  * belongs to.
  */
 const OPAQUE_ACTIVITY_ERROR_MESSAGE =
-	"The service reported an error. An administrator can see the details."
+	`The service reported an error. ${ADMINISTRATOR_SUGGESTION}`
 
 /**
  * Split a caught failure into the part everyone may read and the part only an
@@ -181,8 +182,6 @@ export type SceneSummarizeActivity = {
 		name?: string
 		participantCharacters: number[]
 		mentionedCharacters: number[]
-		suggestedParticipantCharacters?: string[]
-		suggestedMentionedCharacters?: string[]
 		raw: string
 		/** 🚧 pr-6 (B §B-7): the messages the draft was written from (its save node's `sources`), for the Save/Apply that commits it. */
 		sourceIds?: number[]
@@ -287,7 +286,7 @@ export type SessionSummarizeActivity = {
 
 /**
  * A lorebook's entries being indexed for Search by meaning (playtest 2, §0-C):
- * the progress the composer's notice used to carry. Written only by
+ * the progress shown in Activity, not in the composer. Written only by
  * `embedding/indexingActivity.ts`; it ends by itself, so it has no result, no
  * error and no Stop. `userId` is the BOOK's owner, who (with administrators)
  * sees it.
@@ -385,7 +384,16 @@ class ActivityStore {
 
 	getFor(userId: number, isAdmin: boolean): Activity[] {
 		const all = [...this.activities.values()]
-		return isAdmin ? all : all.filter((a) => a.userId === userId)
+		if (!isAdmin) return all.filter((a) => a.userId === userId)
+		// An administrator sees that someone else's activity exists, never the
+		// draft text it waits on (owner ruling, 2026-11-16: in another person's
+		// session an administrator is a guest).
+		return all.map((a) => {
+			if (a.userId === userId || !("pendingResult" in a) || !a.pendingResult)
+				return a
+			const { pendingResult: _draft, ...rest } = a
+			return rest as Activity
+		})
 	}
 
 	getById(id: string): Activity | undefined {
@@ -627,7 +635,7 @@ class ActivityStore {
 			) {
 				continue
 			}
-			// Deliberately NOT startScene's abort-and-evict, for two different
+			// Not startScene's abort-and-evict, for two different
 			// reasons depending on state.
 			//
 			// running — a prior audit (see summarize.concurrentLock.int.test.ts)

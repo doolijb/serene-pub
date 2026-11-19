@@ -11,14 +11,14 @@
  *     of its session's turn-order strategy node (D8): `manual` →
  *     `core:task/turn-manual@1`, `userSplit` → `core:task/turn-user-split@1`;
  *     `ordered` and none are the spec's own round robin and write nothing;
- *   · a chat's own sampling config becomes its session's sampling pick: the
- *     session-scope pipeline panel row on the `sampling` slot of every step a
- *     pipeline runs on the Reply loadout that writes text, the config's live
- *     id read through the restore's id map;
+ *   · a chat's own sampling config becomes its session's sampling pick, the
+ *     config's live id read through the restore's id map: in the session's
+ *     registration values, on the `sampling` slot of each text-writing step
+ *     its pipelines run on the Reply loadout;
  *   · a chat that ignored retrieval (`metadata.ragIgnored`, which switched
- *     0.5.3's RAG off for that chat) gets search-by-meaning **off** as a session
- *     override on every pipeline that has the switch; the flag stays, since
- *     the session page's notice still reads it;
+ *     0.5.3's RAG off for that chat) gets search-by-meaning **off** in its
+ *     registration values, on every pipeline it runs that has the switch; the
+ *     flag stays, since the session page's notice still reads it;
  *   · a chat's own prompt config ("AI Override"), which 0.5.3 stored and never
  *     read, is said in a note — it is a configuration of its own already, and
  *     selecting it would change what that chat sends (owner ruling M5);
@@ -73,10 +73,12 @@ export async function finishAtticUpgrade(
 	const notes = new UpgradeNotes()
 	const rebinds = await rebindStrategies(db, notes)
 	await adoptStoryMinimalPreset(db)
+	// Before the two session values below: they write the same session
+	// registration rows, and the carry's inserts skip a row that exists.
+	await carryIntoRegistrations(db)
 	const sampling = await carryChatSampling(db, notes)
 	const searchOff = await switchOffIgnoredRetrieval(db, notes)
 	await noteChatPromptOverrides(db, notes)
-	await carryIntoRegistrations(db)
 	await assertWiring(db, notes)
 	const written = await writeUpgradeNotes(db, notes.list)
 	// The summary and the notification come last, so they count every note
@@ -218,10 +220,89 @@ async function rebindStrategies(db: Db, notes: UpgradeNotes): Promise<number> {
 }
 
 /**
- * A chat's sampling config, as its session's sampling pick: a session-scope
- * `pipeline_node_overrides` row on each text reply step's `sampling` slot
- * (`textSamplingSlots`), the one session layer the Pipelines card shows and
- * the run reads. A row already at that address stays.
+ * Leave this key alone? Yes when the run already reads a value of the
+ * session's own layer for `key` at this address (`sessionLayerAt`, the one
+ * "would the run use it" rule), or when writing `value` there would change
+ * another address of that layer (`addsOnlyAt`).
+ */
+async function sessionLayerHolds(
+	db: Db,
+	sessionId: number,
+	spec: { specId: number; slug: string },
+	key: string,
+	at: { nodeKey: string; slot: string; path: string },
+	value: unknown
+): Promise<boolean> {
+	const [{ referenceSlotsOf, sessionLayerAt, addsOnlyAt }, { declarationsAndVariableKeys }, { valuesWith }] =
+		await Promise.all([
+			import("$lib/server/pipelines/registrations/values"),
+			import("$lib/server/pipelines/config/panel/declarations"),
+			import("$lib/server/sessions/settingsForm")
+		])
+	const [{ activeVersionId }] = await db
+		.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, spec.specId))
+		.limit(1)
+	const { decls, variableKeys } = activeVersionId
+		? await declarationsAndVariableKeys(db, activeVersionId)
+		: { decls: [], variableKeys: [] }
+	const kinds = referenceSlotsOf(decls, variableKeys)
+	const { values, reading } = await sessionLayerAt(db, {
+		specId: spec.specId,
+		specSlug: spec.slug,
+		sessionId,
+		key,
+		decls,
+		kinds,
+		at
+	})
+	if (reading) return true
+	return !addsOnlyAt(values, valuesWith(values, at, value), decls, at, value)
+}
+
+/**
+ * Write `value` at an address of the session's registration values, on every
+ * key of the registrations in force that run the pipeline, wherever that key's
+ * own session layer holds nothing there. A pipeline the session does not run
+ * has no layer to hold it: nothing is written. `wrote`: a key took the value
+ * now; `held`: the session has a layer for it (the value is there).
+ */
+async function setSessionValue(
+	db: Db,
+	sessionId: number,
+	spec: { specId: number; slug: string },
+	at: { nodeKey: string; slot: string; path: string },
+	value: unknown
+): Promise<{ wrote: boolean; held: boolean }> {
+	const [{ sessionRegistrationKeys }, { patchSessionRow, valuesWith }] =
+		await Promise.all([
+			import("$lib/server/pipelines/registrations/values"),
+			import("$lib/server/sessions/settingsForm")
+		])
+	let wrote = false
+	const keys = await sessionRegistrationKeys(db, sessionId, spec.slug)
+	for (const key of keys) {
+		if (await sessionLayerHolds(db, sessionId, spec, key, at, value)) continue
+		await patchSessionRow(
+			db,
+			sessionId,
+			key,
+			(row) => ({ values: valuesWith(row.values, at, value) as never }),
+			"upgrade"
+		)
+		wrote = true
+	}
+	return { wrote, held: keys.length > 0 }
+}
+
+/**
+ * A chat's sampling config, as its session's sampling pick: the id at each
+ * text reply step's `sampling` address (`textSamplingSlots`) in the session's
+ * registration values — the one session layer the Pipelines card shows and the
+ * run reads, one write per key of the registrations that run that pipeline. A
+ * value already at that address stays; a pipeline the session does not run
+ * gets nothing.
  */
 async function carryChatSampling(
 	db: Db,
@@ -260,7 +341,7 @@ async function carryChatSampling(
 		const label = c.name ?? `chat ${c.id}`
 		const samplingId = moved.get(c.samplingConfigId!) ?? c.samplingConfigId!
 		const [session] = await db
-			.select({ id: schema.sessions.id, userId: schema.sessions.userId })
+			.select({ id: schema.sessions.id })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, c.id))
 			.limit(1)
@@ -273,22 +354,26 @@ async function carryChatSampling(
 			})
 			continue
 		}
-		for (const s of slots)
-			await db
-				.insert(schema.pipelineNodeOverrides)
-				.values({
-					specId: s.specId,
-					scopeKind: "session",
-					scopeId: session.id,
-					nodeKey: s.nodeKey,
-					slot: s.slot,
-					path: "",
-					value: samplingId,
-					updatedBy: session.userId,
-					updatedAt: new Date()
-				})
-				.onConflictDoNothing()
-		sessions++
+		let wrote = false
+		let held = false
+		for (const s of slots) {
+			const r = await setSessionValue(
+				db,
+				session.id,
+				s,
+				{ nodeKey: s.nodeKey, slot: s.slot, path: "" },
+				samplingId
+			)
+			wrote ||= r.wrote
+			held ||= r.held
+		}
+		if (wrote) sessions++
+		if (!held)
+			notes.add({
+				topic: "wiring",
+				objectLabel: label,
+				summary: `The chat "${label}" had its own sampling config in 0.5.3, and its session could not be given it; its replies use the default sampling until one is chosen in its Pipelines settings.`
+			})
 	}
 	return sessions
 }
@@ -303,7 +388,7 @@ async function carryChatSampling(
  */
 async function textSamplingSlots(
 	db: Db
-): Promise<Array<{ specId: number; nodeKey: string; slot: string }>> {
+): Promise<Array<{ specId: number; slug: string; nodeKey: string; slot: string }>> {
 	const [
 		{ declarations },
 		{ loadDocument },
@@ -320,7 +405,7 @@ async function textSamplingSlots(
 		import("@serene-pub/sdk")
 	])
 	const specs = await db.select().from(schema.pipelineSpecs)
-	const out: Array<{ specId: number; nodeKey: string; slot: string }> = []
+	const out: Array<{ specId: number; slug: string; nodeKey: string; slot: string }> = []
 	for (const spec of specs) {
 		if (spec.activeVersionId == null) continue
 		const steps = replyLoadoutSteps(await loadDocument(db, spec.activeVersionId))
@@ -337,7 +422,7 @@ async function textSamplingSlots(
 				connection?.requires?.find(isTransformId) ??
 				capabilityForSamplingShape(connection?.shape)
 			if (capability !== TEXT_CAPABILITY) continue
-			out.push({ specId: spec.id, nodeKey, slot: sampling.slot })
+			out.push({ specId: spec.id, slug: spec.slug, nodeKey, slot: sampling.slot })
 		}
 	}
 	return out
@@ -346,6 +431,12 @@ async function textSamplingSlots(
 /** The value of `searchByMeaning` that never searches. */
 export const SEARCH_BY_MEANING_OFF = "off"
 
+/**
+ * A chat that ignored retrieval: search-by-meaning **off** at each pipeline
+ * step's `params.searchByMeaning` in the session's registration values, on
+ * every key of the registrations that run that pipeline. A value already
+ * there stays; a pipeline the session does not run gets nothing.
+ */
 async function switchOffIgnoredRetrieval(
 	db: Db,
 	notes: UpgradeNotes
@@ -363,43 +454,43 @@ async function switchOffIgnoredRetrieval(
 
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
 	const specs = await db.select().from(schema.pipelineSpecs)
-	const switches: Array<{ specId: number; nodeKey: string; path: string }> = []
+	const switches: Array<{ specId: number; slug: string; nodeKey: string; path: string }> = []
 	for (const spec of specs) {
 		if (spec.activeVersionId == null) continue
 		for (const d of await declarations(db, spec.activeVersionId))
 			if (d.slot === "params" && d.path === "searchByMeaning")
-				switches.push({ specId: spec.id, nodeKey: d.nodeKey, path: d.path })
+				switches.push({ specId: spec.id, slug: spec.slug, nodeKey: d.nodeKey, path: d.path })
 	}
 
 	let sessions = 0
 	for (const c of chats) {
 		const [session] = await db
-			.select({ id: schema.sessions.id, userId: schema.sessions.userId })
+			.select({ id: schema.sessions.id })
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, c.id))
 			.limit(1)
 		if (!session) continue
-		for (const s of switches)
-			await db
-				.insert(schema.pipelineNodeOverrides)
-				.values({
-					specId: s.specId,
-					scopeKind: "session",
-					scopeId: session.id,
-					nodeKey: s.nodeKey,
-					slot: "params",
-					path: s.path,
-					value: SEARCH_BY_MEANING_OFF,
-					updatedBy: session.userId,
-					updatedAt: new Date()
-				})
-				.onConflictDoNothing()
-		sessions++
-		notes.add({
-			topic: "search-by-meaning",
-			objectLabel: c.name ?? `chat ${c.id}`,
-			summary: `The chat "${c.name ?? c.id}" ignored retrieval in 0.5.3, so its session has search by meaning switched off; turn it back on in the session's pipeline settings.`
-		})
+		let wrote = false
+		let held = false
+		for (const s of switches) {
+			const r = await setSessionValue(
+				db,
+				session.id,
+				s,
+				{ nodeKey: s.nodeKey, slot: "params", path: s.path },
+				SEARCH_BY_MEANING_OFF
+			)
+			wrote ||= r.wrote
+			held ||= r.held
+		}
+		if (wrote) sessions++
+		// Said only when the session runs a pipeline with the switch.
+		if (held)
+			notes.add({
+				topic: "search-by-meaning",
+				objectLabel: c.name ?? `chat ${c.id}`,
+				summary: `The chat "${c.name ?? c.id}" ignored retrieval in 0.5.3, so its session has search by meaning switched off; turn it back on in the session's pipeline settings.`
+			})
 	}
 	return sessions
 }

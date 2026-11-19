@@ -1,3 +1,4 @@
+import { ADMINISTRATOR_SUGGESTION } from "./administratorSuggestion"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -14,6 +15,11 @@ import {
 	ComposedError,
 	type ConnectionIdentity
 } from "$lib/server/connections/visibility"
+import {
+	plainReplyFailure,
+	plainReplySentence
+} from "$lib/server/pipelines/runtime/haltExplanation"
+import { peopleSentenceOf } from "$lib/server/pipelines/runtime/host.types"
 import type { StatusText } from "@serene-pub/sdk"
 import {
 	clearNotifications,
@@ -35,9 +41,8 @@ import {
  * is now wrong advice as well as a leak — a non-admin owner has no connection
  * settings to check.
  */
-const OPAQUE_GENERATION_ERROR_MESSAGE =
-	"Generation failed — the service reported an error. An administrator can " +
-	"see the details."
+const OPAQUE_GENERATION_SENTENCE = "Generation failed — the service reported an error."
+const OPAQUE_GENERATION_ERROR_MESSAGE = `${OPAQUE_GENERATION_SENTENCE} ${ADMINISTRATOR_SUGGESTION}`
 
 export function friendlyErrorFromUnknown(err: unknown): {
 	message: string
@@ -178,25 +183,59 @@ export async function persistGenerationErrorRow(
 	console.error("[generationStatus] generation failed:", err)
 
 	const composed = err instanceof ComposedError
+	// A composed sentence is the row's text only when its raise site marked it
+	// for people; every other composed sentence (dispatch, capability, loadout
+	// wording) names model plumbing, so the row says the plain sentence and the
+	// composed words ride in `connection.detail`, which only an administrator
+	// receives.
+	const people = composed ? peopleSentenceOf(err) : undefined
+	const forPeopleRow = people !== undefined
+	// A marked error whose words are not the sentence for people (its message is
+	// an administrator's detail) shows the sentence, and its words ride in the detail.
+	const sentenceIsMessage = composed && people === err.message
 	// `detail` is free text too, and an administrator reads it on the row: a
 	// failed query in it becomes the plain sentence like everywhere else.
 	const connection: ConnectionIdentity | undefined = composed
-		? err.connection && typeof err.connection.detail === "string"
-			? { ...err.connection, detail: withoutQueryText(err.connection.detail) }
-			: err.connection
+		? sentenceIsMessage
+			? err.connection && typeof err.connection.detail === "string"
+				? { ...err.connection, detail: withoutQueryText(err.connection.detail) }
+				: err.connection
+			: {
+					...err.connection,
+					detail: [err.message, err.connection?.detail]
+						.filter((t): t is string => typeof t === "string" && t !== "")
+						.map(withoutQueryText)
+						.join("\n")
+				}
 		: { detail: raw.message }
 
 	// The code goes with the message it was extracted from, and only when that
-	// message is ours. `friendlyErrorFromUnknown` reads any three-digit run as a
-	// status, so on `http://192.168.1.5:5001/…` it returns "192" — an octet of a
-	// private address, not an HTTP status, and no more shareable than the
-	// sentence it came out of. An administrator reads it inside `detail` below,
-	// where the whole service message is.
+	// message is ours and for people. `friendlyErrorFromUnknown` reads any
+	// three-digit run as a status, so on `http://192.168.1.5:5001/…` it returns
+	// "192" — an octet of a private address, not an HTTP status, and no more
+	// shareable than the sentence it came out of. An administrator reads it
+	// inside `detail` below, where the whole service message is.
 	const error = {
-		message: composed ? raw.message : OPAQUE_GENERATION_ERROR_MESSAGE,
-		...(composed && raw.code ? { code: raw.code } : {}),
+		message: forPeopleRow
+			? sentenceIsMessage
+				? raw.message
+				: people
+			: composed
+				? plainReplyFailure()
+				: OPAQUE_GENERATION_ERROR_MESSAGE,
+		...(sentenceIsMessage && raw.code ? { code: raw.code } : {}),
 		...(connection ? { connection } : {})
 	}
+	// The stored message is one text for every reader; a message that ends with
+	// the suggestion to ask an administrator also carries the sentence without
+	// it, which an administrator is shown instead (`withoutAdministratorSuggestion`).
+	const plainMessage =
+		error.message === plainReplyFailure()
+			? plainReplySentence()
+			: error.message === OPAQUE_GENERATION_ERROR_MESSAGE
+				? OPAQUE_GENERATION_SENTENCE
+				: undefined
+	const stored = plainMessage ? { ...error, plainMessage } : error
 
 	const [updated] = await updateLegacyWhere(
 		db,
@@ -211,7 +250,7 @@ export async function persistGenerationErrorRow(
 			isGenerating: false,
 			generationStatus: null,
 			queueItemId: null,
-			error
+			error: stored
 		}
 	)
 	// One payload for everybody now, where there used to be two. The difference
@@ -279,7 +318,8 @@ export async function persistGenerationErrorRow(
 			userId,
 			sessionId,
 			generatingMessageId,
-			error.message
+			error.message,
+			plainMessage
 		)
 }
 
@@ -305,7 +345,8 @@ async function raiseReplyFailed(
 	userId: number,
 	sessionId: number,
 	messageId: number,
-	message: string
+	message: string,
+	plainMessage?: string
 ): Promise<void> {
 	try {
 		const [session] = await db
@@ -313,7 +354,16 @@ async function raiseReplyFailed(
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
-		const text = message.trim()
+		// The notification is raised for the presser: an administrator is told the
+		// sentence without the suggestion to ask one.
+		const [presser] = plainMessage
+			? await db
+					.select({ isAdmin: schema.users.isAdmin })
+					.from(schema.users)
+					.where(eq(schema.users.id, userId))
+					.limit(1)
+			: []
+		const text = (presser?.isAdmin && plainMessage ? plainMessage : message).trim()
 		const errorText =
 			text.length > REPLY_FAILED_ERROR_MAX
 				? `${text.slice(0, REPLY_FAILED_ERROR_MAX - 1).trimEnd()}…`

@@ -67,7 +67,11 @@ describe("genre field defaults (B16x)", () => {
 			sanctumSteers: true,
 			askBeforeRolling: true,
 			autoRoll: false,
-			showDice: true
+			showDice: true,
+			speechReadAloud: "off",
+			speechNarratorVoice: "",
+			sessionLanguage: "",
+			ownerSheetLatitude: "all-any"
 		}
 		// The run's read (the inlet's `fields`) and the settings document agree.
 		expect(await genreFieldsFor(db, session.id)).toEqual(expected)
@@ -79,7 +83,11 @@ describe("genre field defaults (B16x)", () => {
 	it("an explicit value wins over the declared default", async () => {
 		const session = await lairSession({
 			tone: "grim",
-			showDice: false
+			showDice: false,
+			speechReadAloud: "off",
+			speechNarratorVoice: "",
+			sessionLanguage: "",
+			ownerSheetLatitude: "all-any"
 		})
 		expect(await genreFieldsFor(db, session.id)).toEqual({
 			tone: "grim",
@@ -88,7 +96,11 @@ describe("genre field defaults (B16x)", () => {
 			sanctumSteers: true,
 			askBeforeRolling: true,
 			autoRoll: false,
-			showDice: false
+			showDice: false,
+			speechReadAloud: "off",
+			speechNarratorVoice: "",
+			sessionLanguage: "",
+			ownerSheetLatitude: "all-any"
 		})
 	}, 60_000)
 
@@ -116,7 +128,11 @@ describe("genre field defaults (B16x)", () => {
 			sanctumSteers: true,
 			askBeforeRolling: true,
 			autoRoll: false,
-			showDice: true
+			showDice: true,
+			speechReadAloud: "off",
+			speechNarratorVoice: "",
+			sessionLanguage: "",
+			ownerSheetLatitude: "all-any"
 		}
 		expect(await genreFieldsFor(db, session.id)).toEqual(expected)
 		expect((await resolveSessionSettings(db, session.id))!.fields).toEqual(

@@ -148,6 +148,9 @@ describe("the strip's state off the session", () => {
 		const base = { offered: true, generating: false, listedReason: null, rewind }
 		expect(regeneratePress({ ...base, offered: false })).toBeNull()
 		expect(regeneratePress({ ...base, generating: true })).toEqual({ disabled: true, reason: REWIND_REFUSALS.busy })
+		const wait = "Wait for Rest to finish, or stop it first."
+		expect(regeneratePress({ ...base, waitFor: wait, listedReason: "from the list" })).toEqual({ disabled: true, reason: wait })
+		expect(regeneratePress({ ...base, generating: true, waitFor: wait })).toEqual({ disabled: true, reason: REWIND_REFUSALS.busy })
 		expect(regeneratePress({ ...base, listedReason: "from the list" })).toEqual({ disabled: true, reason: "from the list" })
 		expect(regeneratePress(base)).toEqual({ disabled: true, reason: "from the session" })
 		expect(regeneratePress({ ...base, rewind: null })).toEqual({ disabled: false })

@@ -23,6 +23,7 @@
 		pickRowMatches
 	} from "../sessionForms/CharacterPickRow.svelte"
 	import EmptyState from "../EmptyState.svelte"
+	import ListGroupLabel from "../panels/ListGroupLabel.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 
@@ -51,6 +52,9 @@
 		// can host a creator pass this; when absent, no create affordance is
 		// rendered.
 		onCreateNew?: () => void
+		/** Cards another person shared: listed below, one press each. */
+		sharedCards?: Row[]
+		onSelectShared?: (row: Row) => void
 	}
 
 	let {
@@ -62,7 +66,9 @@
 		title = "Select persona",
 		description,
 		returnFullPersona = false,
-		onCreateNew
+		onCreateNew,
+		sharedCards = [],
+		onSelectShared
 	}: Props = $props()
 
 	let characterList: PersonaRow[] = $state([])
@@ -102,6 +108,10 @@
 
 	/** Search matches only what a row shows (`pickRowMatches`). */
 	let filtered = $derived(available.filter((p) => pickRowMatches(p, search)))
+
+	let filteredShared = $derived(
+		sharedCards.filter((p) => pickRowMatches(p, search))
+	)
 
 	function close() {
 		if (onOpenChange) {
@@ -254,6 +264,29 @@
 							</button>
 						</div>
 					{/if}
+				{/if}
+				{#if filteredShared.length > 0}
+					<div class="flex min-h-0 flex-col overflow-y-auto pr-2">
+						<ListGroupLabel label="Shared with you" />
+						<p class="text-surface-600-400 px-3 pb-1 text-xs">
+							Picking one puts a copy in this session; the original
+							stays as it is.
+						</p>
+						<ul
+							class="flex flex-col gap-1"
+							aria-label="Shared characters"
+						>
+							{#each filteredShared as p (p.id)}
+								<li>
+									<CharacterPickRow
+										character={p}
+										kind="button"
+										onchange={() => onSelectShared?.(p)}
+									/>
+								</li>
+							{/each}
+						</ul>
+					</div>
 				{/if}
 			</Dialog.Content>
 		</Dialog.Positioner>

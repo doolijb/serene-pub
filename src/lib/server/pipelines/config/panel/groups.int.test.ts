@@ -32,6 +32,8 @@ let db: TestDb
 let userId: number
 let adminId: number
 let sessionId: number
+/** A session the non-admin owns: a non-admin reads prompts only there (D58, 2026-11-16). */
+let userSessionId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -52,6 +54,11 @@ beforeAll(async () => {
 		.values({ userId: adminId, isGroup: false })
 		.returning()
 	sessionId = session.id
+	const [owned] = await db
+		.insert(schema.sessions)
+		.values({ userId, isGroup: false })
+		.returning()
+	userSessionId = owned.id
 }, 60_000)
 
 const asAdmin = (slug: string, over: object = {}) =>
@@ -61,7 +68,11 @@ const asAdmin = (slug: string, over: object = {}) =>
 		...over
 	}) as Promise<NamespaceView>
 const asUser = (slug: string) =>
-	namespaceView(db, SECRET, slug, { userId, isAdmin: false }) as Promise<NamespaceView>
+	namespaceView(db, SECRET, slug, {
+		userId,
+		isAdmin: false,
+		sessionId: userSessionId
+	}) as Promise<NamespaceView>
 
 const id = (nodeKey: string, slot: string, path = "") =>
 	optionId(SECRET, nodeKey, slot, path)

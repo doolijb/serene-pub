@@ -43,6 +43,8 @@ export interface LiveSceneRow {
 	summaryStatus?: string | null
 	/** The summary text, when it has one (the divider says *out of date* of a stale one). */
 	summary?: string | null
+	/** Whether it has summary text; sent in place of the text to a non-owner. */
+	hasSummary?: boolean
 	/** 🚧 Its cast's participants, as `scenes:list` projects them (lane E): book members' ids. */
 	participantCharacters?: number[] | null
 	/** 🚧 ★S-4: why it began by itself; why its cast moves (server-derived, 2026-11-04). */
@@ -78,11 +80,13 @@ function clockAt(row: LiveSceneRow, which: "opened" | "closed"): StoryTime | nul
 /**
  * One scene row as the conversation reads it. 🚧 `castOf` names its cast
  * for the divider's faces (lane E); without it, or when it cannot, the
- * scene carries none.
+ * scene carries none. Story clocks at the boundaries only while the book keeps a timeline.
  */
 export function conversationSceneOf(
 	row: LiveSceneRow,
-	castOf?: SceneCastFaces
+	castOf?: SceneCastFaces,
+	/** `storyDates: false` (the book keeps no timeline): no story clock at the boundaries. */
+	opts: { storyDates?: boolean } = {}
 ): ConversationSceneV1 {
 	const live = typeof row.openedAtMessageId === "number"
 	const status = row.summaryStatus ?? undefined
@@ -96,25 +100,28 @@ export function conversationSceneOf(
 		lorebookId: row.lorebookId,
 		historyEntryId: row.historyEntryId ?? null,
 		selectedMessageIds: row.selectedMessageIds ?? [],
-		historyEntry: row.historyEntry
-			? {
-					id: row.historyEntry.id,
-					year: row.historyEntry.year,
-					month: row.historyEntry.month,
-					day: row.historyEntry.day,
-					isCompleted: row.historyEntry.isCompleted,
-					nextEntry: row.historyEntry.nextEntry ?? null
-				}
-			: null,
+		// A history entry is a dated stretch of the story: with no timeline the
+		// scene is handed none (its id stays), so no widget can draw its date.
+		historyEntry:
+			row.historyEntry && opts.storyDates !== false
+				? {
+						id: row.historyEntry.id,
+						year: row.historyEntry.year,
+						month: row.historyEntry.month,
+						day: row.historyEntry.day,
+						isCompleted: row.historyEntry.isCompleted,
+						nextEntry: row.historyEntry.nextEntry ?? null
+					}
+				: null,
 		channel: laneOfChannel(row.channel),
 		openedAtMessageId: live ? row.openedAtMessageId! : null,
 		closedAtMessageId: live ? (row.closedAtMessageId ?? null) : null,
-		openedAt: clockAt(row, "opened"),
-		closedAt: clockAt(row, "closed"),
+		openedAt: opts.storyDates === false ? null : clockAt(row, "opened"),
+		closedAt: opts.storyDates === false ? null : clockAt(row, "closed"),
 		...(status && SUMMARY_STATUSES.has(status)
 			? { summaryStatus: status as NonNullable<ConversationSceneV1["summaryStatus"]> }
 			: {}),
-		hasSummary: !!row.summary?.trim(),
+		hasSummary: row.hasSummary ?? !!row.summary?.trim(),
 		...(row.openedBecause ? { openedBecause: row.openedBecause } : {}),
 		...(row.castCause ? { castCause: row.castCause } : {}),
 		...(cast ? { cast } : {})

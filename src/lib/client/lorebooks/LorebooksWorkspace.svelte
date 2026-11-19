@@ -46,6 +46,7 @@
 	import BookReadBy from "./BookReadBy.svelte"
 	import BookSettings from "./BookSettings.svelte"
 	import {
+		isPrimerRow,
 		isProvidedBook,
 		isReadOnlyBook,
 		isStarterKit,
@@ -368,9 +369,9 @@
 			(book?.isSharedWithMe ? "shared" : "owner")
 	)
 	/** 🚧 (m2e-F-C) The server's primer-row mark (★M2e-D-4): read-only, clone only. */
-	let bookIsReadOnlyStarter = $derived(isReadOnlyBook(book))
+	let bookIsReadOnlyStarter = $derived(isPrimerRow(book))
 	/** Read-only mode: a shared book, or a primer row (the server's mark). */
-	let readOnly = $derived(bookAccess !== "owner" || bookIsReadOnlyStarter)
+	let readOnly = $derived(bookAccess !== "owner" || isReadOnlyBook(book))
 	/**
 	 * 🚧 The open book is a starter lorebook (PLAN-lorebook-kinds §B): edited in
 	 * place by the admin who made it, never read into a session, never
@@ -465,13 +466,18 @@
 	 * The conversation whose decisions these rows may carry a mark from.
 	 *
 	 * The panel's host is what knows it: a mark says what happened in the
-	 * session the reader has open, so a book nothing is reading gets no marks
+	 * session the reader has open (which reads this book, or whose own notes
+	 * it is), so a book nothing is reading gets no marks
 	 * rather than marks from somebody else's turn.
 	 */
 	let markedSessionId = $derived(
-		book && openSessionCtx.lorebookId === book.id
-			? openSessionCtx.sessionId
-			: null
+		!book
+			? null
+			: openSessionCtx.lorebookId === book.id ||
+				  (book.sessionId != null &&
+						book.sessionId === openSessionCtx.sessionId)
+				? openSessionCtx.sessionId
+				: (book.readBy?.[0]?.id ?? null)
 	)
 
 	/** What the newest run read in, by pool key. Null when nobody is reading. */
@@ -861,6 +867,12 @@
 		},
 		get timelineEnabled() {
 			return timelineOn
+		},
+		get sessionId() {
+			return book?.sessionId ?? null
+		},
+		get readBy() {
+			return book?.readBy ?? []
 		},
 		get bookName() {
 			return book?.name ?? null
@@ -1518,21 +1530,32 @@
 				}
 			]
 		const name = row.attached.name
+		// Share to ‹book› writes it: offered only for a book the list says is the viewer's own.
+		const attachedId = row.attached.id
+		const target = lorebookList.find((l) => l.id === attachedId)
+		const mayWriteAttached =
+			target != null &&
+			(target.bookAccess ?? (target.isSharedWithMe ? "shared" : "owner")) === "owner" &&
+			!isReadOnlyBook(target)
 		return [
-			{
-				label: SHARE_LABELS.toAttached(name),
-				icon: Icons.BookUp,
-				onSelect: () =>
-					ask(
-						SHARE_CONFIRMS.toAttached(name),
-						SHARE_LABELS.toAttached(name),
-						() =>
-							socket.emit("sessions:applyOverlay", {
-								sessionId,
-								entryIds: null
-							})
-					)
-			},
+			...(mayWriteAttached
+				? [
+						{
+							label: SHARE_LABELS.toAttached(name),
+							icon: Icons.BookUp,
+							onSelect: () =>
+								ask(
+									SHARE_CONFIRMS.toAttached(name),
+									SHARE_LABELS.toAttached(name),
+									() =>
+										socket.emit("sessions:applyOverlay", {
+											sessionId,
+											entryIds: null
+										})
+								)
+						}
+					]
+				: []),
 			{
 				label: FOLD_LABEL(name),
 				icon: Icons.Merge,
@@ -1661,10 +1684,17 @@
 	/** The reader's own books, then the ones shared with them. */
 	let shelf = $derived(splitSharedRows(filteredLorebooks))
 	/** 🚧 The asker's own starter lorebooks, in a group of their own. */
-	let ownBooks = $derived(shelf.own.filter((l) => !isStarterKit(l)))
+	let ownBooks = $derived(
+		shelf.own.filter((l) => !isStarterKit(l) && !isReadOnlyBook(l))
+	)
 	let ownKits = $derived(shelf.own.filter((l) => isStarterKit(l)))
 	/** 🚧 (m3b-F) Books that come with the pub or a plugin, apart from a person's shares. */
-	let readyMadeBooks = $derived(shelf.shared.filter((l) => isProvidedBook(l)))
+	let readyMadeBooks = $derived(
+		[
+			...shelf.shared.filter((l) => isProvidedBook(l)),
+			...shelf.own.filter((l) => !isStarterKit(l) && isReadOnlyBook(l))
+		].sort((a, b) => a.id - b.id)
+	)
 	let sharedBooks = $derived(shelf.shared.filter((l) => !isProvidedBook(l)))
 
 	/**
@@ -2005,8 +2035,8 @@
 		socket.emit("lorebooks:bindingList", {
 			lorebookId: id
 		} satisfies Sockets.Lorebooks.BindingList.Params)
-		// The cast's suggestions and possible duplicates are Loose ends rows.
-		socket.emit("bindingSuggestions:list", { lorebookId: id })
+		// The cast's suggestions are asked only for a book the reader may
+		// write (see the effect below); its possible duplicates are Loose ends rows.
 		socket.emit("narrativeGraph:duplicateCandidates", { lorebookId: id })
 		refreshCounts()
 	}
@@ -2570,6 +2600,14 @@
 		}
 	)
 
+	// Binding suggestions are for people who can edit the book: a reader of a
+	// shared book or a starter is never sent the request.
+	$effect(() => {
+		const id = openBookId
+		if (id === null || !book || book.id !== id || readOnly) return
+		untrack(() => socket.emit("bindingSuggestions:list", { lorebookId: id }))
+	})
+
 	/**
 	 * A change of the book's Rules (Book settings) changes its lists: asked
 	 * again, with the figures, when the stored rules move under an open book.
@@ -3029,7 +3067,9 @@
 		<!-- A shared book has no settings to change. -->
 		<EmptyState
 			icon={Icons.Lock}
-			message="This book is shared with you to read. Duplicate it to change its settings."
+			message={isProvidedBook(book)
+				? primerRowLine(book)
+				: "This book is shared with you to read. Duplicate it to change its settings."}
 		/>
 	{:else if route.settings}
 		{#key book.id}

@@ -27,6 +27,7 @@ import {
 	canReadCastMember
 } from "$lib/server/cast/memberAccess"
 import { CAST_MEMBER_NOT_FOUND } from "$lib/server/characters/cardFromMember"
+import { rowShownTo } from "$lib/server/messages/debugMeta"
 import { canViewCharacter } from "$lib/server/utils/sessionAccess"
 import {
 	addEmptySprites,
@@ -423,7 +424,7 @@ export const sessionMessagesSetSprite: Handler<
 				where: eq(schema.sessionMessages.id, message.id)
 			})
 			const res: Sockets.SessionMessages.SetSprite.Response = {
-				sessionMessage: (updated ?? undefined) as any
+				sessionMessage: (updated ? await rowShownTo(updated, userId, socket.user) : undefined) as any
 			}
 			emitToUser("sessionMessages:setSprite", res)
 			return res
@@ -686,6 +687,7 @@ export const charactersFillSprites: Handler<
 				setId: params.setId,
 				labels: params.labels,
 				userId,
+				reader: socket.user,
 				runId,
 				signal: handle.controller.signal,
 				cancelSignal: () => runRegistry.cancellation(handle),

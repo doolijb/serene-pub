@@ -33,9 +33,11 @@ import type { RunKind, StatusText } from "@serene-pub/sdk"
  *  · `maintenance` — nothing a person is watching from the composer; never
  *    stopped by a message's Stop. Reserved: nothing registers one yet.
  *  · 🚧 `routine` — a routine's run (PLAN-layering D7, R13; 2026-10-20):
- *    nobody pressed anything, so a message's Stop never reaches it and it
- *    never makes the session "generating" — a person's work goes ahead of
- *    it, never behind it.
+ *    nobody pressed anything. Swipe, regenerate, retake (*Regenerate the last
+ *    turn*), Back and delete wait for it (the held re-run actions,
+ *    `$lib/shared/sessions/runsInProgress`). It never makes the session
+ *    "generating" and never greys Send; sending a line, Continue, Edit and
+ *    Forward never wait for it, and a message's Stop never reaches it.
  */
 export type { RunKind } from "@serene-pub/sdk"
 
@@ -104,6 +106,21 @@ export interface RunHandle {
 	 * one, and only when the run died.
 	 */
 	status?: StatusText
+	/**
+	 * The name a person knows this run by — a routine's label, an action's
+	 * shown name — set by the starter when it knows one. Absent: the shown
+	 * name is read elsewhere (`runShownName`). Never a model, connection or
+	 * prompt name.
+	 */
+	name?: string
+	/** The line (message id) whose arrival caused this run — a routine woken by a reply's line. */
+	readsMessageId?: number
+	/**
+	 * Waiting at a review gate for a person to decide. A parked run holds
+	 * nothing: it does not block re-run and remove actions. Set and cleared
+	 * only by `setParked`.
+	 */
+	parked?: true
 	controller: AbortController
 	startedAt: number
 	/**
@@ -258,6 +275,10 @@ export function start(args: {
 	liveRow?: number
 	action?: string
 	lineBound?: true
+	/** The shown name, when the starter knows it (`RunHandle.name`). */
+	name?: string
+	/** The line that caused the run, when one did (`RunHandle.readsMessageId`). */
+	readsMessageId?: number
 }): RunHandle {
 	// A repeated id means a client re-sent; the older run is the stale one.
 	// Its own reason, not the user-cancel one: nobody pressed anything, and a
@@ -272,6 +293,7 @@ export function start(args: {
 			// below — see `RunStop.idReused`.
 			true
 		)
+	parkedGates.delete(args.runId)
 	const handle: RunHandle = {
 		...args,
 		controller: new AbortController(),
@@ -316,6 +338,38 @@ export function cancelAs(runId: string, by: string, reason: string): boolean {
 	if (!handle) return false
 	stop(handle, by, reason)
 	return true
+}
+
+/** How many review gates each run is parked at; an entry exists only while it is above zero. */
+const parkedGates = new Map<string, number>()
+
+/**
+ * A run parked at (`on`) or released from (`!on`) a review gate. A COUNT, not
+ * a boolean: a run that waits at two gates is parked until both are decided,
+ * so `parked` is set while any gate waits. A run id nothing matches is a
+ * no-op (a preview, a run that already finished).
+ */
+export function setParked(runId: string, on: boolean): void {
+	const handle = runs.get(runId)
+	if (!handle) return
+	const count = Math.max(0, (parkedGates.get(runId) ?? 0) + (on ? 1 : -1))
+	if (count > 0) {
+		parkedGates.set(runId, count)
+		handle.parked = true
+	} else {
+		parkedGates.delete(runId)
+		delete handle.parked
+	}
+}
+
+/**
+ * The registered run whose cancellation `signal` is — the review gate is
+ * handed only a signal. Undefined for a signal no registered run owns (a
+ * preview, a test, a run already finished).
+ */
+export function runOfSignal(signal: AbortSignal): RunHandle | undefined {
+	for (const handle of runs.values()) if (handle.controller.signal === signal) return handle
+	return undefined
 }
 
 /**
@@ -437,6 +491,7 @@ export function earmarkedBy(kind: EarmarkKind, key: number | string): EarmarkHol
 /** Always in a `finally` — a run left registered is a leak and a stale cancel target. */
 export function finish(runId: string): void {
 	runs.delete(runId)
+	parkedGates.delete(runId)
 	try {
 		observer?.finished(runId)
 	} catch (e) {
@@ -459,6 +514,7 @@ export function _reset(): void {
 	for (const handle of runs.values())
 		stop(handle, "system:reset", "the run registry was reset")
 	runs.clear()
+	parkedGates.clear()
 }
 
 /**

@@ -232,6 +232,18 @@ export function attentionFor(facts: OverviewFacts, now: number): AttentionItem[]
 		})
 	}
 
+	// 🚧 A diagnostic switch an admin left on (lane dbg-1): while it is, a stuck step waits for Stop in every session.
+	if (facts.pipelines.stepTimeLimitsOff) {
+		out.push({
+			id: "pipelines:stepTimeLimitsOff",
+			level: "attention",
+			title: "Step time limits are off",
+			detail: "A stuck step waits until someone stops it, in every session.",
+			section: "/admin/diagnostics",
+			action: { label: "Open Diagnostics", href: "/admin/diagnostics#step-time-limits" }
+		})
+	}
+
 	// Errors first, then the rest, each in the order found.
 	return [
 		...out.filter((a) => a.level === "error"),

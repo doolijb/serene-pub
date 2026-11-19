@@ -154,6 +154,17 @@ describe("New lorebook › Keep a timeline", () => {
 		expect(confirmed[0].timelineEnabled).toBe(true)
 	})
 
+	test("the turn-it-on-later sentence shows only while the switch is off", async () => {
+		await render(true)
+		const text = () => q("[data-new-lorebook-timeline]")?.textContent ?? ""
+		expect(text()).toContain("You can turn it on later")
+		expect(text()).toContain("story clock. You can turn it on later")
+		q('[data-field="new-lorebook-timeline"] input')!.click()
+		await settle()
+		expect(text()).not.toContain("You can turn it on later")
+		expect(text()).toContain("Dates, history and a story clock.")
+	})
+
 	test("the kit way draws no switch and sends none", async () => {
 		await render(true)
 		feed("starterKits:list", { kits: KITS })

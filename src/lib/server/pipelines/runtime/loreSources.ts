@@ -11,7 +11,7 @@ import { and, count, eq, gt, inArray } from "drizzle-orm"
 import { channelLoreRole } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { liveMessageWhere } from "$lib/server/messages/store"
-import { HostScopeError, type HostScope } from "$lib/server/pipelines/runtime/host"
+import { HostScopeError, type HostScope } from "$lib/server/pipelines/runtime/host.types"
 
 const isId = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v)
 

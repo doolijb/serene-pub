@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { notify } from "$lib/client/utils/notify"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -213,8 +214,7 @@
 	// Copy passphrase to clipboard
 	async function copyPassphrase() {
 		if (formPassphrase && isPassphraseValid) {
-			try {
-				await navigator.clipboard.writeText(formPassphrase)
+			if (await copyText(formPassphrase)) {
 				copiedPassphrase = true
 				setTimeout(() => {
 					copiedPassphrase = false
@@ -224,7 +224,7 @@
 					description:
 						"The passphrase has been copied to your clipboard"
 				})
-			} catch (error) {
+			} else {
 				notify.error({
 					title: "Copy failed",
 					description: "Failed to copy passphrase to clipboard"

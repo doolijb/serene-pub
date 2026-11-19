@@ -45,9 +45,9 @@ declare global {
 		}
 
 		/**
-		 * 🚧 One row of an **Edit history** (an entry's, a card version's or a
-		 * cast version's), worded for the asker (`entries:redlines`,
-		 * `characterVersions:redlines`). `who` names a session only to someone
+		 * 🚧 One row of an **Edit history** (an entry's, a card version's, a
+		 * cast version's or a scene's), worded for the asker (`entries:redlines`,
+		 * `characterVersions:redlines`, `scenes:redlines`). `who` names a session only to someone
 		 * who may open it; never a run id, model or connection.
 		 */
 		interface RedlineView {
@@ -56,7 +56,14 @@ declare global {
 			amendmentId: number | null
 			/** "the change from ‹date›" for a dated change; null for the entry. */
 			version: string | null
-			cause: "save" | "routine" | "apply" | "revert" | "take-back" | "restore"
+			cause:
+				| "save"
+				| "routine"
+				| "apply"
+				| "revert"
+				| "take-back"
+				| "restore"
+				| "scene-compiler"
 			who: string
 			/** The asker wrote it. */
 			mine: boolean
@@ -1634,6 +1641,8 @@ declare global {
 				}
 				interface Response {
 					plugins: PluginRow[]
+					/** 🚧 Names of provided lorebooks kept because a session plays on them (`providedBooks: 'delete'`). */
+					keptBooks: string[]
 				}
 			}
 			namespace Active {
@@ -3148,6 +3157,8 @@ declare global {
 						enabled: number
 						/** Non-preview runs started in the last 24 hours. */
 						runs24h: { ok: number; failed: number; total: number }
+						/** 🚧 The diagnostic switch *Turn off step time limits* is on (lane dbg-1). */
+						stepTimeLimitsOff: boolean
 					}
 					extensions: {
 						/** `SP_PLUGINS_ENABLED`. */
@@ -4173,6 +4184,8 @@ declare global {
 				genreId: string
 				/** 🚧 Whether a new session on this preset whose lorebook is its own notes starts them with a timeline, resolved on the server (`timelineDefaultFor`); carried by `sessionPresets:list` only. */
 				timelineDefault?: boolean
+				/** 🚧 Whether the preset's genre mandates a timeline for those notes (declares `timeline: 'required'`, or does not resolve), so the start form shows a sentence, not a switch; resolved on the server (`timelineRequiredFor`); carried by `sessionPresets:list` only. */
+				timelineRequired?: boolean
 				/**
 				 * The event bindings (24 §1): event → {spec, config?}. `config`
 				 * is a pipeline_configs id; absent = the spec's shipped default.
@@ -4986,6 +4999,32 @@ declare global {
 					 * (`routines/run.ts`), never on the status relay's frames.
 					 */
 					routine?: { name: string }
+					/**
+					 * 🚧 The run's shown name (`RunStatusFrame.name`): a
+					 * routine's label, an action's name, `the reply` — never a
+					 * model, connection or prompt name.
+					 */
+					name?: string
+					/**
+					 * 🚧 When the run started (ms since the epoch). Present
+					 * exactly on frames of a registered run: such a frame is a
+					 * run in progress.
+					 */
+					since?: number
+					/** 🚧 The line (message id) whose arrival caused the run. */
+					readsMessageId?: number
+					/**
+					 * 🚧 The run waits at a review gate for a person to
+					 * decide; it holds no re-run or remove action. Absent when
+					 * it does not.
+					 */
+					parked?: true
+					/**
+					 * 🚧 Whether the person who gets this frame may stop the
+					 * run (`pipelines:cancelRun`): on a pushed frame, what
+					 * every member may; on the first page's, for the asker.
+					 */
+					mayStop?: boolean
 				}
 			}
 			/**
@@ -4993,9 +5032,10 @@ declare global {
 			 * started (`sessions:fireAction`) has ended — whichever way: `ok`,
 			 * `halt`, `err` or `cancelled`. Broadcast to the session's users;
 			 * the session page hands it to its frames as the widget event
-			 * `run:ended` (`WidgetEvent`, SDK). `reason` is the sentence the
-			 * run's terminal frame showed (a halt's or an error's); absent on
-			 * `ok` and `cancelled`.
+			 * `run:ended` (`WidgetEvent`, SDK). `reason` is plain words, the
+			 * same for every member and guest (`haltExplanationFor`, surface
+			 * `action`), never the halt's own reason; absent on `ok` and
+			 * `cancelled`.
 			 */
 			namespace RunEnded {
 				interface Frame {
@@ -5223,11 +5263,11 @@ declare global {
 					/** 🚧 The genre's autoConvert moved this session's rules as it opened (🚧 M0 L4); on that one reply only. */
 					rulesetConverted?: { from: string; to: string }
 					/**
-					 * 🚧 The session's routine runs showing as running now
-					 * (`routineRunFramesOf`), each as its start frame; on the
-					 * first page only; absent when none.
+					 * 🚧 Every run in progress, from the run registry, each as
+					 * its current frame with `mayStop` for the asker; first
+					 * page only; absent when none.
 					 */
-					routineRuns?: Array<Sockets.Sessions.RunStatus.Response>
+					runsInProgress?: Array<Sockets.Sessions.RunStatus.Response>
 					/**
 					 * The requested session id — present on a not-found reply so
 					 * the interest scope can still be derived.
@@ -5306,6 +5346,17 @@ declare global {
 					 * `session.lorebookId`.
 					 */
 					starterKit?: StarterKits.Ref
+					/**
+					 * 🚧 Whether the session's own new notes keep a timeline: the
+					 * start form's **Keep a timeline** switch. Honoured only when
+					 * the session gets its own new notes (no `session.lorebookId`,
+					 * no `starterKit`); ignored otherwise. A genre that requires a
+					 * timeline (or does not resolve) wins over `false`, silently,
+					 * as a locked How strict does. Absent: `timelineDefaultFor`.
+					 * With the notes' timeline resolved off, a `storyClock*` in
+					 * `session` is ignored.
+					 */
+					notesTimeline?: boolean
 					/** 🚧 How it starts (F5); absent is 'new'. */
 					mode?: import("@serene-pub/sdk").SessionCreationMode
 					/** The session it follows or branches — required for 'next-chapter' and 'branch'. */
@@ -6064,7 +6115,7 @@ declare global {
 			 * cadence, mode, whether it is waiting or running, why it is
 			 * paused (a cron cap, R11; or, on the system clock, the app
 			 * restarted and nobody has played since, R21), what it needs
-			 * ("Needs a story clock"), and whether the viewer may Run it now.
+			 * (a model it lacks, R56), and whether the viewer may Run it now.
 			 * Anyone with access to the session reads it.
 			 */
 			namespace Routines {
@@ -7238,6 +7289,17 @@ declare global {
 					 */
 					sceneSettings?: import("@serene-pub/sdk").SceneSettingsDecl | null
 					/**
+					 * 🚧 The **guest seat switches** (owner rulings G3, G4,
+					 * 2026-11-16): *Guests can bring their own characters*
+					 * and *Guests can take cast members*. A boolean stores
+					 * it, absent leaves it alone. Owner only (a guest's
+					 * value is dropped, like every session field). Stored on
+					 * `metadata.guestsBringOwn` / `metadata.guestsTakeCast`
+					 * (`$lib/shared/sessions/guestSeats`); a missing key is on.
+					 */
+					guestsBringOwn?: boolean
+					guestsTakeCast?: boolean
+					/**
 					 * 🚧 A **seat name** (2026-10-14): a player's character
 					 * name in this session, on their `session_personas` row
 					 * — set without a card. A name stores it (trimmed), blank
@@ -7261,6 +7323,55 @@ declare global {
 						seatName?: string
 						remove?: boolean
 					}>
+					/**
+					 * 🚧 **Seat handovers** (owner rulings S1, S2, S4, 2026-11-17): give a saved
+					 * seat to another person of the session — a character seat's seater
+					 * (`seated_by_user_id`), a card-less player seat's player (`user_id`).
+					 * Each names exactly one of `characterId` (a character seat with that card),
+					 * `castMemberId` (a card-less character seat of that member) or
+					 * `playerSeatId` (a card-less player seat). All are checked before any
+					 * write and applied before the seat lists. The session's owner gives a
+					 * seat holding their own card or a card-less member to themselves or a
+					 * guest; a guest takes a card-less character seat the owner seated
+					 * (`toUserId` their own) or hands one they seated back (`toUserId` the
+					 * owner), while *Guests can take cast members* is on.
+					 */
+					seatHandovers?: Array<{
+						characterId?: number
+						castMemberId?: number
+						playerSeatId?: number
+						toUserId: number
+					}>
+					/**
+					 * 🚧 **Open a persona for someone** (owner rulings S1, PS1, 2026-11-17): the
+					 * session's owner seats a player seat for another person of the session
+					 * (`toUserId`, who plays). Each names exactly one of `characterId` (one of
+					 * the owner's own cards, seated linked, the person its player),
+					 * `castMemberId` (a cast member of the session's books: its linked card
+					 * is seated as `characterId` would be; a card-less member becomes a
+					 * card-less seat named as it is shown) or `seatName` (a new named
+					 * card-less seat). A card or member a live seat already holds is refused.
+					 * All are checked before any write and applied after the persona list.
+					 */
+					playerSeatsFor?: Array<{
+						toUserId: number
+						characterId?: number
+						castMemberId?: number
+						seatName?: string
+					}>
+					/** 🚧 Each moves a player seat to the AI-played group, or a character seat (`session_characters.id`) to `toUserId`'s Personas group (owner only; owner rulings S2, MV1, MV2, 2026-11-17). */
+					seatMoves?: Array<
+						{ playerSeatId: number } | { characterSeatId: number; toUserId: number }
+					>
+					/**
+					 * 🚧 **Seats from shared cards** (owner rulings Q3 2026-10-12, G3 2026-11-16, C1 2026-11-17):
+					 * each names a card someone shared with the caller and the seat kind it was picked for.
+					 * The server makes a new card-less cast member in the session's notes, a copy with no
+					 * link back to the card (`copySharedCard`), and seats the caller on it: a character
+					 * seat they seated, or a card-less player seat they play, named as the card. One-shot:
+					 * nothing is compared against the existing seats, so a later save never copies again.
+					 */
+					sharedCardSeats?: Array<{ characterId: number; kind: "character" | "player" }>
 					/**
 					 * 🚧 The person confirmed a story clock moved back past
 					 * this session's own dated writes (`StoryClock.ClockMoveBackNotice`).
@@ -7385,8 +7496,8 @@ declare global {
 			 * annex laid out against its owners' annex declarations — each
 			 * declared key's shape, audience (`see`), setters (`act`, null
 			 * is pipelines only) and stored value — then every stored key
-			 * no declaration covers, as legacy. The session's owner and
-			 * administrators only; anyone else gets
+			 * no declaration covers, as legacy. The session's owner only
+			 * (an administrator is a guest in another person's session, G6); anyone else gets
 			 * `sessions:annexInspect:error` with the refusal sentence. A
 			 * value whose shape holds a secret is never sent (`withheld`).
 			 * Request-only: refreshed on open and by the panel's button.
@@ -7429,6 +7540,33 @@ declare global {
 				interface Error {
 					sessionId: number
 					error: string
+				}
+			}
+			/**
+			 * 🚧 The session's **cast to take** (owner rulings G3, G4,
+			 * 2026-11-16): the members of the session's cast a guest may
+			 * take a seat for — card-less, and held by no seat of either
+			 * table (a benched seat still holds its member) — from the
+			 * session's own notes and the lorebook it reads, named as the
+			 * session reads them. Any member of the session may ask
+			 * (`checkSessionAccess`). Only what choosing needs: never sheet
+			 * text, never card fields. SCOPED by `sessionId`.
+			 */
+			namespace CastToTake {
+				interface Params {
+					sessionId: number
+				}
+				interface Member {
+					castMemberId: number
+					/** The member's shown name on the session's reading. */
+					name: string
+					faceMediaId: number | null
+				}
+				interface Response {
+					sessionId: number
+					members: Member[]
+					/** Set (with `members: []`) when the caller is not in the session. */
+					error?: string
 				}
 			}
 			/**
@@ -7530,6 +7668,8 @@ declare global {
 					messageIds?: number[]
 					/** How many turns are ahead now. */
 					ahead?: number
+					/** 🚧 One sentence per made lorebook Back left in place because a session plays on it (D50). */
+					stayed?: string[]
 					error?: string
 				}
 			}
@@ -7632,6 +7772,8 @@ declare global {
 					// promptTokenCountHandler returns just `{ error }` (no meta) on
 					// every early-exit path (access denied, session not found, no
 					// connection/sampling configured, etc.) and on exception.
+					// A viewer who is not an administrator in the session
+					// (`readsPrompt`) gets `{}`: no meta, no count.
 					error?: string
 					meta?: {
 						promptFormat: string
@@ -7820,29 +7962,35 @@ declare global {
 					sessionId: number
 				}
 				interface Item {
-					/** Absent reads as `entry`. */
-					kind?: "entry" | "entry-change" | "link"
+					/** Absent reads as `entry`. 🚧 `knowledge-tie`: a knowledge tie play wrote to the notes for a lorebook member and entry (kn-6). */
+					kind?: "entry" | "entry-change" | "link" | "knowledge-tie"
 					entryId: number
 					typeId: string
+					/** 🚧 On `knowledge-tie`, the sentence: *‹member› was told about ‹entry›* / *‹member› has been to ‹entry›*. */
 					title: string
 					sourceMessageId: number | null
 					/** `entry-change` only: the held change's id; absent on a held paragraph. */
 					amendmentId?: number
 					/** `link` only: the link's id (Apply names it through `linkIds`). */
 					linkId?: number
+					/** 🚧 `knowledge-tie` only: the tie's id (Apply names it through `tieIds`). */
+					tieId?: number
 					/** 🚧 `entry-change` only: the own-book day carrying a held paragraph (Apply names it through `entryIds`). */
 					notesEntryId?: number
 					/** `entry-change` only: each field it changes. */
 					changes?: { field: string; label: string; before: unknown; after: unknown }[]
 					/** `entry-change` only: why Apply would not take it now; null when clean. */
 					conflict?: string | null
+					/** 🚧 `entry` and `entry-change`: the entry is locked, so the held change waits for a person's Apply or Take back. */
+					entryLocked?: boolean
 				}
 				interface Response {
 					sessionId: number
 					items?: Item[]
 					/**
-					 * 🚧 The reader is the lorebook's owner: Apply and Take back are theirs. Every member of the
-					 * session reads the list; only this decides the buttons.
+					 * 🚧 The reader is the session's owner and may write its lorebook (`canWriteLorebook`): Apply
+					 * and Take back are theirs. Only the session's owner reads the list (anyone else gets the
+					 * empty shape); this decides the buttons.
 					 */
 					mayApply?: boolean
 					/**
@@ -7854,20 +8002,22 @@ declare global {
 				}
 			}
 			/**
-			 * 🚧 What was applied to the lorebook from this session: one row per Apply, newest first. Every
-			 * member of the session reads it; only the lorebook's owner takes one back (`mayApply`).
+			 * 🚧 What was applied to the lorebook from this session: one row per Apply, newest first. Only
+			 * the session's owner reads it; they take one back when they may write the lorebook (`mayApply`).
 			 */
 			namespace AppliedBatches {
 				interface Params {
 					sessionId: number
 				}
 				interface Item {
-					/** `entry`: a new entry moved into the lorebook (its links with it); `entry-change`: a held change folded in. */
-					kind: "entry" | "entry-change" | "link"
+					/** `entry`: a new entry moved into the lorebook (its links with it); `entry-change`: a held change folded in; 🚧 `knowledge-tie`: a knowledge tie moved in on its own. */
+					kind: "entry" | "entry-change" | "link" | "knowledge-tie"
 					entryId: number
 					title: string
 					/** `link` only: the applied link's id. */
 					linkId?: number
+					/** 🚧 `knowledge-tie` only: the applied tie's id. */
+					tieId?: number
 					/** `entry-change` only: each field it changed. */
 					changes?: { field: string; label: string; before: unknown; after: unknown }[]
 				}
@@ -7889,7 +8039,7 @@ declare global {
 				interface Response {
 					sessionId: number
 					batches?: Batch[]
-					/** As on `OverlayItems.Response`: the reader is the lorebook's owner. */
+					/** As on `OverlayItems.Response`: the reader is the session's owner and may write its lorebook. */
 					mayApply?: boolean
 					error?: string
 				}
@@ -7923,6 +8073,8 @@ declare global {
 					amendmentIds?: number[] | null
 					/** Links to apply (`Item.linkId`). All lists absent applies everything. */
 					linkIds?: number[] | null
+					/** 🚧 Knowledge ties to apply (`Item.tieId`). All lists absent applies everything. */
+					tieIds?: number[] | null
 				}
 				interface Response {
 					sessionId: number
@@ -7938,6 +8090,12 @@ declare global {
 					droppedLinks?: number[]
 					/** Held paragraphs not merged, with the reason. */
 					heldDays?: { notesEntryId: number; reason: string }[]
+					/** 🚧 Knowledge ties that moved into the lorebook. */
+					appliedTies?: number[]
+					/** 🚧 Knowledge ties dropped because the lorebook already holds a live one of the same kind for the pair. */
+					droppedTies?: number[]
+					/** 🚧 Knowledge ties dropped because the lorebook's owner set *Knows* or *Kept from* for the pair by hand. */
+					supersededTies?: number[]
 					batch?: string | null
 					error?: string
 				}
@@ -8436,6 +8594,17 @@ declare global {
 					main: StoryClock | null
 					branches: { branchId: number; present: StoryClock | null }[]
 				}
+				/**
+				 * 🚧 Where a NEW session on this book would start: the line it
+				 * follows by default (`branchId`, null = main), the date it begins
+				 * on (`date`, null for `undated` and `asks`) and why (`cause`, as
+				 * `storyStartOf`). `today` is today in the asking user's time zone.
+				 */
+				start: {
+					branchId: number | null
+					date: StoryClock | null
+					cause: "undated" | "present" | "latest" | "today" | "asks"
+				}
 			}
 			namespace StoryTime {
 				interface Params {
@@ -8530,7 +8699,7 @@ declare global {
 						}
 						/** 🚧 (s22-V, ★§22-3) How each enabled genre rates the book's own rules (`rulesetFitReader`, the Rulesets view's same words). Absent for a book on Freeform (it brings no rules: the session chooses), for unregistered rules, and when no genre speaks. */
 						rulesetFitByGenre?: import("$lib/server/rulesets/genreFit").RulesetGenreFit[]
-						/** 🚧 (m2e-F-D) Present exactly when this is a primer row (a `starter_kit` with its own provided mark, owner present): every edit is refused; clone it. Same meaning as a shipped prompt's `readOnly`. `pluginName` names who it comes with — `null` for core ("the pub"); `primerRowEditRefusal` (`$lib/shared/lorebooks/primerRow`) words it. */
+						/** 🚧 Present exactly when this is a live provided lorebook (its own provided mark, owner present; any kind, a primer row included): every edit is refused, the enabling administrator's too; make your own copy. Same meaning as a shipped prompt's `readOnly`. `pluginName` names who it comes with — `null` for core ("the pub"); `primerRowEditRefusal` (`$lib/shared/lorebooks/primerRow`) words it. */
 						readOnly?: { pluginName: string | null }
 						/** The cover image's address; null when the book has none. */
 						coverMedia?: AvatarMedia | null
@@ -8606,7 +8775,7 @@ declare global {
 								ownerName?: string | null
 								/** 🚧 (M2e) Present exactly when this is a provided book whose owner is present; `disabled` is true for a book a session still reads. */
 								provided?: { disabled: boolean }
-								/** 🚧 (m2e-F-D) Present exactly when this is a primer row (a `starter_kit` with its own provided mark, owner present): every edit is refused; clone it. Same meaning as a shipped prompt's `readOnly`. `pluginName` names who it comes with — `null` for core ("the pub"); `primerRowEditRefusal` (`$lib/shared/lorebooks/primerRow`) words it. */
+								/** 🚧 Present exactly when this is a live provided lorebook (its own provided mark, owner present; any kind, a primer row included): every edit is refused, the enabling administrator's too; make your own copy. Same meaning as a shipped prompt's `readOnly`. `pluginName` names who it comes with — `null` for core ("the pub"); `primerRowEditRefusal` (`$lib/shared/lorebooks/primerRow`) words it. */
 								readOnly?: { pluginName: string | null }
 								/** The cover image's address; null when it has none. */
 								coverMedia?: AvatarMedia | null
@@ -9858,6 +10027,8 @@ declare global {
 					entryId: number
 					off?: boolean
 					pinned?: boolean
+					/** The entry lock: written to the stored row at once, never dated. */
+					locked?: boolean
 					/**
 					 * The session asking (plan A14): the reply's marks and
 					 * `heldBy` are as that session reads the entry — its line,
@@ -9885,6 +10056,8 @@ declare global {
 					 */
 					off?: boolean
 					pinned?: boolean
+					/** The entry lock as stored: it is never dated, so no amendment reads over it. */
+					locked?: boolean
 					/**
 					 * The dated amendment that decides a mark the write asked
 					 * for, where it does not read as asked (A14): the base row
@@ -12091,16 +12264,19 @@ declare global {
 			/**
 			 * 🚧 The wording of one prompt a prompts-ref offers, for reading
 			 * before (or after) choosing it — the session settings' prompt
-			 * dialog. Open to anyone who may see that option: the server
-			 * rebuilds the same view `pipelines:get` answers for this viewer
-			 * and refuses a prompt the option does not offer, so a member reads
-			 * exactly the prompts they may pick and no other. Answers only the
-			 * fields the step declares. Not a **preview** (that is a dry run).
+			 * dialog. Read by the session's owner, or an administrator; a guest
+			 * and a member outside a session are refused (D58, 2026-11-16). The
+			 * server refuses a prompt the address does not offer, so an owner
+			 * reads exactly the prompts they may pick and no other. Answers only
+			 * the fields the step declares. Not a **preview** (that is a dry run).
 			 */
 			namespace PromptWording {
 				interface Params {
 					slug: string
-					optionId: string
+					/** A panel option's id. Exactly one of `optionId` and `fieldId`. */
+					optionId?: string
+					/** The session settings form's field id for a prompt row (owner only). Exactly one of `optionId` and `fieldId`. */
+					fieldId?: string
 					promptId: number
 					sessionId?: number
 				}
@@ -12108,6 +12284,7 @@ declare global {
 					/** Echoed, so a reader with two dialogs open matches the answer. */
 					slug?: string
 					optionId?: string
+					fieldId?: string
 					promptId?: number
 					name?: string
 					/** Declared field name → text. */
@@ -13441,6 +13618,8 @@ declare global {
 			namespace SetPassphrase {
 				interface Params {
 					passphrase: string
+					/** Administrator only: turn user accounts on once the passphrase is set (setting it ends this socket, so the client cannot ask afterwards). */
+					enableAccounts?: boolean
 				}
 				interface Response {
 					success: boolean
@@ -14947,8 +15126,12 @@ declare global {
 					 * star rather than read from a column: it replaces
 					 * `system_settings.embedding_model_name`, which four
 					 * handlers had to keep in step with two other columns.
+					 *
+					 * ⚠ Absent for a reader who is not an administrator
+					 * (`CONNECTION_IDENTITY_KEYS`): they read the mark from the
+					 * `embeddingState` on their message rows.
 					 */
-					activeEmbeddingModel: string | null
+					activeEmbeddingModel?: string | null
 					/**
 					 * The instance default connection and sampling config, per
 					 * capability (0175). Keyed by `CapabilityId`. The ONLY place a
@@ -15066,6 +15249,16 @@ declare global {
 				}
 			}
 			namespace UpdateContextDebuggingEnabled {
+				interface Params {
+					enabled: boolean
+				}
+				interface Response {
+					success: boolean
+					enabled: boolean
+				}
+			}
+			/** 🚧 Admin › Diagnostics › *Turn off step time limits* (lane dbg-1). */
+			namespace UpdateStepTimeLimitsOff {
 				interface Params {
 					enabled: boolean
 				}
@@ -15401,6 +15594,48 @@ declare global {
 		// Scenes namespace
 		namespace Scenes {
 			/**
+			 * 🚧 `scenes:redlines`: one scene's Edit history (who changed its
+			 * cast, and from what), newest first. Whoever may edit the scene's
+			 * lorebook may read it. `before` / `after` of a row are lists of
+			 * member names, never ids. `canRestore` is false while the lorebook
+			 * is a provided book's. Scoped on `lorebookId`.
+			 */
+			namespace Redlines {
+				interface Params {
+					sceneId: number
+				}
+				interface Response {
+					sceneId: number
+					lorebookId: number
+					canRestore: boolean
+					redlines: RedlineView[]
+				}
+				interface ErrorResponse {
+					sceneId?: number
+					error: string
+				}
+			}
+			/**
+			 * 🚧 `scenes:restoreRedline`: put one row's earlier cast back,
+			 * through the scene's own save (recorded, cause `restore`); a role
+			 * the row does not hold keeps its current list. The saved scene is
+			 * sent as `scenes:update` and the list again as `scenes:redlines`.
+			 */
+			namespace RestoreRedline {
+				interface Params {
+					redlineId: number
+				}
+				interface Response {
+					redlineId: number
+					sceneId: number
+					lorebookId: number
+				}
+				interface ErrorResponse {
+					redlineId?: number
+					error: string
+				}
+			}
+			/**
 			 * Scene cast, as every socket payload and the client still speak
 			 * it. Storage moved to the `scene_characters` join table, but the
 			 * wire shape deliberately did not — server-side
@@ -15421,8 +15656,17 @@ declare global {
 			 */
 			type SceneListRow = Omit<
 				SelectScene,
-				"embedding" | "embeddingModel"
+				"embedding" | "embeddingModel" | "summary" | "notes"
 			> & {
+				/**
+				 * The notes' text: sent to the session's owner only. A guest
+				 * (an administrator in another person's session included) is
+				 * sent `hasSummary` instead (`sceneListShape.ts`).
+				 */
+				summary?: SelectScene["summary"]
+				notes?: SelectScene["notes"]
+				/** Whether the scene has summary text; sent in place of it to a non-owner. */
+				hasSummary?: boolean
 				/**
 				 * 🚧 ★S-4 (owner, 2026-11-04): why the scene opened, in the
 				 * scene cue's words (`SCENE_CUE_REASONS`, a genre's declared
@@ -15717,10 +15961,10 @@ declare global {
 				 */
 				closedScene?: SceneListRow & SceneCast
 				/**
-				 * The cast `sceneCastProposal` proposed (no model), with its
-				 * evidence for the review. Members that resolve to a card
-				 * were written to the scene's cast (`bindingId`); open-tier
-				 * names (`bindingId: null`) were not — a person accepts them.
+				 * The cast core's compiler listed (no model): whoever sent a
+				 * line, minus those their place rules out (`sceneCastSpeakers`),
+				 * with its evidence. Members that resolve were written to the
+				 * scene's cast (`bindingId`); `bindingId: null` was not.
 				 */
 				castProposal?: Array<{
 					key: string
@@ -15931,10 +16175,6 @@ declare global {
 					name?: string
 					participantCharacters: number[]
 					mentionedCharacters: number[]
-					/** Extracted names not yet backed by a binding — suggested, physically present */
-					suggestedParticipantCharacters?: string[]
-					/** Extracted names not yet backed by a binding — suggested, referenced but absent */
-					suggestedMentionedCharacters?: string[]
 					raw: string
 					/** 🚧 The summarize-scene spec that ran (session → genre → `summarize.scene`). */
 					specId?: string
@@ -18866,6 +19106,129 @@ declare global {
 				/** The place's stats after the write, read as `get` reads them. */
 				type Response = Get.Response
 				type ErrorResponse = Get.ErrorResponse
+			}
+		}
+
+		/**
+		 * 🚧 `entryKnowledge:*` — who knows which entry of a lorebook: the
+		 * **not common knowledge** mark and the hand **knowledge ties**, read
+		 * as `lorebooks/entryKnowledge.ts` judges them and written through its
+		 * writers. The lorebook row's owner only (`book.userId`): a session
+		 * member, a share recipient and an administrator read nothing. Every
+		 * reply and refusal carries `lorebookId`; scoped by it.
+		 */
+		namespace EntryKnowledge {
+			/** A story date the workspace reads at; null is now. */
+			type Moment = LorebookState.Moment
+
+			/** The hand switch: a hand tie's kind, or none. */
+			type Hand = "knows" | "kept_from"
+
+			/** The tie that wins for one member and one entry, as the judgement picks it. */
+			interface Winner {
+				tieId: number
+				/** Null: an ordinary relationship, which counts as knowing. */
+				kind: "was_told" | "knows" | "has_been_there" | "kept_from" | null
+				/** The relationship's own word (`relationship_type`); a knowledge tie repeats its kind. */
+				relationshipType: string
+				/** Written by hand: a `knows` or `kept_from` tie, undated and on every line. */
+				hand: boolean
+				/** Its history entry's date; null is undated. */
+				date: Moment | null
+			}
+
+			/** One member and one entry, judged at the reading. */
+			interface Row {
+				castMemberId: number
+				/** The member's shown name. */
+				name: string
+				entryId: number
+				/** What `judgeEntryKnowledge` decides at the reading (a place's standing exception aside). */
+				known: boolean
+				/** The winning tie; null when no tie reads (common knowledge, or not known when marked). */
+				winner: Winner | null
+				/** What the hand switch shows: the kind of the member's hand tie that wins for the entry (the nearer, then the newest id); null with none. */
+				hand: Hand | null
+				/** The tie that would win if no hand tie stood; present only when a hand tie wins and another tie reads for the pair, else null. */
+				overruled: Winner | null
+				/** The entry is a place: the place a member stands in counts as known, even against *kept from*. */
+				placeEntry: boolean
+			}
+
+			namespace List {
+				interface Params {
+					lorebookId: number
+					/** Rows for every cast member of the book, for this entry. */
+					entryId?: number
+					/** Rows for this member: every marked entry, and every entry it has a tie to. With `entryId`, the one pair. */
+					castMemberId?: number
+					/** The line being read; null is main. */
+					branchId: number | null
+					/** The moment being read; null is now. */
+					moment: Moment | null
+					requestId?: string
+				}
+				interface Response {
+					lorebookId: number
+					entryId?: number
+					castMemberId?: number
+					branchId: number | null
+					moment: Moment | null
+					/** Every entry of the book marked not common knowledge. */
+					markedEntryIds: number[]
+					/** Empty when neither `entryId` nor `castMemberId` was asked. */
+					rows: Row[]
+					requestId?: string
+				}
+				interface ErrorResponse {
+					error: string
+					lorebookId?: number
+					requestId?: string
+				}
+			}
+
+			namespace SetCommonKnowledge {
+				interface Params {
+					lorebookId: number
+					/** One entry or many: one transaction, one reply. */
+					entryIds: number[]
+					notCommonKnowledge: boolean
+					requestId?: string
+				}
+				interface Response {
+					lorebookId: number
+					entryIds: number[]
+					notCommonKnowledge: boolean
+					/** Every entry of the book marked not common knowledge, after the write. */
+					markedEntryIds: number[]
+					requestId?: string
+				}
+				type ErrorResponse = List.ErrorResponse
+			}
+
+			namespace SetTie {
+				interface Params {
+					lorebookId: number
+					castMemberId: number
+					entryId: number
+					/** The new hand tie; null ends the member's hand ties for the entry. */
+					hand: Hand | null
+					/** The reading the reply's row is judged at. */
+					branchId: number | null
+					moment: Moment | null
+					requestId?: string
+				}
+				interface Response {
+					lorebookId: number
+					castMemberId: number
+					entryId: number
+					branchId: number | null
+					moment: Moment | null
+					/** The pair after the write, judged at the reading. */
+					row: Row
+					requestId?: string
+				}
+				type ErrorResponse = List.ErrorResponse
 			}
 		}
 

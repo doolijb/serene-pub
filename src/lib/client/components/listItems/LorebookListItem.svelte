@@ -3,6 +3,7 @@
 	import RulesFitLine from "$lib/client/lorebooks/RulesFitLine.svelte"
 	import { isFreeformBook } from "$lib/client/lorebooks/rulesFitWords"
 	import {
+		isPrimerRow,
 		isProvidedBook,
 		isReadOnlyBook,
 		isStarterKit,
@@ -70,7 +71,9 @@
 	let isKit = $derived(isStarterKit(lorebook))
 	/** 🚧 (M2e) A provided book is disabled by an admin, never deleted: no Delete. */
 	/** 🚧 (m2e-F-C) The server's primer-row mark: read-only, clone only. */
-	let readOnlyRow = $derived(isReadOnlyBook(lorebook))
+	let readOnlyRow = $derived(isPrimerRow(lorebook))
+	/** A read-only provided lorebook of another kind: read and Duplicate, like a share. */
+	let readerRow = $derived(isReadOnlyBook(lorebook) && !isKit)
 	let canDelete = $derived(!!onDelete && !isProvidedBook(lorebook))
 
 	let counts = $derived<Record<string, number>>(
@@ -105,6 +108,7 @@
 
 <SidebarListItem
 	itemType="Lorebook"
+	itemName={lorebook.name}
 	id={lorebook.id}
 	onclick={handleClick}
 	{contentTitle}
@@ -142,7 +146,7 @@
 							</span>
 						{/if}
 					</div>
-					{#if lorebook.isSharedWithMe}
+					{#if lorebook.isSharedWithMe || readerRow}
 						<!-- Shared with the reader (PLAN-private-messages §6.7):
 						     whose it is, in place of the owner's blurb. -->
 						<div
@@ -206,7 +210,8 @@
 					},
 					...(shareItems ?? []),
 					onOpenSettings &&
-						!readOnlyRow && {
+						!readOnlyRow &&
+						!readerRow && {
 							label: "Book settings",
 							icon: Icons.SlidersHorizontal,
 							title: "Name, cover, rules, calendar and clock",

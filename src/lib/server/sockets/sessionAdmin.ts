@@ -10,7 +10,7 @@
  */
 import { hostStateFor } from "@serene-pub/sdk"
 import { getGenre, sessionEvents, type SettingsSchema } from "@serene-pub/sdk"
-import { timelineDefaultFor } from "$lib/server/lorebooks/timeline"
+import { timelineDefaultFor, timelineRequiredFor } from "$lib/server/lorebooks/timeline"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { answersEvent, isDefaultSave } from "$lib/server/pipelines/entities/presetBindings"
@@ -751,6 +751,7 @@ async function buildSessionPresets(
 				changesByPreset.get(r.id) as Sockets.SessionAdmin.PresetRegistrations | undefined
 			),
 			timelineDefault: timelineDefaultFor(getGenre(r.genreId), r),
+			timelineRequired: timelineRequiredFor(getGenre(r.genreId)),
 			...(asks?.length ? { asks } : {}),
 			...(derived ? { derived } : {}),
 			...(recommendations ? { recommendations } : {}),

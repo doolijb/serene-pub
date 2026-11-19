@@ -563,21 +563,24 @@
 
 {#snippet statisticsContent()}
 	<div class="mb-[0.5em] flex flex-wrap items-center gap-3">
-		<button
-			class="btn btn-sm preset-tonal-primary"
-			title="View full prompt details"
-			onclick={() => {
-				// The draft is the subject again; a message report left
-				// standing here would put a finished reply behind a button
-				// labelled with the draft's own numbers.
-				composer.messageReport = undefined
-				composer.showDraftCompiledPromptModal = true
-			}}
-			disabled={!draftCompiledPrompt?.meta}
-		>
-			<Icons.Info size={14} />
-			Details
-		</button>
+		<!-- Prompt details are the session's owner's: a guest's count is the totals alone. -->
+		{#if !data.isGuest}
+			<button
+				class="btn btn-sm preset-tonal-primary"
+				title="View full prompt details"
+				onclick={() => {
+					// The draft is the subject again; a message report left
+					// standing here would put a finished reply behind a button
+					// labelled with the draft's own numbers.
+					composer.messageReport = undefined
+					composer.showDraftCompiledPromptModal = true
+				}}
+				disabled={!draftCompiledPrompt?.meta}
+			>
+				<Icons.Info size={14} />
+				Details
+			</button>
+		{/if}
 		{#if draftCompiledPrompt?.meta}
 			<div class="flex gap-4 text-xs">
 				<div class="flex flex-col gap-0.5">
@@ -590,15 +593,17 @@
 							.meta.tokenCounts.limit}
 					</span>
 				</div>
-				<div class="flex flex-col gap-0.5">
-					<span class="text-surface-700-300 text-meta">
-						Messages
-					</span>
-					<span class="font-medium tabular-nums">
-						{draftCompiledPrompt.meta.sessionMessages.included} /
-						{draftCompiledPrompt.meta.sessionMessages.total}
-					</span>
-				</div>
+				{#if draftCompiledPrompt.meta.sessionMessages}
+					<div class="flex flex-col gap-0.5">
+						<span class="text-surface-700-300 text-meta">
+							Messages
+						</span>
+						<span class="font-medium tabular-nums">
+							{draftCompiledPrompt.meta.sessionMessages.included} /
+							{draftCompiledPrompt.meta.sessionMessages.total}
+						</span>
+					</div>
+				{/if}
 			</div>
 		{:else if draftCompiledPrompt?.error}
 			<span class="text-error-600-400 text-xs">

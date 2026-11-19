@@ -459,13 +459,17 @@ export function contextTemplateScope(): TemplateScope {
 function lintSource(
 	source: string,
 	scope: TemplateScope,
-	untyped?: readonly string[]
+	untyped?: readonly string[],
+	variableLayout = false
 ): TemplateLintIssue[] | null {
 	const report = checkTemplateSourceReport(
 		CORE_TEMPLATE_ENGINE,
 		source,
 		scope,
-		templateCheckWith(untyped)
+		{
+			...templateCheckWith(untyped),
+			...(variableLayout ? { variableLayout: true } : {})
+		}
 	)
 	if (report.findings.some((f) => f.kind === "syntax")) return null
 	const { cards } = parseContextTemplate(source)
@@ -539,7 +543,7 @@ export function lintVariableTemplate(
 	source: string,
 	scope: TemplateScope
 ): TemplateLintIssue[] {
-	const issues = lintSource(source, scope)
+	const issues = lintSource(source, scope, undefined, true)
 	if (issues) return issues
 	return [
 		{

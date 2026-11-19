@@ -38,6 +38,7 @@ import type { CoreQueryCtx, NodeInput } from "./bindingTypes"
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
 import type { ClockChange, StateChange } from "$lib/server/state/write"
 import { memberFormOn } from "$lib/server/state/memberForm"
+import { castWrite } from "./sessionCastWrites"
 
 /**
  * A change the node was handed, sanity-checked before anything is written.
@@ -1065,16 +1066,17 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 						 */
 						if (typeof raw.skipped === "string" && raw.skipped) {
 							const { recordClockMove } = await import("$lib/server/state/clockMoves")
-							skipped.push(await recordClockMove(db, {
+							const why = raw.skipped
+							skipped.push(await castWrite(() => recordClockMove(db, {
 								sessionId,
 								by: raw.by,
 								unit: raw.unit,
 								cause: "keeper",
 								updatedBy: ctxWrite.updatedBy,
-								skipped: raw.skipped,
+								skipped: why,
 								once: true,
 								...(worldRow !== undefined ? { messageId: worldRow } : {})
-							}))
+							})))
 							continue
 						}
 						if (mode === "apply") continue
@@ -1083,13 +1085,13 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 								"$lib/server/state/clockProposal"
 							)
 							proposed.push(
-								await proposeClockChange(
+								await castWrite(() => proposeClockChange(
 									db,
 									worldRow !== undefined
 										? { ...ctxWrite, messageId: worldRow, ownAnchor: true }
 										: ctxWrite,
 									raw
-								)
+								))
 							)
 						} catch (e) {
 							if (e instanceof StateRefusal) refused.push(e.message)
@@ -1103,12 +1105,12 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 							: raw
 					try {
 						if (mode === "apply") {
-							const done = await applyAutomatic(db, ctxFor(change), change, undefined, modeOf)
+							const done = await castWrite(() => applyAutomatic(db, ctxFor(change), change, undefined, modeOf))
 							if ("applied" in done) applied.push(done.applied)
 							else proposed.push(done.proposed)
 						} else
 							proposed.push(
-								await proposeChange(db, ctxFor(change), change)
+								await castWrite(() => proposeChange(db, ctxFor(change), change))
 							)
 					} catch (e) {
 						// A change the declaration refuses is a *result*: the other

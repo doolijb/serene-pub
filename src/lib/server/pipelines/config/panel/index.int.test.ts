@@ -203,7 +203,7 @@ describe("the option payload", () => {
 					)
 				}
 		}
-		walk(await view(), "view", false)
+		walk(await view({ sessionId }), "view", false)
 		expect(offences).toEqual([])
 	})
 
@@ -292,6 +292,8 @@ describe("the option payload", () => {
 			.values({
 				nodeDefinitionId: decl.nodeDefinitionId!,
 				slot: decl.slot,
+				// Made for this pipeline: a prompt that records none is offered to administrators only.
+				createdForSpecId: spec.id,
 				name: "Rides along",
 				fields: Object.fromEntries(
 					(decl.promptFields ?? []).map((f: string) => [
@@ -339,12 +341,13 @@ describe("the option payload", () => {
 		// how the application works; wording is the one thing that is theirs.
 		// A row is shown to a role that can normally edit it (owner ruling
 		// 2026-09-30), and a non-admin never edits a connection anywhere.
-		for (const over of [{}, { sessionId }]) {
-			const asUser = await view(over)
-			expect(allOptions(asUser).length).toBeGreaterThan(0)
-			for (const o of allOptions(asUser))
-				expect(o.control, JSON.stringify(over)).toBe("prompts-ref")
-		}
+		// …and only in a session they own (D58, 2026-11-16): outside one a
+		// non-admin is sent no row at all.
+		const asUser = await view({ sessionId })
+		expect(allOptions(asUser).length).toBeGreaterThan(0)
+		for (const o of allOptions(asUser))
+			expect(o.control).toBe("prompts-ref")
+		expect(allOptions(await view({}))).toEqual([])
 	})
 
 	it("draws a non-admin no group, on any pipeline, that holds only an administrator's rows", async () => {
@@ -481,18 +484,21 @@ describe("resolution and provenance", () => {
 		expect(now.source).toBe("config")
 		expect(now.overriddenHere).toBe(true)
 
-		// Opened from inside the session, the same edit lands at session scope and wins.
+		// Opened from inside the session, an edit lands at session scope and wins.
+		// A prompt the pool offers: a session value the run would not use (text
+		// at a prompt slot) is not shown as the session's (`readStoredValue`).
+		const pick = target.choices!.find((c) => !c.disabled)!.id
 		await writeOption(
 			db,
 			SECRET,
 			STORY_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id,
-			"only in this session"
+			pick
 		)
 		let v = await view({ sessionId })
 		now = allOptions(v).find((o) => o.id === target.id)!
-		expect(now.value).toBe("only in this session")
+		expect(now.value).toBe(pick)
 		expect(now.source).toBe("session")
 
 		// …and the configuration's value is untouched outside it.
@@ -562,13 +568,15 @@ describe("resolution and provenance", () => {
 		const target = allOptions(inSession).find(
 			(o) => o.writable && o.source !== "session"
 		)!
+		// A prompt the pool offers, other than the one in force (the run skips text here).
+		const pick = target.choices!.find((c) => !c.disabled && c.id !== target.value)!.id
 		await writeOption(
 			db,
 			SECRET,
 			STORY_RESPOND_SPEC_ID,
 			viewer({ sessionId }),
 			target.id,
-			"only here"
+			pick
 		)
 
 		const [other] = await db
@@ -579,7 +587,7 @@ describe("resolution and provenance", () => {
 			(o) => o.id === target.id
 		)!
 		expect(theirs.source).not.toBe("session")
-		expect(theirs.value).not.toBe("only here")
+		expect(theirs.value).not.toBe(pick)
 	})
 
 	it("resets by deleting, so a later config change still reaches the session", async () => {
@@ -636,9 +644,11 @@ describe("what a write refuses", () => {
 	})
 
 	it("refuses a global edit to a non-admin — their levers are the session's", async () => {
-		const target = allOptions(await view()).find(
-			(o) => o.control === "prompts-ref"
-		)!
+		// The id comes from the administrator's view: a non-admin outside a
+		// session is sent no row (D58, 2026-11-16) — the write still refuses.
+		const target = allOptions(
+			await view({ userId: adminId, isAdmin: true })
+		).find((o) => o.control === "prompts-ref")!
 		await expect(
 			writeOption(
 				db,
@@ -1035,8 +1045,13 @@ describe("a shared slot renders once, on its owner", () => {
 		"titleWeight",
 		"trigramFolding"
 	]
-	/** Each lane's own (R-7 P5): unmarked on the declaration, rendered per lane. */
-	const LANE_OWN = ["maxEntries", "priority", "share"]
+	/**
+	 * Each lane's own (R-7 P5): unmarked on the declaration, rendered per lane.
+	 * `knownToSpeaker` is per read, so each lane declares its own storage
+	 * address; the panel shows ONE ganged switch for them (D36,
+	 * `config/panel/ganged.ts`), not one per lane.
+	 */
+	const LANE_OWN = ["knownToSpeaker", "maxEntries", "priority", "share", "speakerInCast"]
 	const LANES = [
 		"gather.worldLore.read",
 		"gather.characterLore.read",
@@ -1050,11 +1065,14 @@ describe("a shared slot renders once, on its owner", () => {
 		// The losers read the owner's slot through `ofNode` for the SHARED
 		// fields: none of the seven scan knobs renders there. Their own three
 		// do — see the next case.
-		for (const loser of ["gather.characterLore.read", "gather.historyEntries.read"])
+		for (const [loser, own] of [
+			["gather.characterLore.read", LANE_OWN],
+			["gather.historyEntries.read", LANE_OWN]
+		] as const)
 			expect(
 				paramsOn(loser).map((d) => d.path).sort(),
 				`${loser} offers a shared knob`
-			).toEqual(LANE_OWN)
+			).toEqual(own)
 		// `enabled` is the embed pair's one field and it is shared, so the
 		// loser embed node renders nothing at all.
 		expect(paramsOn("names.arm.embed")).toEqual([])
@@ -1092,13 +1110,26 @@ describe("a shared slot renders once, on its owner", () => {
 			"gather.characterLore.read": "character lore",
 			"gather.historyEntries.read": "history"
 		}
-		for (const path of LANE_OWN) {
+		for (const path of LANE_OWN.filter((p) => p !== "knownToSpeaker" && p !== "speakerInCast")) {
 			const on = decls.filter(
 				(d) => d.slot === "params" && d.path === path && LANES.includes(d.nodeKey)
 			)
 			expect(on.map((d) => d.nodeKey).sort(), `${path}`).toEqual([...LANES].sort())
 			for (const d of on) expect(d.label).toMatch(new RegExp(`— ${bandOf[d.nodeKey]}$`))
 		}
+		// `knownToSpeaker` stays a storage address per lane (`reconcileConfigs`
+		// back-fills from it), shown as ONE ganged switch (D36): the panel side
+		// is pinned in `ganged.int.test.ts`.
+		expect(
+			decls
+				.filter((d) => d.slot === "params" && d.path === "knownToSpeaker" && LANES.includes(d.nodeKey))
+				.map((d) => d.nodeKey)
+				.sort()
+		).toEqual([...LANES].sort())
+		const shown = allOptions(await view({ userId: adminId, isAdmin: true }))
+		expect(shown.filter((o) => o.label === "Only what the speaker knows")).toHaveLength(1)
+		// 🚧 wt-1b-fix2 (2026-11-17): the history rule's switch gathers every read that declares it.
+		expect(shown.filter((o) => o.label === "Only scenes the speaker was in")).toHaveLength(1)
 		// Own fields resolve at their own address: the panel's provenance for
 		// a loser lane's share is the loser lane, not the owner.
 		expect(
@@ -1194,9 +1225,30 @@ describe("every option drawn has a group", () => {
 		const decls = await declarations(db, spec!.activeVersionId!)
 		const ids = groupOptions(v.groups).map((o) => o.id)
 		expect(new Set(ids).size).toBe(ids.length)
-		expect(new Set(ids)).toEqual(
-			new Set(decls.map((d) => optionId(SECRET, d.nodeKey, d.slot, d.path)))
+		// Every declaration draws one option, except the reads of a ganged param
+		// (`GANGED_PARAMS`): the ganged control (D36, `ganged.ts`) draws one option
+		// per param for all of its reads.
+		const { gangedMembersOf, GANGED_PARAMS, GANGED_PSEUDO_NODE } = await import(
+			"$lib/server/pipelines/config/panel/ganged"
 		)
+		const { loadDocument } = await import("$lib/server/pipelines/boot/store")
+		const nodes = (await loadDocument(db, spec!.activeVersionId!)).nodes
+		const gangs = Object.entries(GANGED_PARAMS).map(([path, words]) => ({
+			path,
+			words,
+			gang: gangedMembersOf(decls, nodes, path)!
+		}))
+		for (const g of gangs) expect(g.gang.members.length, g.path).toBeGreaterThan(1)
+		const drawn = decls
+			.filter((d) => !gangs.some((g) => g.gang.members.includes(d)))
+			.map((d) => optionId(SECRET, d.nodeKey, d.slot, d.path))
+		for (const g of gangs)
+			drawn.push(optionId(SECRET, GANGED_PSEUDO_NODE, g.gang.home.slot, g.gang.home.path))
+		// One switch per ganged param, each under its own words.
+		const options = groupOptions(v.groups)
+		for (const g of gangs)
+			expect(options.filter((o) => o.label === g.words.label).length, g.path).toBe(1)
+		expect(new Set(ids)).toEqual(new Set(drawn))
 	})
 })
 
@@ -1611,4 +1663,133 @@ describe("a clause's step sits at its spine position; an envoy's prompt is a fro
 			v.groups.some((g) => g.front.some((o) => o.control === "text"))
 		).toBe(true)
 	})
+})
+
+describe("what a call offers is what can be stored", () => {
+	const admin = () => viewer({ userId: adminId, isAdmin: true })
+	const pool = async (slug: string, option: ConfigOption) => {
+		const { published, declarations } = await import("$lib/server/pipelines/config/panel/declarations")
+		const at = (await published(db as never, slug))!
+		const decl = (await declarations(db as never, at.specVersionId)).find(
+			(d) => d.control === "prompts-ref" && optionId(SECRET, d.nodeKey, d.slot, d.path) === option.id
+		)!
+		return { at, decl }
+	}
+	const forged = async (slug: string, option: ConfigOption, over: Record<string, unknown> = {}) => {
+		const { decl } = await pool(slug, option)
+		const [src] = await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(
+				and(
+					eq(schema.pipelinePrompts.nodeDefinitionId, decl.nodeDefinitionId!),
+					eq(schema.pipelinePrompts.slot, decl.slot)
+				)
+			)
+			.limit(1)
+		const [row] = await db
+			.insert(schema.pipelinePrompts)
+			.values({
+				nodeDefinitionId: src!.nodeDefinitionId,
+				slot: src!.slot,
+				name: `Forged ${Math.random()}`,
+				fields: src!.fields as Record<string, string>,
+				...over
+			})
+			.returning()
+		return row!
+	}
+
+	it("no prompt choice sent to a client carries the internal mark", async () => {
+		for (const v of [await view({ sessionId }), await view({ userId: adminId, isAdmin: true })])
+			for (const o of allOptions(v).filter((x) => x.control === "prompts-ref"))
+				for (const c of o.choices ?? []) {
+					expect(c).not.toHaveProperty("createdForSpecId")
+					expect(c).not.toHaveProperty("ownerPluginId")
+				}
+	})
+
+	it("refuses another pipeline's prompt at session and configuration scope; stores an offered one; re-saving the one in force passes", async () => {
+		const option = allOptions(await view({ userId: adminId, isAdmin: true })).find(
+			(o) => o.control === "prompts-ref" && (o.choices?.length ?? 0) > 1
+		)!
+		const [other] = (await db.select().from(schema.pipelineSpecs)).filter(
+			(s: any) => s.slug !== STORY_RESPOND_SPEC_ID
+		)
+		const foreign = await forged(STORY_RESPOND_SPEC_ID, option, { createdForSpecId: other!.id })
+		const { at } = await pool(STORY_RESPOND_SPEC_ID, option)
+		const mine = await forged(STORY_RESPOND_SPEC_ID, option, { createdForSpecId: at.specId })
+		try {
+			for (const who of [viewer({ sessionId }), admin()])
+				await expect(
+					writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, who, option.id, foreign.id)
+				).rejects.toThrow(/^'.*' is not one of the prompts this step offers\. Nothing was saved\.$/)
+			await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer({ sessionId }), option.id, mine.id)
+			// In force now: the same value is offered because it is in force.
+			await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer({ sessionId }), option.id, mine.id)
+			const after = allOptions(await view({ sessionId })).find((o) => o.id === option.id)!
+			expect(after.value).toBe(mine.id)
+		} finally {
+			await clearOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer({ sessionId }), option.id)
+			await db.delete(schema.pipelinePrompts).where(eq(schema.pipelinePrompts.id, foreign.id))
+			await db.delete(schema.pipelinePrompts).where(eq(schema.pipelinePrompts.id, mine.id))
+		}
+	}, 60_000)
+
+	it("a prompt that records no pipeline: refused to a session's owner, offered to and stored by an administrator, marked where hidden", async () => {
+		const option = allOptions(await view({ userId: adminId, isAdmin: true })).find(
+			(o) => o.control === "prompts-ref" && (o.choices?.length ?? 0) > 1
+		)!
+		const loose = await forged(STORY_RESPOND_SPEC_ID, option)
+		try {
+			expect(
+				allOptions(await view({ sessionId })).find((o) => o.id === option.id)!.choices!.map((c) => c.id)
+			).not.toContain(loose.id)
+			expect(
+				allOptions(await view({ userId: adminId, isAdmin: true }))
+					.find((o) => o.id === option.id)!
+					.choices!.map((c) => c.id)
+			).toContain(loose.id)
+			await expect(
+				writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, viewer({ sessionId }), option.id, loose.id)
+			).rejects.toThrow(/^'.*' is not one of the prompts this step offers\. Nothing was saved\.$/)
+			await db
+				.update(schema.pipelinePrompts)
+				.set({ hidden: true })
+				.where(eq(schema.pipelinePrompts.id, loose.id))
+			const marked = allOptions(await view({ userId: adminId, isAdmin: true }))
+				.find((o) => o.id === option.id)!
+				.choices!.find((c) => c.id === loose.id)!
+			expect(marked.label).toBe(`${loose.name} (hidden from owners)`)
+			await writeOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), option.id, loose.id)
+		} finally {
+			await clearOption(db, SECRET, STORY_RESPOND_SPEC_ID, admin(), option.id)
+			await db.delete(schema.pipelinePrompts).where(eq(schema.pipelinePrompts.id, loose.id))
+		}
+	}, 60_000)
+
+	it("refuses another call's default at session and configuration scope", async () => {
+		const { DUNGEON_CRAWLER_RESPOND_SPEC_ID: SLUG } = await import("@serene-pub/core-catalog")
+		const v = (await namespaceView(db, SECRET, SLUG, admin())) as NamespaceView
+		const options = allOptions(v).filter((o) => o.control === "prompts-ref" && typeof o.value === "number")
+		let pair: { call: ConfigOption; foreign: number } | undefined
+		for (const a of options) {
+			const poolA = await pool(SLUG, a)
+			for (const b of options) {
+				if (a === b || a.choices!.some((c) => c.id === b.value)) continue
+				const [row] = await db
+					.select()
+					.from(schema.pipelinePrompts)
+					.where(eq(schema.pipelinePrompts.id, b.value as number))
+				if (row?.nodeDefinitionId === poolA.decl.nodeDefinitionId && row.slot === poolA.decl.slot)
+					pair = { call: a, foreign: b.value as number }
+			}
+			if (pair) break
+		}
+		expect(pair, "no call of Dungeon Crawler's respond is denied another's default").toBeTruthy()
+		for (const who of [viewer({ sessionId }), admin()])
+			await expect(
+				writeOption(db, SECRET, SLUG, who, pair!.call.id, pair!.foreign)
+			).rejects.toThrow(/^'.*' is not one of the prompts this step offers\. Nothing was saved\.$/)
+	}, 120_000)
 })

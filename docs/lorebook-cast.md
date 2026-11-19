@@ -19,7 +19,7 @@ The Cast list shows each member's face (their card's picture, or their initial f
 - **Name one in an entry.** **Cast**, above an entry's content, inserts a reference such as `{{char:1}}`. The editor shows it as a chip with the member's name, and the prompt gets their name. Typing a reference to a number the book hasn't given out yet adds a new member for it.
 - **Build the graph** from your scenes (see [Building the graph from your scenes](#building-the-graph-from-your-scenes)), which suggests new members for you to accept.
 
-A member that no seat in play holds in a session is a **background** member there (a benched seat's member counts as background): a name, a summary and some lore, like the innkeeper everyone mentions but nobody plays. It depends on the session, not on the card: seat a member, with a character card or without one, and they speak for themselves in that session, while staying background in any session that doesn't seat them or has them benched. Serene Pub recognises background members by name just like members with a card: lore and earlier lines that name them are found by name, a scene that names them counts them, and **Suggestions** doesn't offer them as new members. Removing a character from a session keeps their cast member, since lore may be about them.
+A member that no seat in play holds in a session is a **background** member there (a benched seat's member counts as background): a name, a summary and some lore, like the innkeeper everyone mentions but nobody plays. It depends on the session, not on the card: seat a member, with a character card or without one, and they speak for themselves in that session, while staying background in any session that doesn't seat them or has them benched. Serene Pub recognises background members by name just like members with a card: lore and earlier lines that name them are found by name, a scene that names them counts them as mentioned (only speaking puts someone in a scene's cast), and **Suggestions** doesn't offer them as new members. Removing a character from a session keeps their cast member, since lore may be about them.
 
 :::tip Character vs. cast member
 A **character card** is a starter: it gives enough to begin, and the same card can appear in many books. A **cast member** is that person in *this* story, with this story's lore, relationships and stats, and anything the story retells about them in its own words. Editing the cast member never changes the card. Editing the card changes every member that still reads that part from the card.
@@ -27,7 +27,7 @@ A **character card** is a starter: it gives enough to begin, and the same card c
 
 ## A member's page
 
-Select a member in the Cast list to open their page. It has six tabs, and the tab you pick stays picked as you move from one member to the next.
+Select a member in the Cast list to open their page. It has six tabs (seven for the lorebook's owner), and the tab you pick stays picked as you move from one member to the next.
 
 The page opens on the member as they are at the book's present (its story clock, or else its newest dated history entry): the version in force there, or who they were from the start when no version starts yet. A book with no present yet opens on their newest version. In a book that keeps a timeline the **Member** tab lists their versions on a rail, and **Save** saves the version selected, in place (see [Changing a member over time](#changing-a-member-over-time)).
 
@@ -40,6 +40,7 @@ The page opens on the member as they are at the book's present (its story clock,
   - **Speech**: their **Voice**, how their lines sound when read aloud. A member with a card has a **Use from card** switch. On, they sound as the card does and follow it. The section then says _Uses the card's voice._ Off, the voice is this member's own in this book, used instead of the card's, set with the same fields as the card's Speech tab, and **Save** keeps it. A member with no card has the voice fields directly: their own voice.
   - Under the tabs, **When they are here**: their presences (see [When a cast member is in the world](#when-a-cast-member-is-in-the-world)).
 - **Lore**, with a count: their private entries (see below), and **Add lore**. Selecting one opens it for editing in the same tab, and the back arrow returns to the list. The lore editor's **⋯** holds **Pinned** and **Off**, as the entry editor's does.
+- 🚧 **Knows**, with a count, for the lorebook's owner only: the entries this member knows or is kept from, and every other entry to add with **Knows** or **Kept from**, or by dragging (see [What a character knows](./lorebooks.md#what-a-character-knows)).
 - **Relationships**, with a count: their ties to other members and lore, with where each came from, and **See in graph** (with [advanced controls](./themes-and-settings.md#show-advanced-controls) on).
 - **Timeline**: the scenes they're in on the line you're reading, oldest first, each dated by the history entry it was compiled into. A scene dated after the moment you're reading is dimmed and marked *later*. Selecting one opens it under **Scenes**.
 - **Sprites**: the member's own sprite sets, edited the same way as on a character card's Sprites tab: sets, uploads, the standard set, labels, order and **Try a line**. A member's own sets come before their card's: while any of them holds an image, the member is drawn from their own sets and the card's are not used; with none, they draw from the card's. While the card's sets draw them, the tab shows those sets read-only under _From the card: ‹name› is drawn with these until they have sprites of their own._, and whoever can edit the lorebook can upload images or start from the standard set there to give them their own. A member whose own sets have no pictures yet shows those sets with _Until these have pictures, ‹name› is drawn with the card's sprites._ Changes are saved as you make them, not with **Save**. Anyone who can open the page can read the sets, and whoever can edit the lorebook can change them. **Fill empty sprites** and **Re-express from neutral** work on a member's own sets too, for whoever can edit the lorebook, when an image model is set up.
@@ -48,6 +49,18 @@ The page opens on the member as they are at the book's present (its story clock,
 Every cast member is also listed in **Characters** on the rail. A member with a character card shares that card's row (the row wears **Card**, and its line says which lorebooks use it). A member with no card has a row of its own under **Only in lorebooks**, and members kept only in a session's notes show once **In my stories** is on in the filters. Click the row to open the member here, or use **Copy to my characters** in its **⋯** menu to make a character card of your own from it.
 
 **Copy to my characters**, at the top of the Member tab, makes a character card of your own from the member. It is there for everyone who can open the page, including a reader of a shared lorebook, and it stays available when the page is read-only. The copy opens in Characters. See [Copy a cast member to your characters](./characters.md#copy-a-cast-member-to-your-characters).
+
+### Locking a cast member
+
+🚧 To keep a member exactly as you wrote them, whatever sessions do, press **Locked** on the Member tab, under **Copy to my characters** (*Sessions and their routines leave this cast member as it is; you can still edit it.*). It writes at once; it isn't part of **Save**. A locked member shows a small lock in the Cast list. Whoever may edit the member can lock and unlock them: the lorebook's owner, and for a member of a session's notes, the session's owner. Someone who can read the book but not edit it sees *Locked: sessions and their routines leave it as it is.* instead of the button.
+
+While they are locked, nothing a session or its routines do changes them, whatever the write setting:
+
+- Their words and details: a run's change to them (a routine that moves them on over time, their state in the world set by a step or by a ruleset's landing) writes nothing, not even in the session's notes. The reply goes on, and the run's record says *‹Name› is locked, so this run left it as it is.*
+- Their own stats, the ones the lorebook keeps for them: a run's change is refused with the same sentence, and a step or the rules never ask for one to be reviewed. A change that was waiting for review before you locked them can still be accepted by a person.
+- Their sprites and gallery: pictures a run makes for them (**Fill empty sprites**, **Generate portrait**) aren't filed while they are locked, and the run says so.
+
+What it doesn't stop: your own edits and uploads, a person accepting a change, import, a provided lorebook's own updates, and play itself. The values a session keeps as it plays (what dice and play change on a seat, such as health in a fight) still change, and seating, benching or handing over their seat isn't a change to the member. Knowledge ties and relationships drawn to them are their own rows and aren't stopped either. Locking and unlocking isn't an edit: it keeps no edit history and isn't dated. To lock an entry or a scene, see [Locking an entry or a scene](./lorebooks.md#locking-an-entry-or-a-scene).
 
 ## What the member tells in their own words
 
@@ -81,6 +94,8 @@ Lore written on a member's **Lore** tab, or an entry anchored to a member, is **
 - A member whose **Status in world** is **deceased**, but whose seat is still in play, is read as seated: their own turns get their lore and the narrator doesn't. Only benching the seat moves their lore to the narrator.
 
 Character lore is placed by the session's context template, through `{{{characterLore}}}`. The built-in templates already place it; if you write your own template, include `{{{characterLore}}}` or character lore won't reach the model. See [Context templates](./context-templates.md#the-default-template-and-available-variables).
+
+**Scenes a character was not in.** The same turn is also not shown the summary of a scene whose cast does not list the character, nor the part of a history day those scenes make (a day it was in part of reads as the summaries of the scenes it was in, however the reply finds the day). The cast a scene lists is whoever spoke in it at least once (a character the narrator speaks for, by a speech tag in the narrator's line, counts), unless where they stood rules them out (see [Who a scene lists](./summarization.md#processing-a-scene)). See [Only the scenes a character was in](./pipelines.md#only-the-scenes-a-character-was-in).
 
 ## Relationships
 
@@ -163,6 +178,8 @@ Cards themselves are never changed by a version, because a card is shared betwee
 
 Linking a card to a member, switching their card, or unlinking it, from the member's page, applies from the book's present: the version at the present and every later one read the new card for the parts not retold here, and a later version keeps the words it has of its own; an unlink leaves them with the card's words as their own. Earlier versions stay as they were. A book with no present yet applies it to all of them. An unlink also gives the member copies of the card's sprite sets, gallery pictures and stats, so they look and play as they did; a stat the member already had stays theirs.
 
+A character someone shared with you is never linked to a member: it is read and copy only. It enters a cast only as a copy, a new member with no card made from it, as when a guest picks it in a session (see [What guests may seat](./sessions.md#what-guests-may-seat)).
+
 Each version's **Edit history** sits under it on the rail for the version selected, behind the **Edits** toggle; narrow, in a fold under the fields (*Edits to this version · ‹n›*). With the timeline off there is no rail and no dates: one plain form whose **Save** saves the member, with its Edit history fold. A reader of a shared lorebook can select versions to read them; nothing is saved.
 
 The member's lore isn't dated from their page. To file a dated change to a piece of their lore, open the entry from the list while reading as of the date.
@@ -176,6 +193,8 @@ By default, a cast member is simply in the world at every moment. Most never nee
 Placing someone for the first time changes what "no presence" means: until then they were always here, and from then on they're here only during their presences. The form warns you before the first one.
 
 Presences change what a session reads. Lore about a member who isn't in the world at the session's story date, such as their private lore or an entry about them, is left out of the prompt, and the retrieval explanation says so, naming them and the date. A member with no presences is never left out.
+
+With the lorebook's timeline off, presences are ignored: everyone listed is in the world, so a member whose presence had ended has their lore retrieved and their sprite drawn again. The presences stay stored, and count again when the timeline is switched on (see [Time, history and branches](./lorebook-time.md#what-you-wont-see)).
 
 Two presences that overlap are **two of them at once**: her at 34 and her at 50, in the same room. That's what presences are for, so the form tells you and lets you through.
 

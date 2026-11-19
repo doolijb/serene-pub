@@ -9,7 +9,12 @@ import {
 	CORE_TEMPLATE_ENGINE
 } from "$lib/shared/pipelines/templateEngines"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
-import { SHIPPED_CONTEXT_TEMPLATE_LIQUID } from "$lib/server/pipelines/prompt/liquidParity.fixtures"
+import {
+	LIQUID_LAYOUTS,
+	SHIPPED_CONTEXT_TEMPLATE_LIQUID
+} from "$lib/server/pipelines/prompt/liquidParity.fixtures"
+import { SHIPPED_VARIABLE_TEMPLATES } from "$lib/server/pipelines/entities/variableLayouts"
+import { getVariable, type TemplateScope } from "@serene-pub/sdk"
 
 /** The names the assemble step actually supplies, near enough for a unit. */
 const CONTRACT = [
@@ -204,5 +209,58 @@ describe("validateTemplateContext", () => {
 			CONTRACT
 		)
 		expect(result).toEqual({ error: null, warnings: [], checked: false })
+	})
+
+	describe("shape-mismatch is a variable layout's finding", () => {
+		const shapes = (
+			engine: string,
+			source: string,
+			scope: TemplateScope,
+			variableLayout: boolean
+		) =>
+			validateTemplateContext(
+				engine,
+				source,
+				scope,
+				undefined,
+				variableLayout ? { variableLayout } : undefined
+			).warnings.filter((w) => /object|list|record|not a/.test(w.message))
+
+		it("reports none for any shipped layout, checked as a layout", () => {
+			let checked = 0
+			for (const row of SHIPPED_VARIABLE_TEMPLATES) {
+				const scope = getVariable(row.variableId)?.scope
+				expect(scope, row.variableId).toBeDefined()
+				expect(
+					shapes(CORE_TEMPLATE_ENGINE, row.source, scope!, true),
+					`${row.key}/${row.variant}`
+				).toEqual([])
+				const liquid = LIQUID_LAYOUTS[`${row.key}/${row.variant}`]
+				if (liquid !== undefined)
+					expect(
+						shapes(CORE_LIQUID_ENGINE, liquid, scope!, true),
+						`${row.key}/${row.variant} (Liquid)`
+					).toEqual([])
+				checked++
+			}
+			expect(checked).toBeGreaterThan(0)
+		})
+
+		it("reports none for a context template printing a laid-out string key", () => {
+			const scope: TemplateScope = {
+				postHistory: {
+					type: "object",
+					optional: true,
+					fields: { content: { type: "string" } }
+				}
+			}
+			const source = "{{{postHistory}}}"
+			expect(shapes(CORE_TEMPLATE_ENGINE, source, scope, false)).toEqual(
+				[]
+			)
+			expect(
+				shapes(CORE_TEMPLATE_ENGINE, source, scope, true)
+			).not.toEqual([])
+		})
 	})
 })

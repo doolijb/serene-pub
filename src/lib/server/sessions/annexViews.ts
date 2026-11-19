@@ -52,7 +52,7 @@ export async function annexViewFor(
 	if (!row) return null
 	const audiences: DataAudiences = await declaredAudiences(
 		db,
-		row.genreId ?? "core:genre/chat"
+		row.genreId
 	)
 	// Only well-formed references reach the resolver: one malformed row must
 	// not fail every member's view (it holds for nobody instead).
@@ -97,7 +97,7 @@ export async function pushAnnexViews(
 		.limit(1)
 	if (!session) return
 	// Nothing anybody may see: every view is `{}`, and was before.
-	const audiences = await declaredAudiences(db, session.genreId ?? "core:genre/chat")
+	const audiences = await declaredAudiences(db, session.genreId)
 	if (!Object.values(audiences).some((keys) => Object.keys(keys ?? {}).length)) return
 	const guests = await db
 		.select({ userId: schema.sessionGuests.userId })

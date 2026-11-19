@@ -10,6 +10,10 @@
  * Use `import { v4 as uuid } from "uuid"`, which falls back to
  * `crypto.getRandomValues` where `randomUUID` is missing.
  *
+ * The same rule covers `navigator.clipboard`, which is also undefined there; copy
+ * through `copyText` in `src/lib/client/utils/copyText.ts`, the one file that
+ * touches it.
+ *
  * Scope: everything that can reach the browser — `src/lib/client`,
  * `src/lib/shared` and `src/routes`. Server code (`src/lib/server`) runs in Node,
  * where `randomUUID` is always present. Comments are ignored.
@@ -22,6 +26,8 @@ const ROOT = resolve(__dirname, "../../../..")
 const BROWSER_REACHABLE = ["src/lib/client", "src/lib/shared", "src/routes"]
 const SOURCE = /\.(ts|js|svelte)$/
 const CALL = /\bcrypto\s*\.\s*randomUUID\b/
+const CLIPBOARD = /\bnavigator\s*\.\s*clipboard\b/
+const CLIPBOARD_HOME = "src/lib/client/utils/copyText.ts"
 
 function* sourceFiles(dir: string): Generator<string> {
 	for (const name of readdirSync(dir)) {
@@ -53,6 +59,24 @@ describe("secure-context APIs in browser code", () => {
 		expect(
 			offenders,
 			'crypto.randomUUID is undefined on plain-http LAN addresses; use `import { v4 as uuid } from "uuid"`'
+		).toEqual([])
+	})
+
+	test("no browser-reachable file uses navigator.clipboard except copyText", () => {
+		const offenders: string[] = []
+		for (const dir of BROWSER_REACHABLE) {
+			for (const file of sourceFiles(join(ROOT, dir))) {
+				if (relative(ROOT, file) === CLIPBOARD_HOME) continue
+				const lines = code(readFileSync(file, "utf8")).split("\n")
+				lines.forEach((line, i) => {
+					if (CLIPBOARD.test(line))
+						offenders.push(`${relative(ROOT, file)}:${i + 1}`)
+				})
+			}
+		}
+		expect(
+			offenders,
+			"navigator.clipboard is undefined on plain-http LAN addresses; use copyText from $lib/client/utils/copyText"
 		).toEqual([])
 	})
 })

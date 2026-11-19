@@ -1449,13 +1449,13 @@ describe("mapImportedEntry — history", () => {
 		})
 	})
 
-	test("defaults year to 1 and month/day to null when missing", () => {
+	test("leaves year, month and day null when missing (no Year 1 default)", () => {
 		const mapped = mapImportedEntry(
 			{ keys: [], content: "", enabled: true },
 			HISTORY_TYPE_ID,
 			0
 		)
-		expect(mapped.year).toBe(1)
+		expect(mapped.year).toBeNull()
 		expect(mapped.month).toBeNull()
 		expect(mapped.day).toBeNull()
 	})

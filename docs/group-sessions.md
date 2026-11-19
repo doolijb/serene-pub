@@ -17,6 +17,10 @@ A cast member seated with no character card takes turns like any character: **Co
 
 ## The basics
 
+Guests play; the session's settings and its prompts are the owner's, and in **Edit session** a guest sees only the participants list (see [Guests](./sessions.md#guests)). **Prompt details** on a reply, and the token count, are an administrator's who is in the session; an administrator who is a guest in someone else's session is a guest there, except that they also get them.
+
+The session's notes (its own lorebook) are the owner's: a guest doesn't open or change them, and a guest's turns still write to them. On the session page a guest sees a scene's name, a date or a place's name as plain text, and the controls that open the notes (the scene name, **Start a new entry**, date markers, **Open in lorebook**, **Open entry**, **Select for summary**) are not there. What a guest may seat is up to the owner: two switches under **Guests** in **Edit session › Participants**, both on until switched off. **Guests can bring their own characters** lets a guest add, remove and bench characters and personas they own, and name a seat as in the Lair; it also lets a guest pick a character someone shared with them, which joins as a copy in the session's notes, with no link back to the original. **Guests can take cast members** lets a guest take the seat of a cast member with no character card whom nobody plays: one with no seat, or one the owner seated (a benched seat still counts as taken). Switching one off keeps guests' seats of that kind as they are; nobody is unseated. The owner can hand a seat to a guest with **Played by**: a character or a persona seated with the owner's own card, a cast member with no card, or a seat with a name but no card. The owner can also move a seat between a person's personas and the characters the story plays, both ways, with **Played by**; a guest's own card moves only between the story and that guest, and earlier lines stay as they were (see [Participants](./sessions.md#participants)). In a guest's group under **Personas** the owner can also add one of their own cards, a cast member with no card, or a new seat by name, for that guest. A guest who plays one of the owner's cards writes as it and takes its turns; the card stays the owner's (the guest can't open or change it), and only the owner changes its sheet; changes the model proposes to that character's sheet wait for the owner too. A guest's own card stays theirs. See [What guests may seat](./sessions.md#what-guests-may-seat).
+
 Add more than one character when you start a session, or later in **Edit session › Participants**. That's all it takes to make a group session. (A Story on the **Minimal** preset can also start with nobody at all: add characters whenever you like.)
 
 After you send a message, the characters answer in turn: by default each character in play speaks once, in the order they're listed, and then it's your turn again. Drag the characters in **Participants** to change that order.
@@ -111,7 +115,7 @@ The speaker's own card is always sent in full. Less detail leaves more room for 
 
 ## Narrator Response
 
-A **Narrator Response** is a message from the world itself rather than any character: weather, scenery, a shopkeeper, a monster. You ask for one; it never happens by itself and never counts as anyone's turn. It's offered in Chat. (In Story, **Narrator's turn** can give the narrator a turn of its own every round or two: see [What runs between turns](./genre-story.md#what-runs-between-turns).)
+A **Narrator Response** is a message from the world itself rather than any character: weather, scenery, a shopkeeper, a monster. You ask for one; it never happens by itself and never counts as anyone's turn. It's offered in Story. (There, **Narrator's turn** can give the narrator a turn of its own every round or two: see [What runs between turns](./genre-story.md#what-runs-between-turns).)
 
 ### Ask for one
 

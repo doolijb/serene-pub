@@ -247,11 +247,15 @@ describe("the §5f decisions are what the code says", () => {
 			"firsthandFor",
 			"scope"
 		])
-		// 🚧 2026-11-15 time-t6c2: the knowledge query reads exactly the scope and the speaker.
-		expect(declared("core:query/unknown-entries@1").ports.sort()).toEqual([
-			"scope",
-			"speaker"
+	})
+
+	it("the three lore lanes declare `knownToSpeaker` (the knowledge filter, on by default)", () => {
+		for (const id of [
+			"core:query/world-lore@1",
+			"core:query/character-lore@1",
+			"core:query/history-entries@1"
 		])
+			expect(declared(id).params, id).toContain("knownToSpeaker")
 	})
 
 	it("assemble@2: `truncation` culled — assemble drops nothing, the ranker does", () => {

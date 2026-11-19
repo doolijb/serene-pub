@@ -221,6 +221,8 @@ export type HostTable =
 	| "summarize_source"
 	| "summarize_span"
 	| "lorebook_entries"
+	/** 🚧 ★ The speaker's judgement over the session's scenes (`speakerInCast`) — what `earlier-scenes` asks the host. */
+	| "speaker_in_cast"
 	| "session_cast"
 	| "session_settings"
 	| "session_annex"

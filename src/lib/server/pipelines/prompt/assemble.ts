@@ -338,7 +338,8 @@ const partOf = (a: Allocation, field: string): number =>
  *
  * A value, never a finished string: the names carry the calendar's spelling
  * and the variable's layout decides the separator, the order and the padding.
- * `undefined` when there is no present at all.
+ * `undefined` when there is no present at all. A lorebook that keeps no
+ * timeline reaches here with no now and no history (the read leaves both out).
  */
 function currentDateOf(
 	allocations: readonly Allocation[],

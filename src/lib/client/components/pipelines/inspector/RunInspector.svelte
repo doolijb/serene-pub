@@ -12,6 +12,7 @@
 	 * name and a `Wire` tab with no connection. Nothing here reconstructs a
 	 * missing field from a neighbouring one.
 	 */
+	import { copyText } from "$lib/client/utils/copyText"
 	import * as Icons from "@lucide/svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import {
@@ -164,12 +165,13 @@
 	}
 
 	async function copyOutput() {
-		try {
-			await navigator.clipboard.writeText(
+		if (
+			await copyText(
 				JSON.stringify(selected?.raw?.output ?? null, null, 2)
 			)
+		) {
 			notify.success({ title: "Copied to the clipboard" })
-		} catch {
+		} else {
 			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})
@@ -178,10 +180,9 @@
 
 	/** Copy one piece of the exchange, with the same answer copyOutput gives. */
 	async function copy(text: string) {
-		try {
-			await navigator.clipboard.writeText(text)
+		if (await copyText(text)) {
 			notify.success({ title: "Copied to the clipboard" })
-		} catch {
+		} else {
 			notify.error({
 				title: "Could not reach the clipboard. Select the text and copy it."
 			})

@@ -143,6 +143,8 @@ export interface SeatRefTranslator {
 	ref(ref: string, pick: SeatPick): string[] | null
 	/** When a merged pair's rows land on one unique key: the moved owner id (a card id for card form) whose row wins, else the newest wins. */
 	survivor?(target: { kind: string; id: number }): number | null
+	/** Stores the translator leaves as they are: `rekeySessionRefs` skips their steps. */
+	leaves?: readonly SeatKeyStore[]
 }
 
 const CARD_REF = /^character:\d+$/
@@ -227,6 +229,79 @@ export function memberMoveTranslator(
 			const to = hit ? moves.get(Number(hit[1])) : undefined
 			return to === undefined ? null : [`seated-member:${to}`]
 		}
+	}
+}
+
+const PLAYER_SEAT_REF = /^player-seat:(\d+)$/
+
+/**
+ * 🚧 PURE — the translator of a seat's move between the person and the AI
+ * groups. `to: "character"` (default): the owner `{ player_seat, playerSeatId }`
+ * and the ref `player-seat:<playerSeatId>` become the seated member
+ * `castMemberId`. `to: "player"`: the owner `{ seated_member, castMemberId }`
+ * and the ref `seated-member:<castMemberId>` become the player seat
+ * `playerSeatId`. A ref is matched exactly, never as a prefix
+ * (`player-seat:12` is not `player-seat:123`). Every other owner and ref is not
+ * moved. A line keeps the stamp of the seat it was spoken from
+ * (`message_speakers`) and its blocks (`message_blocks`: `addressee`,
+ * `answered.by`) stay as written, so readers resolve the departed seat by them
+ * and the line keeps its name, face and kind. When a moved row meets a row a
+ * departed seat of the target kind left on the same unique key, the moved row
+ * wins.
+ */
+export function seatMoveTranslator(move: {
+	playerSeatId: number
+	castMemberId: number
+	to?: "character" | "player"
+}): SeatRefTranslator {
+	const leaves = ["message_speakers", "message_blocks"] as const
+	if (move.to === "player") {
+		return {
+			ownerKinds: ["seated_member"],
+			refSql: `"seated-member:${move.castMemberId}"`,
+			owner(owner) {
+				return owner.kind === "seated_member" &&
+					owner.id === move.castMemberId
+					? [{ kind: "player_seat", id: move.playerSeatId }]
+					: null
+			},
+			ref(r) {
+				const hit = SEATED_MEMBER_REF.exec(r)
+				return hit && Number(hit[1]) === move.castMemberId
+					? [`player-seat:${move.playerSeatId}`]
+					: null
+			},
+			survivor(target) {
+				return target.kind === "player_seat" &&
+					target.id === move.playerSeatId
+					? move.castMemberId
+					: null
+			},
+			leaves
+		}
+	}
+	const ref = `player-seat:${move.playerSeatId}`
+	return {
+		ownerKinds: ["player_seat"],
+		refSql: `"${ref}"`,
+		owner(owner) {
+			return owner.kind === "player_seat" && owner.id === move.playerSeatId
+				? [{ kind: "seated_member", id: move.castMemberId }]
+				: null
+		},
+		ref(r) {
+			const hit = PLAYER_SEAT_REF.exec(r)
+			return hit && Number(hit[1]) === move.playerSeatId
+				? [`seated-member:${move.castMemberId}`]
+				: null
+		},
+		survivor(target) {
+			return target.kind === "seated_member" &&
+				target.id === move.castMemberId
+				? move.playerSeatId
+				: null
+		},
+		leaves
 	}
 }
 
@@ -1640,7 +1715,10 @@ export async function rekeySessionRefs(
 		dropped: 0,
 		left: 0
 	}
-	for (const step of STEPS) await step.run(tx, sessionId, translate, tally)
+	for (const step of STEPS) {
+		if (translate.leaves?.includes(step.store)) continue
+		await step.run(tx, sessionId, translate, tally)
+	}
 	return tally
 }
 

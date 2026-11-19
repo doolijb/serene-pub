@@ -33,6 +33,7 @@ const GATED_BOOM = "gated:boom"
 const GATED_SCOPED = "gated:scoped"
 const UNGATED_PUSH = "ungated:push"
 const GENERIC_ERROR = "An error occurred while processing your request."
+const ADMINISTRATOR_SUGGESTION = "An administrator can see the details."
 
 const seam = vi.hoisted(() => {
 	/** `gated:boom:error` is gated ON PURPOSE — see the `:error` test. */
@@ -483,6 +484,23 @@ describe("the generic {event}:error fallback", () => {
 			{
 				target: "s1",
 				event: `${GATED_BOOM}:error`,
+				data: { error: `${GENERIC_ERROR} ${ADMINISTRATOR_SUGGESTION}` }
+			}
+		])
+	})
+})
+
+describe("the generic fallback for an administrator", () => {
+	test("is the sentence alone, with no suggestion to ask one", async () => {
+		const h = fresh()
+		const client = h.connect("s3", ADMIN)
+
+		await client.fire(GATED_BOOM, {})
+
+		expect(h.emits).toEqual([
+			{
+				target: "s3",
+				event: `${GATED_BOOM}:error`,
 				data: { error: GENERIC_ERROR }
 			}
 		])
@@ -503,7 +521,11 @@ describe("a refusal answers the tab that asked", () => {
 		await asking.fire(GATED_BOOM, {})
 
 		expect(h.emits).toEqual([
-			{ target: "s1", event: `${GATED_BOOM}:error`, data: { error: GENERIC_ERROR } }
+			{
+				target: "s1",
+				event: `${GATED_BOOM}:error`,
+				data: { error: `${GENERIC_ERROR} ${ADMINISTRATOR_SUGGESTION}` }
+			}
 		])
 	})
 

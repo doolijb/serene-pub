@@ -10,7 +10,7 @@ A character is someone in your stories: their name, who they are, how they talk 
 
 A **card** is a character saved as a file, usually a picture with the character written inside it. Cards are how characters are shared between apps such as Serene Pub and SillyTavern.
 
-Your characters are yours: other accounts on the same server don't see them.
+Your characters are yours: other accounts on this pub don't see them.
 
 ## The basics
 
@@ -296,7 +296,7 @@ Some cards come with a lorebook (their world). After the import, **Import the lo
 - **Larger than 64 MB**, or whose character data is larger than 16 MB, is refused before it uploads.
 - **A damaged card** is refused with a message, rather than half-imported.
 - **Pictures stored as web addresses** inside a card aren't downloaded, so those sprites are left out (and counted in the message).
-- **Too many at once**: you can import two cards or lorebooks at a time. A third waits until one finishes.
+- **Too many at once**: you can import two cards or lorebooks at a time. A third is refused, with a message asking you to wait for one to finish.
 
 ## Exporting a character
 
@@ -321,7 +321,7 @@ The file is named after the character, such as `john_watson.v3.json`, `john_wats
 
 On a pub with [user accounts](./users-and-accounts.md), you can let another person see one of your characters. Open the character and choose **Share…** from its **⋯** menu, then tick the people. Untick someone to take it back.
 
-What they get is read-only: the character appears in their Characters view under **Shared with you**, they can open it and read everything, and they can **Copy to my characters** to make their own copy (or export the card). They can't edit yours, and they can't put yours in a session as it is: a session's cast is made of characters its owner has, so they copy first. A shared character can also be attached in [Messages](./messages.md#attaching-things) to anyone it is shared with.
+What they get is read-only: the character appears in their Characters view under **Shared with you**, they can open it and read everything, and they can **Copy to my characters** to make their own copy (or export the card). They can't edit yours, and they can't put yours in a session or a lorebook's cast as it is: they copy first. A guest in someone's session can pick it in **Edit session**, which puts a copy in that session's notes for them to play (see [What guests may seat](./sessions.md#what-guests-may-seat)); you see no change, and your character and the copy never change each other. A shared character can also be attached in [Messages](./messages.md#attaching-things) to anyone it is shared with.
 
 Guests in your sessions see the cast's characters without any sharing; sharing is for a character outside a session.
 

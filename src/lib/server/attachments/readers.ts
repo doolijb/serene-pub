@@ -40,8 +40,9 @@
  *     call reads it; each call that cannot gets a placeholder (D3). When none
  *     can, the kind is refused with the first call's reason.
  *
- * **Visibility.** Every `reason` is a sentence that names no connection
- * (`capabilityRefusal`'s, the resolver's). A call's pair rides as
+ * **Visibility.** A `reason` may name a model or its fix (`capabilityRefusal`'s,
+ * the resolver's), which is an administrator's: asked for a subject who is not
+ * one, the answer holds only the plain sentences. A call's pair rides as
  * `connection` (`connectionIdentity`), which `redactConnections` removes at
  * the socket for everyone who is not an administrator — the existing
  * projection, not a second redaction.
@@ -58,6 +59,10 @@ import {
 	attachmentCapBytes,
 	type AttachmentKind
 } from "$lib/shared/attachments/caps"
+import {
+	connectionsVisibleTo,
+	type ConnectionSubject
+} from "$lib/server/connections/visibility"
 import type { ConnectionIdentity } from "$lib/shared/connections/identity"
 import type {
 	AttachmentReaders,
@@ -141,8 +146,13 @@ export const PDF_NOT_ACCEPTED =
 export const HEARD_FOR_IT =
 	"It is sent as what it says — the reply's transcribe step hears it first."
 
-/** The answer with nothing to ask: no session, no genre, no reply spec. */
-function answer(calls: AttachmentReadingCall[]): AttachmentReaders {
+/**
+ * The answer with nothing more to ask. `plain` is the answer for a reader who
+ * is not an administrator: a sentence naming a model, a connection or its fix
+ * is an administrator's, so a kind no call reads says only that no model in
+ * the reply reads it, and the calls carry no reasons but the transcribe one.
+ */
+function answer(calls: AttachmentReadingCall[], plain = false): AttachmentReaders {
 	const kinds = {} as Record<AttachmentKind, AttachmentVerdict>
 	const accepts = {} as Record<AttachmentKind, string[]>
 	for (const kind of ATTACHMENT_KINDS) {
@@ -157,7 +167,7 @@ function answer(calls: AttachmentReadingCall[]): AttachmentReaders {
 			// reply's transcribe step (O9): a voice note reaches it as words.
 			kinds[kind] = { allowed: true }
 		} else {
-			const why = calls.find((c) => c.reasons[kind])?.reasons[kind]
+			const why = plain ? undefined : calls.find((c) => c.reasons[kind])?.reasons[kind]
 			kinds[kind] = {
 				allowed: false,
 				reason: calls.length ? KIND_NOT_READ(kind, why) : NO_READING_CALLS(kind)
@@ -167,7 +177,12 @@ function answer(calls: AttachmentReadingCall[]): AttachmentReaders {
 	}
 	return {
 		kinds,
-		calls,
+		calls: plain
+			? calls.map((c) => ({
+					...c,
+					reasons: c.reasons.audio === HEARD_FOR_IT ? { audio: HEARD_FOR_IT } : {}
+				}))
+			: calls,
 		accepts,
 		limits: {
 			filesPerMessage: ATTACHMENT_CAPS.filesPerMessage,
@@ -295,14 +310,21 @@ async function transcriptReaders(
 
 export async function attachmentReaders(
 	db: Db,
-	input: { sessionId: number; userId: number; channel?: string }
+	input: {
+		sessionId: number
+		userId: number
+		channel?: string
+		/** Who is asking; one who may not see connections reads the plain sentences. */
+		subject?: ConnectionSubject | null
+	}
 ): Promise<AttachmentReaders> {
+	const plain = "subject" in input && !connectionsVisibleTo(input.subject)
 	const [session] = await db
 		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, input.sessionId))
 		.limit(1)
-	if (!session?.genreId) return answer([])
+	if (!session?.genreId) return answer([], plain)
 	const specs = await transcriptReaders(db, {
 		sessionId: input.sessionId,
 		userId: input.userId,
@@ -316,7 +338,7 @@ export async function attachmentReaders(
 				...spec
 			}))
 		)
-	return answer(calls)
+	return answer(calls, plain)
 }
 
 /**

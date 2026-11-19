@@ -33,6 +33,10 @@ import {
 } from "$lib/server/pipelines/ranking/relationshipRanking"
 import { keywordQuery } from "$lib/server/pipelines/ranking/keywordQuery"
 import { storedSeatRefInCast } from "$lib/server/pipelines/prompt/seatCards"
+import {
+	knowledgeDropOf,
+	knowledgeDropReceipt
+} from "$lib/server/lorebooks/entryKnowledge"
 import { memberFormOn } from "$lib/server/state/memberForm"
 import {
 	DEFAULT_GROUPS,
@@ -42,12 +46,7 @@ import {
 	relationshipReading,
 	relationshipSentence
 } from "$lib/shared/lorebooks/linkVocabulary"
-// ⚠ A cycle with `bindings.ts`, which imports this module's own export back.
-// Both sides import a hoisted function declaration and call it at run time, not
-// at module evaluation, so the cycle resolves; the alternative is a second
-// spelling of the vocabulary the lore lanes match against, which is exactly the
-// divergence this hop must not have.
-import { castEntityRefs } from "./bindings"
+import { castEntityRefs, speakerInCastQuery } from "./bindings.shared"
 
 /**
  * How one tie reads once it is in the prompt.
@@ -138,10 +137,18 @@ async function chosenEntryIds(
 	input: NodeInput<typeof C.relationshipSearch>,
 	ctx: CoreQueryCtx
 ): Promise<{ chosen: Set<number>; visible: Set<number> }> {
+	// On unless a pipeline says `false` (the param's default is `true`).
+	const knownToSpeaker = input?.params?.knownToSpeaker !== false
 	const [entries, messages, cast] = await Promise.all([
 		ctx.read("lorebook_entries", {
+			knownToSpeaker,
+			...speakerInCastQuery(input?.params),
 			sessionId: input?.scope?.sessionId,
-			currentCharacterId: input?.scope?.currentCharacterId ?? null
+			currentCharacterId: input?.scope?.currentCharacterId ?? null,
+			// A card-less seat is judged as itself, not as nobody.
+			...(input?.scope?.currentCastMemberId != null
+				? { currentCastMemberId: input.scope.currentCastMemberId }
+				: {})
 		}),
 		ctx.read("session_messages", {
 			sessionId: input?.scope?.sessionId,
@@ -149,6 +156,10 @@ async function chosenEntryIds(
 		}),
 		ctx.read("session_cast", { sessionId: input?.scope?.sessionId })
 	])
+	if (knownToSpeaker) {
+		const drop = knowledgeDropOf(entries)
+		if (drop) ctx.log("info", knowledgeDropReceipt(drop))
+	}
 	const result = keywordQuery({
 		entries: entries ?? [],
 		messages: messages ?? [],
@@ -591,7 +602,7 @@ export function relationshipSearchBindings(): Bindings {
 			// (R-7 P5), read here and published, not on the ranker.
 			{
 				ports: ["scope"],
-				params: ["maxEntries", "share", "priority", "loreLinks"]
+				params: ["maxEntries", "share", "priority", "loreLinks", "knownToSpeaker", "speakerInCast"]
 			}
 		)
 	}

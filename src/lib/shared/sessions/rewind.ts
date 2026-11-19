@@ -207,15 +207,19 @@ export function withStackReplaced(state: RewindState): RewindState {
 
 /**
  * 🚧 pr-6: the header's Regenerate (the turn's, `core#retake`) — null when the genre does not offer it here.
- * Greyed with the first reason that holds: a reply being written; the action list's own verdict; the session's.
+ * Greyed with the first reason that holds: a reply being written; a run holding re-runs; the action list's own verdict; the session's.
  */
 export function regeneratePress(input: {
 	offered: boolean
 	generating: boolean
 	listedReason: string | null
 	rewind: RewindState | null
+	/** 🚧 The sentence a run holding re-runs greys it with (`rerunWaitsFor`), after a reply being written. */
+	waitFor?: string | null
 }): { disabled: boolean; reason?: string } | null {
 	if (!input.offered) return null
-	const reason = input.generating ? REWIND_REFUSALS.busy : (input.listedReason ?? input.rewind?.regenerate ?? null)
+	const reason = input.generating
+		? REWIND_REFUSALS.busy
+		: (input.waitFor ?? input.listedReason ?? input.rewind?.regenerate ?? null)
 	return reason ? { disabled: true, reason } : { disabled: false }
 }

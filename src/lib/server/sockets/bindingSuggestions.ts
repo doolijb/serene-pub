@@ -277,7 +277,8 @@ export const bindingSuggestionsAddHandler = refusable<
 			throw new Error(`This lorebook already has a binding for "${name}".`)
 
 		const inserted = await insertBackgroundBinding(tx, row.lorebookId, {
-			name
+			name,
+			createdBy: userId
 		})
 		await tx
 			.update(schema.bindingSuggestions)

@@ -22,6 +22,7 @@ import {
 import { CONNECTION_TYPE, shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
+import { promptsOffered } from "$lib/server/pipelines/entities/prompts"
 import { pipelineLabelsById } from "$lib/server/pipelines/entities/pipelineLabels"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { contextPoolKeyFor } from "$lib/shared/pipelines/poolKey"
@@ -80,15 +81,14 @@ export async function choiceSets(db: Db, specId: number) {
 	// prompts without anything being seeded or copied. Narrowed per option by
 	// `nodeDefinitionId` + `slot` below, and grouped so the pipeline being configured
 	// comes first.
-	// A disabled plugin's rows are offered in no picker (R67).
+	// A disabled plugin's rows are offered in no picker (R67). Prompts keep every
+	// row here: `promptsOffered` drops a disabled plugin's for everyone, except the one in force.
 	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 	const off = await disabledPlugins(db)
-	const promptRows = (
-		await db
-			.select()
-			.from(schema.pipelinePrompts)
-			.orderBy(asc(schema.pipelinePrompts.id))
-	).filter((r) => !off.owns(r.ownerPluginId))
+	const promptRows = await db
+		.select()
+		.from(schema.pipelinePrompts)
+		.orderBy(asc(schema.pipelinePrompts.id))
 
 	const connections = await db
 		.select()
@@ -171,9 +171,10 @@ export async function choiceSets(db: Db, specId: number) {
 	 * one rule, and the day they disagreed the editor's caption and the
 	 * dropdown would be the halves disagreeing.
 	 *
-	 * **The grouping never refuses.** A row written while configuring replies
-	 * stays selectable in the narrator, one group down — that is the entire
-	 * point of pooling rather than namespacing.
+	 * **For context templates the grouping never refuses.** A row written while
+	 * configuring replies stays selectable in the narrator, one group down.
+	 * Prompts are narrowed afterwards by `promptsOffered`, which is why their
+	 * entries carry `createdForSpecId` (stripped in `choicesFor`).
 	 */
 	const pooled = (
 		rows: Array<{
@@ -183,7 +184,7 @@ export async function choiceSets(db: Db, specId: number) {
 			createdForSpecId: number | null
 		}>,
 		keyOf: (r: any) => string,
-		opts: { markForeign?: boolean } = {}
+		opts: { carrySpec?: boolean } = {}
 	): Map<string, ChoiceList> => {
 		const by = new Map<string, ChoiceList>()
 		for (const r of rows as any[]) {
@@ -200,11 +201,9 @@ export async function choiceSets(db: Db, specId: number) {
 				label: r.name,
 				// 🚧 R54: hidden from session owners (prompts only).
 				...(r.hidden === true ? { hidden: true } : {}),
-				// Written for another pipeline (`promptsForPipeline` drops it).
-				...(opts.markForeign &&
-				r.createdForSpecId != null &&
-				r.createdForSpecId !== specId
-					? { foreign: true }
+				// Prompts only: `promptsOffered` narrows on it.
+				...(opts.carrySpec
+					? { createdForSpecId: r.createdForSpecId, ownerPluginId: r.ownerPluginId ?? null }
 					: {}),
 				// The subtitle answers the question the grouping raises — "then
 				// where is this one from" — for exactly the rows where it is not
@@ -244,7 +243,7 @@ export async function choiceSets(db: Db, specId: number) {
 	const promptsBy = pooled(
 		promptRows as any[],
 		(p: any) => promptPoolKeyFor(p.nodeDefinitionId, p.slot),
-		{ markForeign: true }
+		{ carrySpec: true }
 	)
 
 	// Every script on the instance, keyed by pinned type id. Like layouts, a
@@ -299,6 +298,9 @@ export async function choiceSets(db: Db, specId: number) {
 	}
 
 	return {
+		specId,
+		/** For `promptsOffered`. */
+		pluginsOff: off,
 		promptsBy,
 		// The full rows, for the inline editor: a prompts-ref option carries
 		// the selected row's text so editing does not need a second fetch.
@@ -484,47 +486,35 @@ export const judgeAgainst = (
  * offers the layouts for **its** variable, and a connection or sampling option
  * offers only what its slot can actually use.
  */
-/**
- * A prompt pool narrowed to the pipeline being configured (owner note 37,
- * 2026-10-02: "Prompts need to be properly filtered by pipeline across the
- * app").
- *
- * The pool is still `(node definition, slot)` — that is what a row can be
- * selected into — but a picker offers only the rows that belong HERE: written
- * for this pipeline, shipped for no pipeline in particular, or written for no
- * pipeline at all. A row written for (or shipped with) ANOTHER pipeline is
- * not offered: Chat's reply picker never lists the Guide's or the
- * Lair's prompts. `keep` names rows that stay whatever they are — the value
- * this option holds and its author default — because hiding the current
- * selection would make the dropdown show nothing and read as data loss.
- * @internal exported for its test
- */
-export function promptsForPipeline(
-	pool: ChoiceList,
-	keep: ReadonlyArray<unknown> = []
-): ChoiceList {
-	return pool
-		.filter((c: any) => !c.foreign || keep.includes(c.id))
-		.map(({ foreign: _f, ...c }: any) => c) as ChoiceList
-}
-
 export const choicesFor = (
 	d: Decl,
 	sets: Awaited<ReturnType<typeof choiceSets>>,
-	/** For a prompts-ref: rows to offer even when written for another pipeline. */
-	keep: ReadonlyArray<unknown> = []
+	/** For a prompts-ref: what `promptsOffered` needs besides the pool. */
+	call: {
+		address: string
+		defaults: ReadonlyMap<string, number>
+		inForce: unknown
+		/** The viewer is an administrator. */
+		administrator: boolean
+	}
 ): ChoiceList | undefined => {
 	// Narrowed by the pool, exactly as a context template is — the difference
 	// is that a prompt's pool takes both halves. A slot's declared field set is
 	// a property of the type's VERSION, so it is checked at selection
 	// (`assertSelectable`) rather than fragmenting the pool on every bump.
-	// Then narrowed to this pipeline (`promptsForPipeline`).
+	// Then narrowed to what this call offers (`promptsOffered`).
 	if (d.control === "prompts-ref")
 		return d.nodeDefinitionId
-			? promptsForPipeline(
-					sets.promptsBy.get(promptPoolKeyFor(d.nodeDefinitionId, d.slot)) ?? [],
-					keep
-				)
+			? (promptsOffered(
+					(sets.promptsBy.get(promptPoolKeyFor(d.nodeDefinitionId, d.slot)) ??
+						[]) as Array<any>,
+					{ specId: sets.specId, pluginsOff: sets.pluginsOff, ...call }
+				).map(({ createdForSpecId: _c, ownerPluginId: _o, ...c }: any) =>
+					// An administrator is also offered a hidden prompt: say so.
+					call.administrator && c.hidden === true
+						? { ...c, label: c.label + " (hidden from owners)" }
+						: c
+				) as ChoiceList)
 			: []
 	// Judged against what the slot declared it requires, and only narrowed by
 	// shape when it declared none — the fallback for every slot authored before

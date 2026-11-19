@@ -52,8 +52,12 @@ async function dutiesStepOf(db: Db, pipeline: string): Promise<{ node: string; c
 
 /**
  * A duties step's params in this session: its contract's declared defaults <
- * the registration's values (genre ⊕ preset ⊕ the session's own rows) < ⏳ a
- * session override from before registrations (`pipeline_node_overrides`).
+ * the registration's values (genre ⊕ preset ⊕ the session's own rows), and
+ * under the session's own values ⏳ a leftover session override
+ * (`pipeline_node_overrides`) at a path they do not state — the run's order.
+ * Under a lock from a layer above (`settingLocksOf`, the run's rule) the
+ * lock's value holds (the declared default where it states none), and the
+ * session's own value and leftover row are not read.
  */
 export async function dutyParamsOf(
 	db: Db,
@@ -66,14 +70,25 @@ export async function dutyParamsOf(
 			?.slots?.params?.schema ?? {}
 	const out: Record<string, unknown> = {}
 	for (const [k, d] of Object.entries(declared)) out[k] = d?.default
-	const fromValues = (reg.values?.[at.node] as Record<string, unknown> | undefined)?.params
-	if (fromValues && typeof fromValues === "object") Object.assign(out, fromValues)
+	const { registrationValueLayers, addressedValues, settingLocksOf } = await import(
+		"$lib/server/pipelines/registrations/values"
+	)
+	const decls = Object.keys(declared).map((path) => ({ nodeKey: at.node, slot: "params", path }))
+	const layers = await registrationValueLayers(db, { specSlug: reg.pipeline, sessionId, registrationKey: reg.key })
+	const locks = settingLocksOf(layers, decls)
+	const prefix = `${at.node}\u0000params\u0000`
+	const pathOf = (key: string) => key.slice(prefix.length)
+	for (const [key, v] of addressedValues(reg.values ?? null, decls))
+		if (key.startsWith(prefix) && !locks.has(key)) out[pathOf(key)] = v
+	for (const [key, lock] of locks) if (key.startsWith(prefix)) out[pathOf(key)] = lock.value === undefined ? declared[pathOf(key)]?.default : lock.value
 	const [spec] = await db
 		.select({ id: schema.pipelineSpecs.id })
 		.from(schema.pipelineSpecs)
 		.where(eq(schema.pipelineSpecs.slug, reg.pipeline))
 		.limit(1)
 	if (spec) {
+		const own = layers.session?.[at.node]?.params
+		const stated: Record<string, unknown> = own && typeof own === "object" ? (own as Record<string, unknown>) : {}
 		const rows = await db
 			.select({ path: schema.pipelineNodeOverrides.path, value: schema.pipelineNodeOverrides.value })
 			.from(schema.pipelineNodeOverrides)
@@ -86,7 +101,8 @@ export async function dutyParamsOf(
 					eq(schema.pipelineNodeOverrides.slot, "params")
 				)
 			)
-		for (const r of rows as Array<{ path: string | null; value: unknown }>) if (r.path) out[r.path] = r.value
+		for (const r of rows as Array<{ path: string | null; value: unknown }>)
+			if (r.path && !Object.hasOwn(stated, r.path) && !locks.has(prefix + r.path)) out[r.path] = r.value
 	}
 	return out
 }

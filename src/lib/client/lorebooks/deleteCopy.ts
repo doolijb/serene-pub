@@ -1,3 +1,5 @@
+import { bookDeleteWords } from "$lib/shared/lorebooks/sessionNotes"
+
 /**
  * What a delete confirmation says before the question (less-confusing G5):
  * the thing by its name, and everything that goes with it. A reader must not
@@ -18,6 +20,8 @@ export interface DeletingBook {
 	entryCounts?: Record<string, number> | null
 	/** The book's cast members (one binding each). */
 	lorebookBindings?: readonly unknown[] | null
+	/** The asker's own sessions that read the book, newest first, off the list row. */
+	readBy?: readonly { id: number; name: string | null }[] | null
 }
 
 export interface DeleteBookCopy {
@@ -41,12 +45,11 @@ function shownName(name: string | null | undefined): string | null {
  * `book` is the list's row, or null when the list has not got it (the
  * sentence then names what goes without figures). `placeTypeId` picks the
  * places out of `entryCounts`, so they are said as places and still counted
- * among the entries, as the rail counts them. `openSessionName` is the open
- * session's name when THAT session reads this book.
+ * among the entries, as the rail counts them.
  */
 export function deleteBookCopy(
 	book: DeletingBook | null,
-	opts: { placeTypeId: string; openSessionName?: string | null }
+	opts: { placeTypeId: string }
 ): DeleteBookCopy {
 	const name = shownName(book?.name)
 	const title = name ? `Delete "${name}"?` : "Delete this lorebook?"
@@ -71,14 +74,21 @@ export function deleteBookCopy(
 		)
 	}
 
-	const session = shownName(opts.openSessionName)
-	lines.push(
-		session
-			? `Sessions reading it, "${session}" among them, keep their messages but stop reading lore from it.`
-			: "Sessions reading it keep their messages but stop reading lore from it."
-	)
 	lines.push("This cannot be undone.")
 	return { title, lines }
+}
+
+/**
+ * The words that replace the delete confirmation when a session of the
+ * asker's reads the book (D50): the delete is refused, so none is offered.
+ * Null when no such session is known; the server's refusal still covers
+ * other people's.
+ */
+export function deleteBookRefusal(
+	book: DeletingBook | null
+): ReturnType<typeof bookDeleteWords> | null {
+	if (!book?.readBy?.length) return null
+	return bookDeleteWords(book.name ?? "", { named: book.readBy, others: 0 })
 }
 
 /** The delete-entry confirmation's title: the entry by its name. */

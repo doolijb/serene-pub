@@ -16,7 +16,7 @@
  * form serves callers with no transaction.
  */
 
-import { and, eq, isNotNull, or } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { db as appDb } from "$lib/server/db"
 import { isSharedWith } from "$lib/server/utils/shares"
@@ -32,7 +32,22 @@ export interface OwnedBook {
 	userId: number
 }
 
-/** The book, if `userId` owns it; otherwise undefined. A non-integer id owns nothing. */
+/**
+ * Whether `userId` may WRITE this lorebook row: its owner only, and nobody for
+ * a live provided lorebook (owned by its source, AP1). `provided` is the row's
+ * fact, read where the row is read (`liveProvidedBookSql`). The one place a
+ * later co-editing permission widens. Not read access (`lorebookAccessFor`: a
+ * share, the administrator exception and a live provided book read, never
+ * write). A session's notes are answered by `ownBookAccessFor` first.
+ */
+export function canWriteLorebook(
+	userId: number | null | undefined,
+	book: { userId: number; provided: boolean }
+): boolean {
+	return userId != null && !book.provided && book.userId === userId
+}
+
+/** The book, if `userId` may write it; otherwise undefined. A non-integer id owns nothing. */
 export async function findOwnedBook(
 	db: Db,
 	userId: number | null | undefined,
@@ -47,20 +62,17 @@ export async function findOwnedBook(
 			sessionId: schema.lorebooks.sessionId
 		})
 		.from(schema.lorebooks)
-		.where(
-			and(
-				eq(schema.lorebooks.id, lorebookId as number),
-				// The owner's own book, or a session's notes (asked below).
-				or(eq(schema.lorebooks.userId, userId), isNotNull(schema.lorebooks.sessionId))
-			)
-		)
+		.where(eq(schema.lorebooks.id, lorebookId as number))
 		.limit(1)
 	if (!book) return undefined
-	// 🚧 A session's own notes (PLAN-rulesets §26): its members', nobody
-	// else's — the owner of the row included only as a member.
+	// 🚧 A session's own notes (PLAN-rulesets §26): its owner's and nobody
+	// else's; a guest of the session has no access (owner ruling G2, 2026-11-16).
 	if (book.sessionId != null) {
 		const { ownBookAccessFor } = await import("$lib/server/lorebooks/ownBook")
 		if (!(await ownBookAccessFor(db, book.id, userId))) return undefined
+	} else if (!canWriteLorebook(userId, { userId: book.userId, provided: false })) {
+		// Ownership only here; each door refuses a live provided lorebook in words after this (`primerRowEditProblem`).
+		return undefined
 	}
 	return { id: book.id, name: book.name, userId: book.userId }
 }
@@ -102,7 +114,7 @@ export async function lorebookAccessFor(
 		.where(eq(schema.lorebooks.id, lorebookId as number))
 		.limit(1)
 	if (!book) return null
-	// 🚧 A session's own notes: its members read them as their own, and no
+	// 🚧 A session's own notes: its owner reads them as their own, and no
 	// share or administrator exception reaches them (PLAN-rulesets §26).
 	const { ownBookAccessFor } = await import("$lib/server/lorebooks/ownBook")
 	const member = await ownBookAccessFor(db, lorebookId as number, userId)

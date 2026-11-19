@@ -26,10 +26,10 @@ const { getDb, setDb } = vi.hoisted(() => {
 	}
 })
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
+vi.mock("$lib/server/db", async () => {
+	const { testDbModule } = await import("$lib/server/utils/testDb")
 	return {
-		...actual,
+		...testDbModule(),
 		get db() {
 			return getDb()
 		}

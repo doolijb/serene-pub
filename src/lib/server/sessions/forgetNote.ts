@@ -46,6 +46,7 @@ export async function forgetNote(db: Db, sessionId: number, name: string): Promi
 				eq(schema.lorebookEntries.provenance, "pipeline"),
 				sql`split_part(${schema.lorebookEntries.typeId}, '@', 1) = ${WORLD_LORE}`,
 				eq(schema.lorebookEntries.archived, false),
+				eq(schema.lorebookEntries.entryLock, false),
 				sql`lower(trim(${schema.lorebookEntries.title})) = ${wanted}`
 			)
 		)

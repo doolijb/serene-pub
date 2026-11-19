@@ -11,6 +11,7 @@ import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import { runHandler } from "./runHandler"
 import { handleUserAvatarUpload, uploadedBytes } from "$lib/server/utils"
 
 /**
@@ -230,6 +231,24 @@ export const usersCurrentSetPassphrase: Handler<
 			message: "Passphrase set successfully"
 		}
 		emitToUser("users:current:setPassphrase", res)
+
+		// Setting the passphrase ends this admin's sockets below, so the
+		// turn-on must happen here, after the passphrase exists. It runs as the
+		// event it is, so the setup gate and the admin logbook apply. The
+		// refusals (not an admin, the Android app) are answered by `runHandler`
+		// as `systemSettings:updateAccountsEnabled:error`; a non-admin never
+		// reaches this call and the card is absent on Android.
+		if (params.enableAccounts && socket.user!.isAdmin) {
+			const { systemSettingsUpdateAccountsEnabled } = await import(
+				"./systemSettings"
+			)
+			await runHandler(
+				socket,
+				systemSettingsUpdateAccountsEnabled,
+				{ enabled: true },
+				emitToUser
+			)
+		}
 
 		// Revoke every token AND every live socket for this user — setting a
 		// passphrase on a previously-unsecured account should invalidate every

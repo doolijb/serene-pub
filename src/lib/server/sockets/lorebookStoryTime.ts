@@ -45,9 +45,12 @@ import {
 	clockProblem,
 	datedRowsOf,
 	lockBookCalendar,
+	ownerTimeZoneOf,
 	readBookStoryTime,
-	storyNowOf
+	storyNowOf,
+	storyStartOf
 } from "$lib/server/state/storyTime"
+import { mostRecentBranchOf } from "$lib/server/state/reading"
 import {
 	assertOwnedBook,
 	assertReadableBook
@@ -58,14 +61,30 @@ import {
  * `storyNowOf` reads it — what a session following the line stands at
  * (DESIGN-story-time P3), so session settings can show it and start from it.
  */
-async function storyTimeReply(lorebookId: number): Promise<Sockets.Lorebooks.BookStoryTime> {
+async function storyTimeReply(
+	lorebookId: number,
+	userId: number
+): Promise<Sockets.Lorebooks.BookStoryTime> {
 	const time = await readBookStoryTime(db, lorebookId)
 	const presentOn = async (branchId: number | null) => {
 		const now = await storyNowOf(db, lorebookId, branchId)
 		return now ? clockOfNow(now) : null
 	}
+	// 🚧 Where a new session starts: on the line it follows by default; `today`
+	// is today in this user's zone (a relay carries the actor's).
+	const startBranch = await mostRecentBranchOf(db, lorebookId)
+	const started = await storyStartOf(db, {
+		lorebookId,
+		branchId: startBranch,
+		timeZone: await ownerTimeZoneOf(db, userId)
+	})
 	return {
 		...time,
+		start: {
+			branchId: startBranch,
+			date: "clock" in started ? started.clock : null,
+			cause: started.cause
+		},
 		presents: {
 			main: await presentOn(null),
 			branches: await Promise.all(
@@ -102,7 +121,7 @@ export const lorebookStoryTimeHandler: Handler<
 		await assertReadableBook(db, socket.user!.id, params.lorebookId, {
 			isAdmin: !!socket.user?.isAdmin
 		})
-		const res = await storyTimeReply(params.lorebookId)
+		const res = await storyTimeReply(params.lorebookId, socket.user!.id)
 		emitToUser("lorebooks:storyTime", res)
 		return res
 	},
@@ -248,7 +267,7 @@ export const lorebookSetCalendarHandler: Handler<
 				.set({ storyCalendar: calendar })
 				.where(eq(schema.lorebooks.id, params.lorebookId))
 		})
-		const res = await storyTimeReply(params.lorebookId)
+		const res = await storyTimeReply(params.lorebookId, socket.user!.id)
 		emitToUser("lorebooks:setCalendar", res)
 		await relayStoryTime(socket, params.lorebookId, res)
 		return res
@@ -306,7 +325,7 @@ export const lorebookSetClockHandler: Handler<
 					.set(columns)
 					.where(eq(schema.lorebookBranches.id, branchId))
 		})
-		const res = await storyTimeReply(params.lorebookId)
+		const res = await storyTimeReply(params.lorebookId, socket.user!.id)
 		emitToUser("lorebooks:setClock", res)
 		await relayStoryTime(socket, params.lorebookId, res)
 		return res

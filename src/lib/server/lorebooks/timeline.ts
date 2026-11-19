@@ -49,23 +49,36 @@ export const TIMELINE_OFF_SENTENCES = {
 } as const
 
 /**
+ * 🚧 Whether a genre mandates a timeline for its sessions' own notes: it
+ * declares `timeline: 'required'`, or does not resolve. A preset may override
+ * the genre's default, never this. The one place both cases are named; the
+ * preset list and `sessions:create` both ask it.
+ */
+export function timelineRequiredFor(
+	genre: { timeline?: unknown } | null | undefined
+): boolean {
+	return !genre || genre.timeline === "required"
+}
+
+/**
  * 🚧 Whether the notes of a new session whose lorebook is its own notes start
  * with a timeline. In this order: a genre that does not resolve, or that
  * declares `timeline: 'required'`, is on; else the preset's `defaults.timeline`
- * when it is a boolean; else on when the genre keeps story time
- * (`keepsTime: 'story'`). A preset may override the genre's default, never its
- * mandate. Reads no column; the lorebook's own switch decides afterwards.
+ * when it is a boolean; else off. Where a genre or preset supports undated
+ * play, undated is the default; `keepsTime` does not pick it (it still feeds
+ * ruleset fit and the one-time boot pass over existing data, a different
+ * question). A preset may override the genre's default, never its mandate.
+ * Reads no column; the lorebook's own switch decides afterwards.
  */
 export function timelineDefaultFor(
 	genre: { timeline?: unknown; keepsTime?: unknown } | null | undefined,
 	preset: { defaults?: unknown } | null | undefined
 ): boolean {
-	if (!genre) return true
-	if (genre.timeline === "required") return true
+	if (timelineRequiredFor(genre)) return true
 	const pinned = (preset?.defaults as { timeline?: unknown } | null | undefined)
 		?.timeline
 	if (typeof pinned === "boolean") return pinned
-	return genre.keepsTime === "story"
+	return false
 }
 
 /** Whether a lorebook row keeps a timeline. A missing row (or value) reads as on: what every book did before the switch. */

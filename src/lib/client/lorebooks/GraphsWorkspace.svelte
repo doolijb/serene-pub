@@ -223,6 +223,8 @@
 	let showBuildModal = $state(false)
 	let buildMode = $state<"replace" | "extend">("replace")
 	let showPipelinePanel = $state(false)
+	/** Outside a session only an administrator reads a pipeline's settings (owner ruling D58, 2026-11-16). */
+	const canReadPipeline = $derived(!!userCtx?.user?.isAdmin)
 	let pipelineOverview = $state<Sockets.Pipelines.NamespaceDetail | null>(
 		null
 	)
@@ -1258,7 +1260,7 @@
 	>
 		<Icons.RefreshCw size={14} aria-hidden="true" />
 	</button>
-	{#if !readOnly}
+	{#if !readOnly && canReadPipeline}
 		<button
 			class="btn btn-sm {showPipelinePanel
 				? 'preset-tonal-surface'
@@ -1697,7 +1699,9 @@
 						relationships.find((r) => r.id === edge.id)
 					)}
 				onOpenScene={openScene}
-				onRaiseCeiling={() => (showPipelinePanel = true)}
+				onRaiseCeiling={canReadPipeline
+					? () => (showPipelinePanel = true)
+					: undefined}
 				onClose={() => selectNode(null)}
 			/>
 			{#if selectedNode.kind === "cast"}
@@ -1721,7 +1725,7 @@
 		</div>
 	{/if}
 
-	{#if showPipelinePanel}
+	{#if showPipelinePanel && canReadPipeline}
 		<div class="bg-surface-200-800 space-y-2 rounded-lg p-3 text-sm">
 			<div class="flex items-center justify-between gap-2">
 				<p class="font-medium">
@@ -1730,17 +1734,15 @@
 						? `${pipelineOverview.name} · v${pipelineOverview.version}`
 						: "Graph build pipeline"}
 				</p>
-				{#if userCtx?.user?.isAdmin}
-					<a
-						class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
-						href="/admin/pipelines/{encodeURIComponent(
-							GRAPH_PIPELINE_SLUG
-						)}"
-						title="Versions, publish state and run history"
-					>
-						<Icons.Settings2 size={12} /> Manage
-					</a>
-				{/if}
+				<a
+					class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+					href="/admin/pipelines/{encodeURIComponent(
+						GRAPH_PIPELINE_SLUG
+					)}"
+					title="Versions, publish state and run history"
+				>
+					<Icons.Settings2 size={12} /> Manage
+				</a>
 			</div>
 			<PipelineConfigOptions
 				slug={GRAPH_PIPELINE_SLUG}

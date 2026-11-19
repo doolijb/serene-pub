@@ -19,6 +19,9 @@ import { inPlay } from "$lib/shared/sessions/inPlay"
 import { memberAsRead } from "$lib/server/cast/memberAsRead"
 import { memberFormOn } from "$lib/server/state/memberForm"
 import type { SeatChange } from "$lib/server/sessions/seats"
+import { guestSeatSwitchesOf } from "$lib/server/sessions/guestSeats"
+import { forPeople } from "$lib/server/pipelines/runtime/host.types"
+import { GUEST_SEAT_SENTENCES } from "$lib/shared/sessions/guestSeats"
 
 /**
  * 🚧 Whose card a seat is (plan §27 S2; owner ruling 2026-11-05: "Everything
@@ -53,19 +56,27 @@ export const withSeatName = <P extends { name?: string } | null | undefined>(
 ): P => (persona && seatName?.trim() ? { ...persona, name: seatName.trim() } : persona)
 
 /** Thrown with the sentence the caller shows. */
-export class SeatNameRefusal extends Error {}
+export class SeatNameRefusal extends Error {
+	/** `forPeople` marks a message the people in the session can act on; unmarked messages are detail. */
+	constructor(message: string, opts?: { forPeople?: boolean }) {
+		super(message)
+		if (opts?.forPeople) forPeople(this, message)
+	}
+}
 
 /**
  * 🚧 ★6 (owner 2026-11-08): a named seat opens through `seatPlayer`, which mints
  * a card-less member named by it; its refusal reaches the caller in its words.
  */
-async function seatNamed(
+export async function seatNamed(
 	tx: Db,
 	sessionId: number,
 	userId: number,
 	name: string,
 	position: number,
-	changes?: SeatChange[]
+	changes?: SeatChange[],
+	/** The person naming the seat: the member's maker. Null when no person is acting. */
+	createdBy: number | null = null
 ): Promise<number> {
 	try {
 		const { seatPlayer } = await import("$lib/server/sessions/seats")
@@ -75,7 +86,8 @@ async function seatNamed(
 			userId,
 			seatName: name,
 			position,
-			mintCardless: true
+			mintCardless: true,
+			createdBy
 		})
 		changes?.push(...seated.changes)
 		return seated.seatId
@@ -115,12 +127,17 @@ export async function writeSeatName(
 		retireSeatId?: number | null
 		/** 🚧 Collects what the seats written changed (a retired seat is benched, a named one joins); the caller announces them after. */
 		changes?: SeatChange[]
+		/** The person a card-less seat's new member is recorded as made by: the person naming it; absent or null when a run names it. */
+		createdBy?: number | null
 	}
 ): Promise<number | null> {
 	const { sessionId, userId, isOwner } = params
 	const name = params.name?.trim() || null
 	if (params.retireSeatId != null) {
-		if (!name) throw new SeatNameRefusal("A new character needs a name.")
+		if (!name) throw new SeatNameRefusal("A new character needs a name.", { forPeople: true })
+		// 🚧 A guest's new character is bringing their own (owner ruling G3).
+		if (!isOwner && !(await guestSeatSwitchesOf(db, sessionId)).bringOwn)
+			throw new SeatNameRefusal(GUEST_SEAT_SENTENCES.bringOwnOff, { forPeople: true })
 		// Collected inside the transaction, handed on only once it commits.
 		const collected: SeatChange[] = []
 		const seatId = await db.transaction(async (tx) => {
@@ -144,16 +161,16 @@ export async function writeSeatName(
 					)
 				)
 				.limit(1)
-			if (!old || old.removedAt) throw new SeatNameRefusal("That seat is not at this table any more.")
+			if (!old || old.removedAt) throw new SeatNameRefusal("That seat is not at this table any more.", { forPeople: true })
 			if ((old.userId ?? (await seatCardOwner(t, sessionId, old))) !== userId)
-				throw new SeatNameRefusal("Only your own character's seat can make way for a new one.")
+				throw new SeatNameRefusal("Only your own character's seat can make way for a new one.", { forPeople: true })
 			const benched = await setSeatBench(t, {
 				sessionId,
 				kind: "player",
 				seatId: old.id,
 				benched: true
 			})
-			if (!benched.ok) throw new SeatNameRefusal(benched.refusal)
+			if (!benched.ok) throw new SeatNameRefusal(benched.refusal, { forPeople: true })
 			collected.push(...benched.changes)
 			const [last] = await t
 				.select({ position: schema.sessionPersonas.position })
@@ -161,7 +178,7 @@ export async function writeSeatName(
 				.where(eq(schema.sessionPersonas.sessionId, sessionId))
 				.orderBy(desc(schema.sessionPersonas.position))
 				.limit(1)
-			return await seatNamed(t, sessionId, userId, name, (last?.position ?? -1) + 1, collected)
+			return await seatNamed(t, sessionId, userId, name, (last?.position ?? -1) + 1, collected, params.createdBy ?? null)
 		})
 		params.changes?.push(...collected)
 		return seatId
@@ -196,9 +213,9 @@ export async function writeSeatName(
 	let seat: (typeof seats)[number] | undefined
 	if (params.playerSeatId != null) {
 		seat = seats.find((s) => s.id === params.playerSeatId)
-		if (!seat) throw new SeatNameRefusal("That seat is not in this session.")
+		if (!seat) throw new SeatNameRefusal("That seat is not in this session.", { forPeople: true })
 		if (!isOwner && whose(seat) !== userId)
-			throw new SeatNameRefusal("You can only name your own seat.")
+			throw new SeatNameRefusal("You can only name your own seat.", { forPeople: true })
 	} else {
 		// A benched seat is never picked (owner 2026-11-10); naming one by
 		// `playerSeatId` above is a names read and still finds it.
@@ -235,7 +252,10 @@ export async function writeSeatName(
 			)
 			.limit(1)
 		if (!guest?.isPlayer)
-			throw new SeatNameRefusal("Only a player of this session can take a seat.")
+			throw new SeatNameRefusal("Only a player of this session can take a seat.", { forPeople: true })
+		// 🚧 Opening a seat by naming it is bringing your own (owner ruling G3).
+		if (!(await guestSeatSwitchesOf(db, sessionId)).bringOwn)
+			throw new SeatNameRefusal(GUEST_SEAT_SENTENCES.bringOwnOff, { forPeople: true })
 	}
 	const collected: SeatChange[] = []
 	const seatId = await db.transaction(async (tx) => {
@@ -246,7 +266,7 @@ export async function writeSeatName(
 			.where(eq(schema.sessionPersonas.sessionId, sessionId))
 			.orderBy(desc(schema.sessionPersonas.position))
 			.limit(1)
-		return await seatNamed(t, sessionId, userId, name, (last?.position ?? -1) + 1, collected)
+		return await seatNamed(t, sessionId, userId, name, (last?.position ?? -1) + 1, collected, params.createdBy ?? null)
 	})
 	params.changes?.push(...collected)
 	return seatId

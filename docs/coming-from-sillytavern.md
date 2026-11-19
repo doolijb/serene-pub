@@ -53,7 +53,7 @@ The importer is offered to administrators only, and not in the [Android app](./a
 | Context template, story string | [Context template](./context-templates.md) |
 | System prompt | The **System prompt** of a pipeline's [prompt](./pipelines.md#prompts) |
 | Post-history instructions | **Post-history instructions**, on the prompt and on the character card ([where they go](./context-templates.md#the-posthistory-object)) |
-| Author's Note | Story's [**Author's note**](./sessions.md#authors-note): the same note, depth and interval, edited in the session's settings or its own widget. A new note goes at the end, right before the reply (depth 0, where SillyTavern uses 4); an imported chat keeps the depth it had. Story, the Lair and the Guide don't offer one. |
+| Author's Note | Story's [**Author's note**](./sessions.md#authors-note): the same note, depth and interval, edited in the session's settings or its own widget. A new note goes at the end, right before the reply (depth 0, where SillyTavern uses 4); an imported chat keeps the depth it had. Chat, the Lair and the Guide don't offer one. |
 | World Info, lorebook | [Lorebook](./lorebooks.md) entries, plus [places](./lorebook-places.md), [history](./lorebook-time.md) and [cast](./lorebook-cast.md) |
 | Swipes | [Swipes](./sessions.md#regenerate-extend-and-swipe) |
 | Continue | **Extend** |
@@ -103,7 +103,7 @@ A pub starts as just you. Turn on accounts in **Admin › General** and everyone
 
 ### Voices
 
-SillyTavern keeps a per-character voice map in its text-to-speech extension. Serene Pub's counterpart is split in two. A character's card has a **Speech** tab with **How they sound**, a plain description that travels with the card, and a voice picked from the pub's **voicebank**, the named voices an administrator sets up in **Loadouts → Voices**. Turn on **Read replies aloud** in a session's settings to hear it. Exporting a card keeps the description and language; the voice pick is local to the pub and is left out. See [Read aloud](./sessions.md#read-aloud).
+SillyTavern keeps a per-character voice map in its text-to-speech extension. Serene Pub's counterpart is split in two. A character's card has a **Speech** tab with a **Description** of how they sound, in plain words, that travels with the card, and a voice picked from the pub's **voicebank**, the named voices an administrator sets up in **Loadouts → Voices**. Turn on **Read replies aloud** in a session's settings to hear it. Exporting a card keeps the description and language; the voice pick is local to the pub and is left out. See [Read aloud](./sessions.md#read-aloud).
 
 ### Settings live in fewer places
 
@@ -174,7 +174,7 @@ See [Cards that won't import](./characters.md#cards-that-wont-import), or the ch
 Add the service you used in SillyTavern, from the setup wizard's **Choose an AI** screen or the **Connections** view on the rail. KoboldCPP, Ollama, LM Studio or llama.cpp already running on this computer is listed for you in the wizard under **Found on this computer** (in **Connections**, choose **Add › A connection**, then pick the program). OpenRouter, OpenAI, Anthropic and other OpenAI-compatible services take your API key. Then press **Use in Reply** beside the model you want on the connection's **Models** tab, or **Use in…** in the **Models** view, to fill the **Reply** loadout. [Connect a model](./connect-a-model.md) has the details.
 
 :::tip You should see
-The status line at the top of the **Models** view reads **Replies:**, naming the model and its connection.
+The status line at the top of the **Loadouts** view reads **Replies:**, naming the model and its connection.
 :::
 
 :::warning If this didn't work

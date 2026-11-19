@@ -299,7 +299,12 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			// (PLAN-layering §4, 2026-10-20). Rest's apply-or-propose follows
 			// the reckoning's mode (R55, 2026-10-21) — no field.
 			sideCast: false,
-			narratorInterjections: "off"
+			narratorInterjections: "off",
+			// The session-wide speech and sheet-latitude fields, at their declared defaults.
+			speechReadAloud: "off",
+			speechNarratorVoice: "",
+			sessionLanguage: "",
+			ownerSheetLatitude: "all-any"
 		})
 	})
 })

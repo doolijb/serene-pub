@@ -1265,4 +1265,34 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		expect(row?.ownNickname).toBe("")
 	}, 60_000)
 
+	// Owner ruling 2026-11-16 (D37a): the file's format is frozen while export is paused.
+	test("a member's own sheet is not written to the file: the binding carries only the keys it always did", async () => {
+		const { lorebooksCreateHandler } = await import("./lorebooks")
+		const user = await makeUser("lb-sheet-frozen-user")
+		const { lorebook } = await lorebooksCreateHandler.handler(
+			fakeSocket(user.id),
+			{ name: "Frozen Sheet Book" },
+			noopEmit
+		)
+		await insertCastMember(testDb, {
+			lorebookId: lorebook.id,
+			characterId: null,
+			binding: "{{char:1}}",
+			name: "Wren",
+			description: "A tall courier.",
+			personality: "Wary.",
+			alternateGreetings: ["Who goes?"],
+			timbre: { description: "dry and low", settings: { speed: 1.1 } }
+		})
+		const data = JSON.parse(
+			(
+				await dormantExport(fakeSocket(user.id), { id: lorebook.id })
+			).blob.toString("utf-8")
+		)
+		expect(Object.keys(data.extensions.serenepub.bindings[0]).sort()).toEqual(
+			["bindingText", "characterLocalId", "kind", "localId", "personaLocalId"].sort()
+		)
+		expect(JSON.stringify(data)).not.toContain("A tall courier.")
+	}, 60_000)
+
 })

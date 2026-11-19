@@ -167,6 +167,7 @@ export const charactersGeneratePortrait: Handler<
 				count: params.count,
 				style: params.style,
 				userId,
+				reader: socket.user,
 				runId,
 				signal: handle.controller.signal,
 				cancelSignal: () => runRegistry.cancellation(handle),

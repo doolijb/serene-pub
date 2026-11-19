@@ -74,7 +74,7 @@ beforeAll(async () => {
 	const spoken = compile(
 		spec(PROVISIONAL_SLUG, { version: "1.0.0" })
 			.inlet("input", C.userMessage.v1())
-			.oracle("audio", ($) => C.speak.v1({ text: $.input.text }))
+			.oracle("audio", ($) => C.mcpTool.v1({ args: $.input.text }))
 			.build()
 	)
 	await expect(saveDocument(db, spoken, { publish: true })).rejects.toThrow(/R-2/)
@@ -160,7 +160,7 @@ describe("a placed node this build does not run", () => {
 		const unbound = notices.filter((n) => n.kind === UNBOUND_NOTICE_KIND)
 		expect(unbound).toHaveLength(1)
 		expect(unbound[0]!.nodeKey).toBe("audio")
-		expect(unbound[0]!.label).toMatch(/core:oracle\/speak@1/)
+		expect(unbound[0]!.label).toMatch(/core:oracle\/mcp-tool@1/)
 		expect(unbound[0]!.label).toMatch(/declared, not bound/)
 	})
 

@@ -219,9 +219,9 @@ async function makeUser(username: string) {
 	return createTestUser(testDb, username)
 }
 
-function fakeSocket(userId: number) {
+function fakeSocket(userId: number, isAdmin = false) {
 	return {
-		user: { id: userId, isAdmin: false },
+		user: { id: userId, isAdmin },
 		io: { to: () => ({ emit: () => {} }) }
 	} as any
 }
@@ -443,9 +443,14 @@ const festival = (addressee: string) => (ids: Ids): MessageBlock[] => [
 	}
 ]
 
-async function fire(userId: number, params: Record<string, unknown>) {
+/**
+ * Press as `userId`. A write a spec's own blocks refuse is the spec author's
+ * mistake, a halt nobody marked for people: only an administrator reads its
+ * words (`receiptHaltFor`), so those tests press `asAdmin`.
+ */
+async function fire(userId: number, params: Record<string, unknown>, asAdmin = false) {
 	const { sessionsFireActionHandler } = await import("./sessions")
-	return sessionsFireActionHandler.handler(fakeSocket(userId), params as any, noopEmit)
+	return sessionsFireActionHandler.handler(fakeSocket(userId, asAdmin), params as any, noopEmit)
 }
 
 /**
@@ -549,10 +554,14 @@ describe("R-15 · a spec writes a choices block", () => {
 				actions: [{ fn: "vanish", action: "core:spec/nowhere#vanish", label: "Vanish" }]
 			}
 		])
-		const res = await fire(owner.id, {
-			sessionId: session.id,
-			action: `${askId}#${askFn}`
-		})
+		const res = await fire(
+			owner.id,
+			{
+				sessionId: session.id,
+				action: `${askId}#${askFn}`
+			},
+			true
+		)
 		expect(res.error).toMatch(/'core:spec\/nowhere#vanish', which nothing published/)
 	})
 
@@ -564,10 +573,14 @@ describe("R-15 · a spec writes a choices block", () => {
 				actions: [{ fn: "grant-everything", label: "Grant" }]
 			}
 		])
-		const res = await fire(owner.id, {
-			sessionId: session.id,
-			action: `${askId}#${askFn}`
-		})
+		const res = await fire(
+			owner.id,
+			{
+				sessionId: session.id,
+				action: `${askId}#${askFn}`
+			},
+			true
+		)
 		expect(res.error).toMatch(/grant-everything.*declares no action for/)
 	})
 })
@@ -1117,7 +1130,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		)
 		// Parked, and nothing else: no success, no error, no terminal frame —
 		// the run has not ended.
-		expect(ack).toEqual({ sessionId: session.id, action: `${answerId}#${answerFn}`, parked: true })
+		expect(ack).toEqual({ sessionId: session.id, action: `${answerId}#${answerFn}`, parked: true, askedRunId: "parked-press-run" })
 		expect(pushes.filter((p) => p.event === "pipelines:progress" && p.data.done)).toEqual([])
 		expect((await runsOf(session.id)).map((r) => r.specSlug)).toEqual([askId])
 		const [review] = pendingReviewsFor(owner.id)
@@ -1629,10 +1642,14 @@ describe("the review's rulings (2026-09-17)", () => {
 				]
 			}
 		)
-		const res = await fire(owner.id, {
-			sessionId: session.id,
-			action: `${askId}#${askFn}`
-		})
+		const res = await fire(
+			owner.id,
+			{
+				sessionId: session.id,
+				action: `${askId}#${askFn}`
+			},
+			true
+		)
 		expect(res.error).toMatch(/the blocks name 'dup', which '.*' declares no action for/)
 		expect(await lastBlockTree(session.id)).toBeNull()
 	})
@@ -1761,10 +1778,14 @@ describe("the review's rulings (2026-09-17)", () => {
 				]
 			}
 		])
-		const res = await fire(owner.id, {
-			sessionId: session.id,
-			action: `${askId}#${askFn}`
-		})
+		const res = await fire(
+			owner.id,
+			{
+				sessionId: session.id,
+				action: `${askId}#${askFn}`
+			},
+			true
+		)
 		expect(res.error).toMatch(/foreign-grant.*changes something outside the story/)
 		expect(await lastBlockTree(session.id)).toBeNull()
 
@@ -1775,10 +1796,14 @@ describe("the review's rulings (2026-09-17)", () => {
 				actions: [{ fn: "something-else", action: ids.answerAction, label: "Go", choice: "go" }]
 			}
 		])
-		const wrong = await fire(owner.id, {
-			sessionId: session.id,
-			action: `${askId2}#${askFn2}`
-		})
+		const wrong = await fire(
+			owner.id,
+			{
+				sessionId: session.id,
+				action: `${askId2}#${askFn2}`
+			},
+			true
+		)
 		expect(wrong.error).toMatch(/with fn 'something-else', but that action's key is 'wrongfn-answer'/)
 		expect(await lastBlockTree(session.id)).toBeNull()
 	})
@@ -2509,10 +2534,14 @@ describe("F41 · the effects line", () => {
 				.build()
 		)
 		await saveDocument(testDb as any, doc, { publish: true })
-		const res = await fire(owner.id, {
-			sessionId: session.id,
-			action: `${id}#world-ask`
-		})
+		const res = await fire(
+			owner.id,
+			{
+				sessionId: session.id,
+				action: `${id}#world-ask`
+			},
+			true
+		)
 		// L1 (2026-09-17): the refusal now names its one exception, which this
 		// block — addressed to nobody in particular — is not.
 		expect(res.error).toMatch(
@@ -2734,10 +2763,14 @@ describe("F41 · the effects line", () => {
 					.build()
 			)
 			await saveDocument(testDb as any, doc, { publish: true })
-			return fire(owner.id, {
-				sessionId: session.id,
-				action: `${id}#ask-${k}`
-			})
+			return fire(
+				owner.id,
+				{
+					sessionId: session.id,
+					action: `${id}#ask-${k}`
+				},
+				true
+			)
 		}
 		// A character, and "nobody in particular" — on this spec's own
 		// declaration and on another spec's alike.

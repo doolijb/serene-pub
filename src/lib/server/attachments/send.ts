@@ -34,7 +34,7 @@ import {
 	attachmentKindOf
 } from "$lib/shared/attachments/caps"
 import { TRAY_ITEM_GONE, TrayRefusal } from "./tray"
-import type { AttachmentReaders } from "./readers"
+import { KIND_NOT_READ, NO_READING_CALLS, type AttachmentReaders } from "./readers"
 import { mediaPartFor } from "./partData"
 
 export const TRAY_ITEM_STILL_UPLOADING =
@@ -123,10 +123,17 @@ export async function commitTraySend(
 			const kind = attachmentKindOf(mime)
 			if (!kind) throw new TrayRefusal(ATTACHMENT_TYPE_REFUSAL)
 			const verdict = readers.kinds[kind]
-			if (!verdict?.allowed)
-				throw new TrayRefusal(
+			if (!verdict?.allowed) {
+				const refusal = new TrayRefusal(
 					verdict?.reason ?? "This reply can't read that kind of file."
 				)
+				// Only the two verdicts that name nothing of the reply's models are plain.
+				refusal.namesPlumbing =
+					!!verdict?.reason &&
+					verdict.reason !== NO_READING_CALLS(kind) &&
+					verdict.reason !== KIND_NOT_READ(kind)
+				throw refusal
+			}
 			// The tray kept the name the person's file had; the store kept the
 			// one it was first stored under. The store's wins (`mediaPartFor`).
 			parts.push(

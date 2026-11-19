@@ -20,17 +20,17 @@ session.
 
 Open **Admin › Components** (below Plugins). The page has two lists:
 
-- **Your components** — the ones written or imported on this pub. Each row shows its name,
-  its widget id (`authored.<id>:<slug>`), its framework, and an **On / Off** switch. A **Needs
-  review** badge means it asks for something you have not decided on yet (see
-  [Scopes](#switching-it-on-and-reviewing-its-scopes)); **Clone of** names the core widget it
-  started from.
+- **Components** — the ones written or imported on this pub. Each row shows its name,
+  its **Status** (**On**, **Off**, **Draft waiting** and so on), its widget id (`authored.<id>:<slug>`)
+  and its framework. **Needs review** under **Scopes** means it asks for something you have not
+  decided on yet (see [Scopes](#switching-it-on-and-reviewing-its-scopes)); **Clone of** under **Based on** names
+  the core widget it started from. Tick rows to turn them on or off, export or delete them in bulk.
 - **Core's components** — the widgets Serene Pub ships. **View source** shows one as core ships
   it, read only. **Clone** copies it into your list. **Messages** (the conversation and the field you write
   into) is marked **View only**: you can read its source, but it cannot be cloned, because it runs
   with core's own trust.
 
-To start from nothing, pick **Svelte** or **Vanilla** beside **New component**. Svelte is the
+To start from nothing, press **Add component**, leave **Start from** on **Blank**, and pick **Svelte** or **Vanilla** under **Framework**. Svelte is the
 usual choice; Vanilla is plain TypeScript or JavaScript that builds its own elements.
 
 ## Cloning a core widget
@@ -109,7 +109,7 @@ not compile — and a save that does not compile never takes a working widget aw
   to layouts and what **Export** writes.
 - **It does not compile, and the component has compiled before.** Your files are kept as a
   **draft** beside the last save, and nothing else changes: sessions keep running the last
-  save, in place. The list shows **Draft** by its name. The editor opens on the draft, under the
+  save, in place. The list's **Status** reads **Draft waiting**. The editor opens on the draft, under the
   banner _Draft — doesn't compile; sessions keep running the last save_, with the reasons under
   **Problems**. **Compare** (or the **Last save** tab) shows the draft against the last save, one
   file at a time. Fix it and save again — the draft becomes the last save — or press **Revert
@@ -118,7 +118,7 @@ not compile — and a save that does not compile never takes a working widget aw
   either way.
 - **It does not compile, and the component never has** — a new, cloned or imported one with
   problems. There is no last save to keep, so the files are stored as they are; it is not
-  offered to layouts until it compiles. The list shows **Last compile failed** under its name,
+  offered to layouts until it compiles. The list's **Status** reads **Last compile failed**,
   and the editor repeats the reason at the top.
 
 If someone else saved the same component while you had it open, your save is refused rather
@@ -127,8 +127,8 @@ banner too.
 
 ## Switching it on and reviewing its scopes
 
-A component is **off** until you switch it on — **Offered to layouts** in the editor, **On /
-Off** in the list. Off, it is drawn nowhere. In the editor the switch is part of the form, like
+A component is **off** until you switch it on — **Offered to layouts** in the editor, **Turn selected components on**
+in the list. Off, it is drawn nowhere. In the editor the switch is part of the form, like
 the source: it changes when you press **Save**.
 
 Beyond the basics every widget gets, a component asks for what it wants to read, on the
@@ -161,14 +161,14 @@ waiting forever. Core's widgets do this, so a clone of one does too.
 ## Adding it to a session
 
 Once a component is on and compiled, it is offered to every session's layout editor like any
-other widget; a scope you have not reviewed yet is simply not given to it. Open a session, press **Layout** (shown with [advanced controls](./themes-and-settings.md#show-advanced-controls) on), and on the **Arrange** tab
+other widget; a scope you have not reviewed yet is simply not given to it. Open a session, press **Layout** in the header, and on the **Arrange** tab
 drag it from the tray onto a panel or into a gap (see [Session layout](./session-layout.md#arrange)). Its
 settings and style open in the Arrange tab's inspector like every other widget's: a title of your own, and a style.
 
 A component switched on while a session is open appears in that session's tray the next time the
 session is opened.
 
-If the list shows **Not offered** under a component's name, with a reason such as _built for
+If the list's **Status** reads **Not offered**, with a reason such as _built for
 widget protocol 3_, its compiled module was made for a different version of Serene Pub than this
 one. This happens to an imported module. On a pub that can compile, save the component once
 to rebuild it here.

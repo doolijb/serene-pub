@@ -42,6 +42,10 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { connectionSlotValue } from "$lib/shared/connections/slotRef"
+import {
+	plainReplyFailure,
+	REVIEW_REJECTED_REASON
+} from "$lib/server/pipelines/runtime/haltExplanation"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -1226,12 +1230,14 @@ describe("review lands on the save, when somebody turns it on (R-21 (3))", () =>
 			expect(outcome.ok).toBe(false)
 			expect(outcome.receipt!.outcome).toBe("halt")
 			expect(outcome.receipt!.haltReason).toMatch(/rejected at review/)
-			// The placeholder is settled, not left generating, and says why.
+			// The placeholder is settled, not left generating, and its body is the
+			// review sentence, which is for the people in the session.
 			const [row] = (await messagesOf(sessionId)).slice(-1)
 			expect(row!.id).toBe(parked!.id)
 			expect(row!.isGenerating).toBe(false)
 			expect(row!.generationStage).toBeNull()
-			expect((row!.error as any)?.message).toMatch(/rejected at review/)
+			expect((row!.error as any)?.message).toBe(REVIEW_REJECTED_REASON)
+			expect((row!.error as any)?.message).not.toBe(plainReplyFailure())
 		} finally {
 			for (const r of gate.pendingReviewsFor(userId))
 				gate.resolveReview(r.id, userId, "reject")

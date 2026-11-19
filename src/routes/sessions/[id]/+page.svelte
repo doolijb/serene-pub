@@ -92,6 +92,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { sessionViewMount } from "$lib/shared/plugins/sessionViewMount"
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
+	import { withoutStoryStamp } from "$lib/client/components/host/remoteMessages.svelte"
 	import { sessionViewHanded } from "$lib/client/components/frames/sessionViewHanded"
 	import TurnPicker from "$lib/client/components/sessionPage/TurnPicker.svelte"
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
@@ -315,7 +316,8 @@
 			isOwner:
 				sessionUserId !== null && sessionUserId === userCtx.user?.id,
 			generating: data.generating,
-			story: true
+			story: true,
+			waitFor: data.rerunWaitsFor
 		})
 		const retakeAction = actions.extraActionOn("retake")
 		const retakeChip = retakeAction ? actions.extraChip(retakeAction) : null
@@ -325,7 +327,8 @@
 			listedReason: retakeChip?.disabled
 				? (retakeChip.reason ?? null)
 				: null,
-			rewind: data.rewind
+			rewind: data.rewind,
+			waitFor: data.rerunWaitsFor
 		})
 		return strip.shown
 			? JSON.stringify({
@@ -435,7 +438,8 @@
 		draft: () => newMessage,
 		setNewMessage: (content) => (newMessage = content),
 		restoreDraft: (content) => writeDraft(content),
-		userId: () => userCtx.user?.id ?? null
+		userId: () => userCtx.user?.id ?? null,
+		isAdmin: () => !!userCtx.user?.isAdmin
 	})
 	const scenes = createScenesFlow({
 		...base,
@@ -645,6 +649,10 @@
 		characters: () => envelope.characters.current,
 		characterForRef: (ref) => data.characterForRef(ref),
 		isAdmin: () => !!userCtx.user?.isAdmin,
+		isSessionOwner: () =>
+			session != null && session.userId === userCtx.user?.id,
+		// A summary the turn line lists: its Stop goes to `activity:cancel`.
+		isSummary: (id) => data.summaryRuns.some((r) => r.id === id),
 		panelsCtx: () => panelsCtx,
 		viewerId: () => userCtx.user?.id ?? null,
 		// The Author's note widget's Scenario field (PLAN-session-layout-simplify
@@ -721,6 +729,9 @@
 		mergeScene: asks.mergeScene,
 		sceneList: () => scenes.sceneList,
 		ownBookId: () => sessionOwnBookId,
+		sessionBookId: () => sceneBookId,
+		summarizingIntoNotes: () =>
+			sessionLorebookId == null && sessionOwnBookId != null,
 		ungraphedScenes: () => scenes.ungraphedSceneCount,
 		openExtendGraph: () => scenes.openExtendGraph(),
 		noteStoryClock: (own) => data.setStoryClock(own),
@@ -938,7 +949,9 @@
 					session={loadedSessionId !== null
 						? { id: loadedSessionId, name: sessionName }
 						: undefined}
-					messages={session?.sessionMessages ?? []}
+					messages={data.storyTimeline
+						? (session?.sessionMessages ?? [])
+						: (session?.sessionMessages ?? []).map(withoutStoryStamp)}
 					actions={actions.actionVenues}
 					actionDispatch={press.actionDispatch}
 					onAction={press.handleFrameAction}
@@ -968,6 +981,7 @@
 				manager={surfaceManager}
 				{sessionId}
 				{session}
+				storyDates={data.storyTimeline}
 				conversationDossier={envelope.dossier.current}
 				viewerId={userCtx.user?.id ?? null}
 				annex={envelope.annex.current}

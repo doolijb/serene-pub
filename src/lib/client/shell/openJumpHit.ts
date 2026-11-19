@@ -16,6 +16,7 @@
  */
 
 import { goto } from "$app/navigation"
+import { tick } from "svelte"
 import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
 import { DEFAULT_SCOPE } from "$lib/shared/lorebooks/loreRoute"
 import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
@@ -59,13 +60,18 @@ export interface OpenJumpHitOptions {
  */
 export async function openSessionPage(panelsCtx: PanelsCtx, sessionId: number): Promise<void> {
 	if (panelsCtx.isMobileMenuOpen) panelsCtx.isMobileMenuOpen = false
-	if (panelsCtx.mobilePanel) panelsCtx.mobilePanel = null
 	const path = `/sessions/${sessionId}`
 	if (globalThis.location?.pathname === path) {
+		if (panelsCtx.mobilePanel) panelsCtx.mobilePanel = null
 		panelsCtx.fullPageView = null
 		return
 	}
+	// A phone's sheet closes after the navigation, never before: the shell
+	// sends a view opened from its own address Home when it closes while the
+	// address is still that view's, which would race this `goto` to Home.
 	await goto(path)
+	await tick()
+	if (panelsCtx.mobilePanel) panelsCtx.mobilePanel = null
 }
 
 /**

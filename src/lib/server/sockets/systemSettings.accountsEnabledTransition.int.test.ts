@@ -45,13 +45,7 @@ import { releaseDataDir } from "$lib/server/utils/testDb"
 let dataDir: string
 
 beforeAll(async () => {
-	// The mocked "$lib/server/db" module still spreads the *real* module's
-	// other exports (importOriginal) — importing it at all runs its
-	// module-level side effects (opening a real PGlite client, syncing
-	// defaults) against whatever SERENE_PUB_DATA_DIR points at. Must be set
-	// to an isolated temp dir before that first import, same as every other
-	// *.int.test.ts file in this codebase — otherwise it touches the real
-	// dev data directory.
+	// An isolated temp data directory, never the real dev one.
 	dataDir = await fs.mkdtemp(
 		path.join(os.tmpdir(), "serene-pub-accounts-enabled-int-test-")
 	)
@@ -72,10 +66,10 @@ const { getDb, setDb } = vi.hoisted(() => {
 	}
 })
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
+vi.mock("$lib/server/db", async () => {
+	const { testDbModule } = await import("$lib/server/utils/testDb")
 	return {
-		...actual,
+		...testDbModule(),
 		get db() {
 			return getDb()
 		}

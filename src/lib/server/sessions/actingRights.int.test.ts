@@ -33,11 +33,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 vi.mock("$lib/server/embedding/vectorizationQueue", async (importOriginal) => ({
 	...(await importOriginal<object>()),
@@ -291,7 +291,10 @@ describe("the hand-edit judge follows the seater for a character nobody plays", 
 		const owner = await user("hand-owner")
 		const g = await user("hand-g")
 		const h = await user("hand-h")
-		const npc = await card(owner.id, "Gideon")
+		// A card the session owner owns is the owner's sheet whoever plays it (HM1, 2026-11-17), so the
+		// seater's right is read on a card another person owns.
+		const maker = await user("hand-maker")
+		const npc = await card(maker.id, "Gideon")
 		const [s] = await testDb
 			.insert(schema.sessions)
 			.values({
@@ -321,7 +324,7 @@ describe("the hand-edit judge follows the seater for a character nobody plays", 
 			})
 		expect(await ask(g.id)).toBeNull()
 		expect((await ask(h.id))?.cause).toBe("not-theirs")
-		// The card's owner is the session's owner, who may always change it.
+		// The session's owner may always change it.
 		expect(await ask(owner.id)).toBeNull()
 	})
 })

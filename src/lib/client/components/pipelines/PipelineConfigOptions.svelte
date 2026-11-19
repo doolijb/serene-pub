@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from "$lib/client/utils/copyText"
 	import Badge from "$lib/client/components/Badge.svelte"
 	/**
 	 * One pipeline's configuration, rendered from declarations — the body of
@@ -594,10 +595,9 @@
 	 * person, who knows which other prompt or pipeline it belongs in now.
 	 */
 	async function copyArchived(text: string) {
-		try {
-			await navigator.clipboard.writeText(text)
+		if (await copyText(text)) {
 			notify.success({ title: "Copied to the clipboard" })
-		} catch {
+		} else {
 			// A denied clipboard permission is not an error worth a red toast —
 			// the text is on screen and selectable, which is the fallback.
 			notify.error({
@@ -1339,10 +1339,11 @@
 
 			     Prompts are pooled by the STEP that consumes them, but the
 			     server offers only this pipeline's share of the pool (owner
-			     note 37, 2026-10-02, `promptsForPipeline`): rows written for
-			     it, rows shipped for no pipeline in particular, and rows
-			     written for none. A row written for another pipeline is not
-			     offered unless it is the one selected. -->
+			     note 37, 2026-10-02, `promptsOffered`): rows written for
+			     it, minus another call's default of the same pipeline, plus
+			     this call's own default and the one in force. A row that
+			     records no pipeline is offered to administrators only, and a
+			     hidden one too; a switched-off plugin's to nobody. -->
 			{@const promptGroups = [
 				{ key: "usedHere", label: "Used in this pipeline" },
 				{ key: "shipped", label: "Serene Pub ships" },

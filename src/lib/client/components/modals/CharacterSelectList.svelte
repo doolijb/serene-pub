@@ -25,6 +25,11 @@
 			character: Partial<SelectCharacter> & { id: number }
 		) => void
 		onCreateNew?: () => void
+		/** Cards another person shared: listed last, one press each. */
+		sharedCards?: (Partial<SelectCharacter> & { id: number })[]
+		onSelectShared?: (
+			character: Partial<SelectCharacter> & { id: number }
+		) => void
 		onMultiSelect?: (ids: number[], castMemberIds: number[]) => void
 		onOpenChange: (e: { open: boolean }) => void
 	}
@@ -40,6 +45,8 @@
 		search,
 		onSelect,
 		onCreateNew,
+		sharedCards = [],
+		onSelectShared,
 		onMultiSelect,
 		onOpenChange
 	}: Props = $props()
@@ -112,8 +119,13 @@
 		)
 		return filtered.filter((c) => !merged.has(c.id))
 	})
+	let filteredShared = $derived(
+		sharedCards.filter((c) => pickRowMatches(c, search))
+	)
 	/** The book's group stands only when it has someone to offer. */
-	const grouped = $derived(castEntries.length > 0)
+	const grouped = $derived(
+		castEntries.length > 0 || filteredShared.length > 0
+	)
 
 	const total = $derived(picked.length + pickedMembers.length)
 	const atLimit = $derived(selectedLimit != null && total >= selectedLimit)
@@ -164,7 +176,7 @@
 			: `Room for ${selectedLimit} more.`}
 	</p>
 {/if}
-{#if otherCards.length === 0 && filteredCast.length === 0}
+{#if otherCards.length === 0 && filteredCast.length === 0 && filteredShared.length === 0}
 	<EmptyState
 		icon={Icons.Users}
 		message={emptyMessage}
@@ -221,6 +233,17 @@
 			</li>
 		{/each}
 	{/snippet}
+	{#snippet sharedRows()}
+		{#each filteredShared as c (`shared:${c.id}`)}
+			<li>
+				<CharacterPickRow
+					character={c}
+					kind="button"
+					onchange={() => onSelectShared?.(c)}
+				/>
+			</li>
+		{/each}
+	{/snippet}
 	{#if !grouped}
 		<ul
 			class="flex min-h-0 flex-col gap-1 overflow-y-auto pr-2"
@@ -243,6 +266,16 @@
 				</p>
 				<ul class="flex flex-col gap-1" aria-label="Characters">
 					{@render cardRows()}
+				</ul>
+			{/if}
+			{#if filteredShared.length > 0}
+				<ListGroupLabel label="Shared with you" />
+				<p class="text-surface-600-400 px-3 pb-1 text-xs">
+					Picking one puts a copy in this session; the original stays as
+					it is.
+				</p>
+				<ul class="flex flex-col gap-1" aria-label="Shared characters">
+					{@render sharedRows()}
 				</ul>
 			{/if}
 		</div>

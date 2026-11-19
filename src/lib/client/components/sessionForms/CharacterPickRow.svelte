@@ -1,6 +1,8 @@
 <script lang="ts" module>
+	import type { MaybeSharedRow } from "$lib/shared/utils/sharedRows"
+
 	/** A `characters:list` row, or the subset a select dialog is handed. */
-	type Row = Partial<SelectCharacter> & { id: number }
+	type Row = Partial<SelectCharacter> & MaybeSharedRow & { id: number }
 
 	type RowTag = { name: string; colorPreset?: string }
 
@@ -60,6 +62,7 @@
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "../Avatar.svelte"
 	import { characterSummary } from "$lib/shared/characters/characterSummary"
+	import { sharedFromLine } from "$lib/shared/utils/sharedRows"
 
 	interface Props {
 		character: Row
@@ -98,7 +101,8 @@
 		[
 			character.isFavorite && `${uid}-favorite`,
 			character.isPersona && `${uid}-persona`,
-			character.description && `${uid}-description`,
+			(character.isSharedWithMe || character.description) &&
+				`${uid}-description`,
 			showTags && `${uid}-tags`
 		]
 			.filter(Boolean)
@@ -142,7 +146,14 @@
 				</span>
 			{/if}
 		</span>
-		{#if character.description}
+		{#if character.isSharedWithMe}
+			<span
+				id="{uid}-description"
+				class="text-surface-600-400 block truncate text-xs"
+			>
+				{sharedFromLine(character)}
+			</span>
+		{:else if character.description}
 			<span
 				id="{uid}-description"
 				class="text-surface-600-400 block truncate text-xs"

@@ -22,7 +22,7 @@
  * dispatch path — never in anything a binding can see (F18).
  */
 
-import { and, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	S,
@@ -45,6 +45,16 @@ import {
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { completionTemplatesByKey } from "$lib/server/connections/completionTemplates"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import {
+	defaultSeedKeysOf,
+	defaultTemplateAmong
+} from "$lib/server/pipelines/boot/seedVariableTemplates"
+import {
+	layoutAmongByReference,
+	layoutOfRow,
+	pubLayoutAmong
+} from "$lib/server/pipelines/entities/variableTemplates"
+import { layoutOfValueRow } from "$lib/server/pipelines/registrations/values"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
 import {
 	declarations,
@@ -57,9 +67,10 @@ import { midSystemFor } from "$lib/shared/connectionAdapters/midSystem"
 import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 import { unreadSlotsOf } from "$lib/server/pipelines/boot/unreadAllowList"
 import { isHeldConnectionSlot } from "$lib/server/pipelines/config/heldSlots"
-import type {
-	LayoutReason,
-	ReferencedLayout
+import {
+	referencedLayoutFrom,
+	type LayoutReason,
+	type ReferencedLayout
 } from "$lib/server/pipelines/entities/variableLayouts"
 
 /**
@@ -819,7 +830,8 @@ async function applyPipelineLayer(
 	)
 
 	/**
-	 * A layout reference becomes the template itself.
+	 * A layout reference becomes the template itself; the rule (a dangling or
+	 * wrong-variable pick is dropped) lives in `registrations/values.ts`.
 	 *
 	 * Returns undefined for a dangling id, which `push` then drops — the render
 	 * path falls through to its in-code default and still emits today's bytes.
@@ -829,18 +841,10 @@ async function applyPipelineLayer(
 	 * resolution by variable (preset / pub / default), which set their own.
 	 */
 	const derefLayout = async (value: unknown, variableId?: string) => {
-		if (typeof value !== "number") return undefined
-		const { resolveVariableTemplate } = await import(
-			"$lib/server/pipelines/entities/variableTemplates"
+		const { layoutOfValue } = await import(
+			"$lib/server/pipelines/registrations/values"
 		)
-		const row = await resolveVariableTemplate(db, value)
-		if (!row) return undefined
-		// A row written for a different variable than the key renders is a
-		// stale pick — the spec's `renders` moved the key to another variable
-		// since it was chosen (owner ruling 2026-10-13). Dropped like a dangle:
-		// the key's own floor renders, never a layout for some other shape.
-		if (variableId && row.variableId !== variableId) return undefined
-		return row
+		return layoutOfValue(db, value, variableId)
 	}
 
 	/**
@@ -883,6 +887,7 @@ async function applyPipelineLayer(
 	 * `derefLayout` next door had it right the whole time — it returns the
 	 * resolved object — which is why the same defect never reached layouts.
 	 *
+	 * The rule lives in `registrations/values.ts` (`templateOfValue`).
 	 * Returns undefined for a dangling id, which `pushTemplate` then drops
 	 * whole. Losing a customization is the right cost here; losing the prompt
 	 * is not.
@@ -891,29 +896,14 @@ async function applyPipelineLayer(
 	 * may ship a template inline — `p.template('scenePrompt', { source, engine })`
 	 * — and `ensureDefaultConfig` prefers a preset value over the reference it
 	 * would otherwise resolve, so an inline template DISPLACES that reference.
-	 * Accepting only a number here therefore drops the pair whole and leaves the
+	 * Accepting only a number therefore drops the pair whole and leaves the
 	 * node with no template at all, which assemble answers with a halt.
 	 */
 	const derefTemplate = async (value: unknown) => {
-		if (value && typeof value === "object" && !Array.isArray(value)) {
-			const inline = value as { source?: unknown; engine?: unknown }
-			if (typeof inline.source !== "string") return undefined
-			const { CORE_TEMPLATE_ENGINE } = await import(
-				"$lib/server/pipelines/prompt/renderers"
-			)
-			return {
-				source: inline.source,
-				engine:
-					typeof inline.engine === "string"
-						? inline.engine
-						: CORE_TEMPLATE_ENGINE
-			}
-		}
-		if (typeof value !== "number") return undefined
-		const { resolveContextTemplate } = await import(
-			"$lib/server/pipelines/entities/contextTemplates"
+		const { templateOfValue } = await import(
+			"$lib/server/pipelines/registrations/values"
 		)
-		return (await resolveContextTemplate(db, value)) ?? undefined
+		return templateOfValue(db, value)
 	}
 
 	/**
@@ -963,9 +953,14 @@ async function applyPipelineLayer(
 	const { shippedConfigValues, shippedConfigValuesOf } = await import(
 		"$lib/server/pipelines/config/named"
 	)
-	const { registrationValueLayers, addressedValues } = await import(
-		"$lib/server/pipelines/registrations/values"
-	)
+	const { registrationValueLayers, addressedValues, readStoredValue, settingLocksOf } =
+		await import("$lib/server/pipelines/registrations/values")
+	const kinds = {
+		promptSlots,
+		templateSlots,
+		layoutSlots: variableSlots,
+		layoutVariables: variableAt
+	}
 	/** One layer's values by address, every reference dereferenced as a config's was. */
 	const pushValues = async (
 		scopeKind: OverrideRow["scopeKind"],
@@ -974,33 +969,23 @@ async function applyPipelineLayer(
 	) => {
 		for (const [key, value] of values) {
 			const [nodeKey, slot, path = ""] = key.split("\u0000") as [string, string, string?]
-			if (value === undefined || value === null) continue
-			if (promptSlots.has(addressOf(nodeKey, slot))) {
+			const read = await readStoredValue(db, kinds, { nodeKey, slot, path }, value)
+			if (!read) continue
+			if (read.kind === "prompt") {
 				// A reference. The fields it names become individual paths, so
 				// per-path resolution still works above it — someone overriding
 				// one field does not pin the rest of the prompt.
-				if (typeof value !== "number" && !(typeof value === "string" && /^\d+$/.test(value))) continue
-				const fields = await resolvePromptFields(db, Number(value))
-				for (const [field, text] of Object.entries(fields))
+				for (const [field, text] of Object.entries(read.fields))
 					push(scopeKind, scopeId, nodeKey, slot, field, text)
-				continue
-			}
-			if (templateSlots.has(addressOf(nodeKey, slot))) {
-				await pushTemplate(scopeKind, scopeId, nodeKey, slot, value)
-				continue
-			}
-			if (variableSlots.has(addressOf(nodeKey, slot))) {
-				push(
-					scopeKind,
-					scopeId,
-					nodeKey,
-					slot,
-					path,
-					await derefLeftover(value, variableOf(nodeKey, slot, path))
-				)
-				continue
-			}
-			push(scopeKind, scopeId, nodeKey, slot, path, value)
+			} else if (read.kind === "template") {
+				push(scopeKind, scopeId, nodeKey, slot, "source", read.template.source)
+				push(scopeKind, scopeId, nodeKey, slot, "engine", read.template.engine)
+			} else if (read.kind === "layout") {
+				push(scopeKind, scopeId, nodeKey, slot, path, {
+					...read.layout,
+					reason: "leftover" as const
+				})
+			} else push(scopeKind, scopeId, nodeKey, slot, path, read.value)
 		}
 	}
 	/** A layer's registration values by address, a seed reference resolved to its row. */
@@ -1022,8 +1007,20 @@ async function applyPipelineLayer(
 		sessionId: scope.sessionId,
 		registrationKey: scope.registrationKey
 	})
-	await pushValues("session", scope.sessionId, await resolvedLayer(valueLayers.session))
-	await pushValues("preset", undefined, await resolvedLayer(valueLayers.preset))
+	// A layer above the session's lock (`settingLocksOf`) hides what is below it.
+	const locks = settingLocksOf(valueLayers, allDecls)
+	const unlocked = (values: Map<string, unknown>, hides: (k: string) => boolean) =>
+		new Map([...values].filter(([k]) => !hides(k)))
+	await pushValues(
+		"session",
+		scope.sessionId,
+		unlocked(await resolvedLayer(valueLayers.session), (k) => locks.has(k))
+	)
+	await pushValues(
+		"preset",
+		undefined,
+		unlocked(await resolvedLayer(valueLayers.preset), (k) => locks.get(k)?.layer === "genre")
+	)
 	await pushValues("genre", undefined, await resolvedLayer(valueLayers.genre))
 	// 🚧 R50: the pipeline's instance values — under the genre's defaults
 	// (pushed after them at the same layer: the first match at a layer wins),
@@ -1068,11 +1065,14 @@ async function applyPipelineLayer(
 		.from(schema.pipelineNodeOverrides)
 		.where(eq(schema.pipelineNodeOverrides.specId, spec.id))
 
-	// Session rows are the only override scope left (ruled 2026-08-24) — the
-	// instance's tuning lives in the selected config, projected above.
+	// ⏳ Session-scope override rows are leftovers the boot fold
+	// (`pipelines/boot/sessionOverrideFold.ts`) could not move into the session's
+	// registration values; they are read after those, so a registration value
+	// wins at its address. Connection rows are never read.
 	for (const o of rows as any[]) {
 		if (o.scopeKind !== "session" || o.scopeId !== scope.sessionId) continue
 		if (connectionSlots.has(addressOf(o.nodeKey, o.slot))) continue
+		if (locks.has(`${o.nodeKey}\u0000${o.slot}\u0000${o.path ?? ""}`)) continue
 		const scopeKind: OverrideRow["scopeKind"] = "session"
 		const scopeId = scope.sessionId
 
@@ -1252,11 +1252,9 @@ async function applyPipelineLayer(
 	// declared upstream (typed templates P2) — the resolved keys are how
 	// Assemble learns which bands to render at the top level.
 	if (variableKeys.length) {
-		const { defaultVariableTemplateFor } = await import(
-			"$lib/server/pipelines/boot/seedVariableTemplates"
+		const { presetVariableLayoutsOf } = await import(
+			"$lib/server/pipelines/entities/variableTemplates"
 		)
-		const { pubLayoutOf, layoutByReference, presetVariableLayoutsOf } =
-			await import("$lib/server/pipelines/entities/variableTemplates")
 		const { declaredVariableLayouts } = await import(
 			"$lib/server/pipelines/config/named"
 		)
@@ -1275,6 +1273,16 @@ async function applyPipelineLayer(
 			spec.slug,
 			spec.activeVersionId,
 			variableKeys
+		)
+		// One read of the layout rows for every lookup below (this build's only).
+		const { isAutomaticRow } = await import(
+			"$lib/server/pipelines/config/variableLayoutsView"
+		)
+		const batch = await readVariableLayoutRows(db, [
+			...new Set(variableKeys.map((k) => k.variableId))
+		])
+		const lookups = variableLayoutLookups(batch.rows, (row, V) =>
+			isAutomaticRow(row, getVariable(V))
 		)
 		// Per variable, not per key: a layout is the same row wherever it renders.
 		const cache = new Map<string, Awaited<ReturnType<typeof derefLayout>>>()
@@ -1297,27 +1305,16 @@ async function applyPipelineLayer(
 			  }
 			| undefined
 		>()
-		const isAutomatic = async (V: string, id: number) => {
-			const { isAutomaticRow } = await import(
-				"$lib/server/pipelines/config/variableLayoutsView"
-			)
-			const [full] = await db
-				.select()
-				.from(schema.pipelineVariableTemplates)
-				.where(eq(schema.pipelineVariableTemplates.id, id))
-				.limit(1)
-			return !!full && isAutomaticRow(full, getVariable(V))
-		}
 		const onceDefault = async (V: string) => {
 			if (!defaults.has(V)) {
-				const id = await defaultVariableTemplateFor(db, V)
-				const row = id == null ? undefined : await derefLayout(id, V)
+				const id = lookups.defaultFor(V)
+				const row = id == null ? undefined : lookups.layoutOf(id, V)
 				defaults.set(
 					V,
 					row
 						? {
 								row,
-								automatic: await isAutomatic(V, id as number)
+								automatic: lookups.automatic(V, id as number)
 							}
 						: undefined
 				)
@@ -1365,15 +1362,11 @@ async function applyPipelineLayer(
 				...variableLayoutCalls(engine as string, o.value, CONTEXT_TEMPLATE_CHECK)
 			)
 		}
-		// By variable, through the lookup the template preview shares.
-		const { referencedLayoutOf } = await import(
-			"$lib/server/pipelines/entities/variableLayouts"
-		)
 		const referenced = new Map<string, ReferencedLayout | undefined>()
 		const onceReferenced = async (reference: string, V: string) => {
 			const at = `${reference}\u0000${V}`
 			if (!referenced.has(at))
-				referenced.set(at, await referencedLayoutOf(db, V, reference))
+				referenced.set(at, lookups.referenced(V, reference))
 			return referenced.get(at)
 		}
 		for (const k of variableKeys) {
@@ -1396,14 +1389,14 @@ async function applyPipelineLayer(
 			const withReferences = namedRefs.length ? { references } : {}
 			let row = await once("preset", V, async () => {
 				const ref = presetLayouts[V]
-				const id = ref ? await layoutByReference(db, V, ref) : null
-				return id == null ? undefined : derefLayout(id, V)
+				const id = ref ? await lookups.byReference(V, ref) : null
+				return id == null ? undefined : lookups.layoutOf(id, V)
 			})
 			let reason: LayoutReason = "preset"
 			if (!row) {
 				const pub = await once("pub", V, async () => {
-					const id = await pubLayoutOf(db, V)
-					return id == null ? undefined : derefLayout(id, V)
+					const id = lookups.pub(V)
+					return id == null ? undefined : lookups.layoutOf(id, V)
 				})
 				row = pub
 				reason = "pub"
@@ -1412,7 +1405,7 @@ async function applyPipelineLayer(
 				const named = authored.get(
 					`${addressOf(k.nodeKey, k.slot)}\u0000${k.path}`
 				)
-				row = named != null ? await derefLayout(named, V) : undefined
+				row = named != null ? lookups.layoutOf(named, V) : undefined
 				if (row) reason = "authored"
 				else {
 					const own = await onceDefault(V)
@@ -1566,4 +1559,70 @@ async function connectionReads(
 		out.set(c.id, { reads, byModel })
 	}
 	return out
+}
+
+/**
+ * The layout rows one build reads, once: every row of the given variables, plus
+ * the seed rows `defaultVariableTemplateFor` looks up by key (`defaultSeedKeysOf`:
+ * the variable's speech layout, its shipped default) — which may belong to
+ * another variable. Ordered by id, as the fallback of
+ * `defaultVariableTemplateFor` reads them.
+ * Lives for one build; never kept across builds.
+ */
+export async function readVariableLayoutRows(db: Db, variableIds: string[]) {
+	const seedKeys = variableIds.flatMap(defaultSeedKeysOf)
+	const t = schema.pipelineVariableTemplates
+	const rows = await db
+		.select()
+		.from(t)
+		.where(
+			seedKeys.length
+				? or(inArray(t.variableId, variableIds), inArray(t.seedKey, seedKeys))
+				: inArray(t.variableId, variableIds)
+		)
+		.orderBy(asc(t.id))
+	return { rows }
+}
+
+/**
+ * The layout lookups of `buildWorld`'s variable block, over one read's rows
+ * (`readVariableLayoutRows`). Each is the pure function the database helper
+ * calls over its own rows, for the variables the rows were read for:
+ *  - `pub` — `pubLayoutAmong` (`pubLayoutOf`);
+ *  - `byReference` — `layoutAmongByReference` (`layoutByReference`);
+ *  - `defaultFor` — `defaultTemplateAmong` (`defaultVariableTemplateFor`);
+ *  - `layoutOf` — `layoutOfRow` then `layoutOfValueRow` (`layoutOfValue` over
+ *    `resolveVariableTemplate`);
+ *  - `automatic` — the `isAutomaticRow` verdict on a row;
+ *  - `referenced` — `referencedLayoutFrom` (`referencedLayoutOf`).
+ */
+export function variableLayoutLookups(
+	rows: Array<typeof schema.pipelineVariableTemplates.$inferSelect>,
+	automaticOf: (
+		row: typeof schema.pipelineVariableTemplates.$inferSelect,
+		V: string
+	) => boolean
+) {
+	const byId = new Map(rows.map((r) => [r.id, r]))
+	const byReference = (V: string, ref: string): number | null =>
+		layoutAmongByReference(rows, V, ref)
+	const layoutOf = (id: unknown, V: string) => {
+		const row = typeof id === "number" ? byId.get(id) : undefined
+		return layoutOfValueRow(id, row ? layoutOfRow(row) : null, V)
+	}
+	return {
+		byReference,
+		pub: (V: string): number | null => pubLayoutAmong(rows, V),
+		layoutOf,
+		defaultFor: (V: string): number | null => defaultTemplateAmong(rows, V),
+		automatic: (V: string, id: number): boolean => {
+			const row = byId.get(id)
+			return !!row && automaticOf(row, V)
+		},
+		referenced: (V: string, reference: string): ReferencedLayout | undefined => {
+			const id = byReference(V, reference)
+			const row = id == null ? undefined : byId.get(id)
+			return referencedLayoutFrom(row ? layoutOfRow(row) : null, V)
+		}
+	}
 }

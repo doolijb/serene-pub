@@ -153,7 +153,8 @@ export async function seedNextChapter(
 				sessionId,
 				userId,
 				isOwner: true,
-				name: old.seatName
+				name: old.seatName,
+				createdBy: userId
 			})
 			if (seatId !== null && old.portraitMediaId != null)
 				await db

@@ -60,7 +60,8 @@
 		 */
 		lockedReason?: (edge: GraphEdge) => string | null
 		onOpenScene: (sceneId: number) => void
-		onRaiseCeiling: () => void
+		/** Given only to someone who may open the pipeline's settings. */
+		onRaiseCeiling?: () => void
 		onClose: () => void
 	}
 
@@ -275,10 +276,13 @@
 
 	{#if ceiling}
 		<p class="text-surface-600-400 text-xs" data-node-ceiling>
-			{ceiling} ·
-			<button type="button" class="anchor" onclick={onRaiseCeiling}>
-				Raise it
-			</button>
+			{ceiling}
+			{#if onRaiseCeiling}
+				·
+				<button type="button" class="anchor" onclick={onRaiseCeiling}>
+					Raise it
+				</button>
+			{/if}
 		</p>
 	{/if}
 

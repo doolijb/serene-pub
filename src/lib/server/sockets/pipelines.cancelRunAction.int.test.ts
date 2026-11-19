@@ -251,7 +251,7 @@ describe("pipelines:cancelRun on an action with no row", () => {
 	}, 60_000)
 })
 
-describe("pipelines:cancelRun: any member stops a waiting reply, nothing else", () => {
+describe("pipelines:cancelRun: any member stops a waiting reply, an action or a routine", () => {
 	async function room(tag: string) {
 		const { user: owner, session } = await makeSession(`car-${tag}-owner`)
 		const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -283,10 +283,10 @@ describe("pipelines:cancelRun: any member stops a waiting reply, nothing else", 
 		runRegistry.finish("run-car-reply")
 	}, 60_000)
 
-	test("a guest cannot stop a routine, a maintenance run or an action", async () => {
-		const { owner, guest, session, runRegistry } = await room("other")
-		for (const kind of ["routine", "maintenance", "action"] as const) {
-			const runId = `run-car-other-${kind}`
+	test("a guest stops the owner's action and routine runs", async () => {
+		const { owner, guest, session, runRegistry } = await room("member")
+		for (const kind of ["action", "routine"] as const) {
+			const runId = `run-car-member-${kind}`
 			const handle = runRegistry.start({
 				runId,
 				userId: owner.id,
@@ -294,13 +294,40 @@ describe("pipelines:cancelRun: any member stops a waiting reply, nothing else", 
 				kind
 			})
 			expect(await cancelRun(guest.id, runId)).toEqual({
-				ok: false,
-				found: true,
-				error: "Not your run."
+				ok: true,
+				found: true
 			})
-			expect(handle.controller.signal.aborted).toBe(false)
+			expect(handle.controller.signal.aborted).toBe(true)
 			runRegistry.finish(runId)
 		}
+	}, 60_000)
+
+	test("a guest cannot stop a maintenance run; the owner can", async () => {
+		const { owner, guest, session, runRegistry } = await room("other")
+		const runId = "run-car-other-maintenance"
+		const handle = runRegistry.start({
+			runId,
+			userId: guest.id,
+			sessionId: session.id,
+			kind: "maintenance"
+		})
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const schema = await import("$lib/server/db/schema")
+		const second = await createTestUser(testDb, "car-other-second")
+		await testDb
+			.insert(schema.sessionGuests)
+			.values({ sessionId: session.id, userId: second.id })
+		expect(await cancelRun(second.id, runId)).toEqual({
+			ok: false,
+			found: true,
+			error: "Not your run."
+		})
+		expect(handle.controller.signal.aborted).toBe(false)
+		expect(await cancelRun(owner.id, runId)).toEqual({
+			ok: true,
+			found: true
+		})
+		runRegistry.finish(runId)
 	}, 60_000)
 
 	test("the owner stops another person's routine run", async () => {

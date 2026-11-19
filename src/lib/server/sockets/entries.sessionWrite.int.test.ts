@@ -178,6 +178,105 @@ describe("entries:create from a session writes on the session's line", () => {
 		expect([entry.year, entry.month, entry.day]).toEqual([1, 6, 2])
 	})
 
+	// "Today" is injected: only Date is faked, so the DB and timers run for real.
+	const TODAY = new Date("2026-06-15T12:00:00Z")
+	const NO_DATE_SENTENCE =
+		"This story has no date yet. Give this history entry a year, or set the story clock in the lorebook's Book settings first."
+
+	async function bareBook(label: string, calendar?: unknown) {
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const owner = await createTestUser(testDb, `session-write-${label}-${++seq}`)
+		const [book] = await testDb
+			.insert(schema.lorebooks)
+			.values({
+				name: `${label} ${seq}`,
+				userId: owner.id,
+				...(calendar ? { storyCalendar: calendar as any } : {})
+			})
+			.returning()
+		const [s] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: owner.id,
+				name: label,
+				lorebookId: book.id,
+				isGroup: false
+			} as any)
+			.returning()
+		return { owner, book, s }
+	}
+
+	test("a session whose story has no now and a line with no present dates the history entry today", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] })
+		vi.setSystemTime(TODAY)
+		try {
+			const { owner, book, s } = await bareBook("nodate")
+			const { entry } = await create(owner.id, {
+				entry: blankHistory(book.id),
+				sessionId: s.id
+			})
+			expect([entry.year, entry.month, entry.day]).toEqual([2026, 6, 15])
+		} finally {
+			vi.useRealTimers()
+		}
+	}, 60_000)
+
+	test("...but when today does not land on the book's calendar it is refused with the sentence, and nothing is written", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] })
+		vi.setSystemTime(TODAY)
+		try {
+			const { owner, book, s } = await bareBook("nolanding", {
+				months: [{ name: "Only", days: 10 }],
+				yearLabel: "Year"
+			})
+			await expect(
+				create(owner.id, { entry: blankHistory(book.id), sessionId: s.id })
+			).rejects.toThrow(NO_DATE_SENTENCE)
+			expect(await mainHistoryCount(book.id)).toBe(0)
+		} finally {
+			vi.useRealTimers()
+		}
+	}, 60_000)
+
+	test("a history entry with no year and no session is refused on a line with a present, never dated Year 1", async () => {
+		const w = await seedBook()
+		const before = await mainHistoryCount(w.book.id)
+
+		await expect(
+			create(w.owner.id, { entry: blankHistory(w.book.id) })
+		).rejects.toThrow("A history entry needs a year.")
+		expect(await mainHistoryCount(w.book.id)).toBe(before)
+	}, 60_000)
+
+	test("no session, no present on the line: the history entry is dated today", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] })
+		vi.setSystemTime(TODAY)
+		try {
+			const { owner, book } = await bareBook("nosession")
+			const { entry } = await create(owner.id, { entry: blankHistory(book.id) })
+			expect([entry.year, entry.month, entry.day]).toEqual([2026, 6, 15])
+		} finally {
+			vi.useRealTimers()
+		}
+	}, 60_000)
+
+	test("no session, no present, today does not land: refused with the year sentence", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] })
+		vi.setSystemTime(TODAY)
+		try {
+			const { owner, book } = await bareBook("nosessionnoland", {
+				months: [{ name: "Only", days: 10 }],
+				yearLabel: "Year"
+			})
+			await expect(
+				create(owner.id, { entry: blankHistory(book.id) })
+			).rejects.toThrow("A history entry needs a year.")
+			expect(await mainHistoryCount(book.id)).toBe(0)
+		} finally {
+			vi.useRealTimers()
+		}
+	}, 60_000)
+
 	test("world and character lore saved from a branch session carry its line", async () => {
 		const w = await seedBook()
 		const s = await w.session(w.north.id, { year: 4 })

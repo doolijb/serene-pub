@@ -8,6 +8,7 @@ import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import {
 	actingPersonFor,
+	membersMayStopRun,
 	personMay,
 	type ActingPerson,
 	type PersonOp,
@@ -94,38 +95,73 @@ describe("personMay matrix", () => {
 				}, 60_000)
 })
 
-describe("reply-run: a waiting reply is the room's to stop", () => {
+describe("run: who may stop a run", () => {
 	const sid = () => (things.session as { id: number }).id
 	const runs = async () => await import("$lib/server/pipelines/runtime/runRegistry")
+	const notYours = { ok: false, reason: "Not your run." }
+	const stop = (who: Who, runId: string, op: PersonOp = "write") =>
+		personMay(db, people[who], op, { kind: "run", runId })
 
-	it("any session member may write; a stranger finds no session", async () => {
+	it("the starter always; an administrator any run, line-bound included", async () => {
 		const r = await runs()
 		r._reset()
-		r.start({ runId: "ap-reply", userId: ids.owner, sessionId: sid(), kind: "reply" })
-		const thing: PersonThing = { kind: "reply-run", sessionId: sid(), runId: "ap-reply" }
-		expect((await personMay(db, people.guest, "write", thing)).ok).toBe(true)
-		expect((await personMay(db, people.owner, "write", thing)).ok).toBe(true)
-		expect(await personMay(db, people.stranger, "write", thing)).toEqual({
-			ok: false,
-			reason: "Session not found."
-		})
-		expect((await personMay(db, people.guest, "delete", thing)).ok).toBe(false)
+		r.start({ runId: "ap-mine", userId: ids.guest, sessionId: sid(), kind: "maintenance", lineBound: true })
+		r.start({ runId: "ap-away", userId: ids.stranger, sessionId: sid(), kind: "maintenance" })
+		expect((await stop("guest", "ap-mine")).ok).toBe(true)
+		expect((await stop("guest", "ap-mine", "delete")).ok).toBe(true)
+		expect((await stop("stranger", "ap-away")).ok).toBe(true)
+		for (const kind of ["reply", "action", "routine", "maintenance"] as const)
+			for (const lineBound of [false, true]) {
+				const runId = `ap-admin-${kind}-${lineBound}`
+				r.start({ runId, userId: ids.owner, sessionId: sid(), kind, ...(lineBound ? { lineBound: true as const } : {}) })
+				expect((await stop("admin", runId)).ok, runId).toBe(true)
+			}
 		r._reset()
 	}, 60_000)
 
-	it("a mismatched session, an action run, a line-bound run or no run is not a reply", async () => {
+	it("a member stops a reply, action or routine; not a maintenance run; the owner does", async () => {
 		const r = await runs()
 		r._reset()
-		r.start({ runId: "ap-action", userId: ids.owner, sessionId: sid(), kind: "action" })
-		r.start({ runId: "ap-line", userId: ids.owner, sessionId: sid(), kind: "reply", lineBound: true })
-		r.start({ runId: "ap-elsewhere", userId: ids.owner, sessionId: sid() + 999, kind: "reply" })
-		const notYours = { ok: false, reason: "Not your run." }
-		for (const runId of ["ap-action", "ap-line", "ap-elsewhere", "ap-gone"])
-			expect(
-				await personMay(db, people.guest, "write", { kind: "reply-run", sessionId: sid(), runId })
-			).toEqual(notYours)
+		for (const kind of ["reply", "action", "routine", "maintenance"] as const)
+			r.start({ runId: `ap-${kind}`, userId: ids.owner, sessionId: sid(), kind })
+		for (const kind of ["reply", "action", "routine"])
+			expect((await stop("guest", `ap-${kind}`)).ok, kind).toBe(true)
+		expect(await stop("guest", "ap-maintenance")).toEqual(notYours)
+		expect((await stop("guest", "ap-maintenance", "delete"))).toEqual(notYours)
+		expect((await stop("owner", "ap-maintenance")).ok).toBe(true)
+		expect((await stop("guest", "ap-reply", "read")).ok).toBe(true)
 		r._reset()
 	}, 60_000)
+
+	it("the owner cannot stop another person's line-bound run; its starter and an administrator can", async () => {
+		const r = await runs()
+		r._reset()
+		r.start({ runId: "ap-line", userId: ids.guest, sessionId: sid(), kind: "maintenance", lineBound: true })
+		r.start({ runId: "ap-line-reply", userId: ids.guest, sessionId: sid(), kind: "reply", lineBound: true })
+		for (const runId of ["ap-line", "ap-line-reply"]) {
+			expect(await stop("owner", runId)).toEqual(notYours)
+			expect((await stop("guest", runId)).ok).toBe(true)
+			expect((await stop("admin", runId)).ok).toBe(true)
+		}
+		r._reset()
+	}, 60_000)
+
+	it("a stranger finds no session; a run the registry does not hold, or with no session, is not theirs", async () => {
+		const r = await runs()
+		r._reset()
+		r.start({ runId: "ap-room", userId: ids.owner, sessionId: sid(), kind: "reply" })
+		r.start({ runId: "ap-nosession", userId: ids.owner, kind: "action" })
+		expect(await stop("stranger", "ap-room")).toEqual({ ok: false, reason: "Session not found." })
+		expect(await stop("guest", "ap-nosession")).toEqual(notYours)
+		expect(await stop("guest", "ap-gone")).toEqual(notYours)
+		r._reset()
+	}, 60_000)
+
+	it("membersMayStopRun names the member clause", () => {
+		expect(membersMayStopRun({ kind: "reply" })).toBe(true)
+		expect(membersMayStopRun({ kind: "action", lineBound: true })).toBe(false)
+		expect(membersMayStopRun({ kind: "maintenance" })).toBe(false)
+	})
 })
 
 describe("actingPersonFor", () => {

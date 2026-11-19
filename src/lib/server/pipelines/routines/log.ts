@@ -17,6 +17,8 @@ import { and, desc, eq, gte, inArray, sql } from "drizzle-orm"
 import { cadenceClock, getCadence } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { isResumed, pauseOf } from "$lib/server/pipelines/routines/interaction"
+import { receiptHaltFor } from "$lib/server/pipelines/runtime/haltExplanation"
+import type { ConnectionSubject } from "$lib/server/connections/visibility"
 
 /** One line of the log. */
 export interface RoutineLogEntry {
@@ -38,11 +40,16 @@ const i18nText = (v: unknown): string | undefined => {
 	return typeof en === "string" ? en : undefined
 }
 
-/** A session's recent routine runs, newest first (at most `limit`, since `since` when given). */
+/**
+ * A session's recent routine runs, newest first (at most `limit`, since `since`
+ * when given). `reason` is shaped for `reader`: an administrator reads what is
+ * stored; anyone else reads the line's sentence for people when the record
+ * carries one, else the routine surface's plain sentence and the suggestion.
+ */
 export async function routineLog(
 	db: Db,
 	sessionId: number,
-	opts: { since?: number | null; limit?: number } = {}
+	opts: { since?: number | null; limit?: number; reader?: ConnectionSubject | null } = {}
 ): Promise<RoutineLogEntry[]> {
 	const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)))
 	const r = schema.pipelineRuns
@@ -56,7 +63,9 @@ export async function routineLog(
 			haltReason: r.haltReason,
 			startedAt: r.startedAt,
 			endedAt: r.endedAt,
-			routine: sql<Record<string, unknown> | null>`(${r.receipt}::jsonb -> 'meta' -> 'routine')`
+			routine: sql<Record<string, unknown> | null>`(${r.receipt}::jsonb -> 'meta' -> 'routine')`,
+			peopleSentence: sql<string | null>`(${r.receipt}::jsonb -> 'meta' ->> 'peopleSentence')`,
+			reviews: sql<Array<{ action: string }> | null>`(${r.receipt}::jsonb -> 'reviews')`
 		})
 		.from(r)
 		.where(
@@ -105,7 +114,22 @@ export async function routineLog(
 			pipeline: row.specSlug,
 			name: i18nText(meta.name) ?? names.get(row.specSlug) ?? row.specSlug,
 			kind,
-			...(row.haltReason ? { reason: row.haltReason } : {}),
+			...(row.haltReason
+				? {
+						reason: receiptHaltFor(
+							opts.reader,
+							"routine",
+							{
+								outcome: row.outcome as "ok" | "halt" | "err" | "cancelled",
+								nodes: [],
+								haltReason: row.haltReason,
+								...(row.reviews ? { reviews: row.reviews as never } : {}),
+								meta: row.peopleSentence ? { peopleSentence: row.peopleSentence } : {}
+							},
+							row.haltReason
+						)
+					}
+				: {}),
 			startedAt: row.startedAt.getTime(),
 			endedAt: (row.endedAt ?? row.startedAt).getTime(),
 			wrote: artifacts
@@ -129,7 +153,7 @@ export interface SessionRoutineView {
 	running: boolean
 	/** Why it does not run now, when it does not: a cap, or the app restarted and nobody has played since. */
 	paused?: string
-	/** What it needs and the session lacks: "Needs a story clock", or 🚧 (R56) "Unavailable: needs a model that can draw pictures." */
+	/** What it needs and the session lacks: 🚧 (R56) "Unavailable: needs a model that can draw pictures." Absent when nothing is missing. */
 	needs?: string
 	/** Whether the viewer may fire it by hand (R39). */
 	runNow: boolean

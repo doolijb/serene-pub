@@ -116,7 +116,7 @@ interface ElsewhereTaken {
 }
 
 type Outcome =
-	| { ok: true; messageIds: number[]; ahead: number }
+	| { ok: true; messageIds: number[]; ahead: number; stayed?: string[] }
 	| { ok: false; error: string }
 
 /** How many turns are rewound in this session — the forward stack's height. */
@@ -139,14 +139,16 @@ export async function forwardStackHeight(db: Db, sessionId: number): Promise<num
  */
 export async function rewindStateOf(db: Db, sessionId: number): Promise<RewindState> {
 	// What one press takes here, whether or not it may be pressed or even read: the words follow it.
-	const step = await backStepOf(db, sessionId).catch(() => undefined)
+	// One read set for both verdicts (Back's and Regenerate's): what neither depends on is read once.
+	const reads = turnUnitReads(db, sessionId)
+	const step = await reads.backStep().catch(() => undefined)
 	try {
 		const ahead = await forwardStackHeight(db, sessionId)
 		// 🚧 pr-6 R-k: an archived session is read-only — Back, Forward and Regenerate greyed with its sentence.
 		const archived = await sessionArchivedRefusal(db, sessionId)
 		if (archived) return { ahead, back: archived, forward: archived, regenerate: archived, ...(step ? { step } : {}) }
-		const verdict = await turnUnitOf(db, sessionId, { includePersonLines: true })
-		const redo = await turnUnitOf(db, sessionId, { includePersonLines: false })
+		const verdict = await buildTurnUnit(db, sessionId, { includePersonLines: true }, null, reads)
+		const redo = await buildTurnUnit(db, sessionId, { includePersonLines: false }, null, reads)
 		// What the title calls replies: the story lane's rows. A roll or a
 		// ledger row the turn's runs wrote elsewhere goes with Back, unsaid.
 		const replies = verdict.ok ? verdict.unit.rows.filter((r) => STORY_LANES.includes(r.channel)) : []
@@ -172,7 +174,7 @@ export async function rewindStateOf(db: Db, sessionId: number): Promise<RewindSt
 				.orderBy(asc(schema.sessionMessages.id))
 			const personaIds = lineRows.flatMap((r) => (r.personaId != null ? [r.personaId] : []))
 			const personaCards = personaIds.length
-				? await cardsNowAsSeatsRead(db, sessionId, personaIds)
+				? await reads.cards(personaIds)
 				: new Map<number, { name: string }>()
 			const onStory = lineRows
 				.filter((r) => STORY_LANES.includes(r.channel))
@@ -288,11 +290,10 @@ type ReplyRun =
 	| { kind: "none" }
 
 /** The reply run whose turn a row belongs to: not an action's, not a create run's. */
-async function replyRunOf(db: Db, messageId: number): Promise<ReplyRun> {
+async function replyRunOf(db: Db, messageId: number, published: PublishedRead): Promise<ReplyRun> {
 	const run = await turnRunOf(db, messageId)
 	if (!run) return { kind: "none" }
-	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
-	const doc = await loadPublished(db, run.specSlug).catch(() => null)
+	const doc = await published(run.specSlug)
 	if (!doc) return { kind: "none" }
 	const [action] = actionsOf(doc as { id: string; contributes?: unknown })
 	if (action) return { kind: "action", name: i18nText(action.label as I18n | undefined) || action.key }
@@ -306,11 +307,56 @@ async function backStepOf(db: Db, sessionId: number): Promise<"message" | "turn"
 	return genre?.history?.back === "message" ? "message" : "turn"
 }
 
+type PublishedRead = (slug: string) => Promise<unknown>
+
+/**
+ * What a turn unit reads that does not depend on which verdict is asked
+ * (`includePersonLines`), each read once per set. A set lives for one
+ * `rewindStateOf` / `turnUnitOf` / `turnUnitAt` call, is made on the `db` it
+ * is given, and nothing writes inside it; nothing is kept past the call.
+ */
+function turnUnitReads(db: Db, sessionId: number) {
+	const once = <V>(read: () => Promise<V>) => {
+		let p: Promise<V> | undefined
+		return () => (p ??= read())
+	}
+	const byKey = <K, V>(read: (key: K) => Promise<V>) => {
+		const m = new Map<K, Promise<V>>()
+		return (key: K) => {
+			let p = m.get(key)
+			if (!p) m.set(key, (p = read(key)))
+			return p
+		}
+	}
+	const cardsByKey = byKey((key: string) => cardsNowAsSeatsRead(db, sessionId, key.split(",").map(Number)))
+	const published: PublishedRead = byKey(async (slug: string) =>
+		(await import("$lib/server/pipelines/boot/bootstrap")).loadPublished(db, slug).catch(() => null)
+	)
+	const namingOf = byKey((s: number) => rowNaming(db, s))
+	const reads = {
+		replay: once(async () => (await import("$lib/server/pipelines/routines/moments")).replayStoryLane(db, sessionId)),
+		backStep: once(() => backStepOf(db, sessionId)),
+		historySettle: once(() => sessionHistorySettle(db, sessionId)),
+		settledLine: once(() => settledLineOf(db, sessionId)),
+		namingOf,
+		published,
+		replyRun: byKey((messageId: number) => replyRunOf(db, messageId, published)),
+		createRun: byKey((runId: number) => isCreateRun(db, runId, published)),
+		creatingRun: byKey((id: number) => creatingRunOf(db, id)),
+		turnYield: byKey((runId: number) => turnYieldOf(db, runId, { namingOf })),
+		// Keyed by the id list as passed.
+		cards: (ids: number[]) => cardsByKey(ids.join(","))
+	}
+	return reads
+}
+type TurnUnitReads = ReturnType<typeof turnUnitReads>
+
 async function buildTurnUnit(
 	db: Db,
 	sessionId: number,
 	opts: { includePersonLines: boolean },
-	at: number | null
+	at: number | null,
+	reads: TurnUnitReads = turnUnitReads(db, sessionId)
 ): Promise<TurnUnitVerdict> {
 	const m = schema.sessionMessages
 	const live = and(eq(m.sessionId, sessionId), liveMessageWhere())
@@ -319,15 +365,14 @@ async function buildTurnUnit(
 		reason: Extract<TurnUnitVerdict, { ok: false }>["reason"],
 		refusal: string
 	): TurnUnitVerdict => ({ ok: false, reason, refusal })
-	const { replayStoryLane } = await import("$lib/server/pipelines/routines/moments")
-	const { lines } = await replayStoryLane(db, sessionId)
+	const { lines } = await reads.replay()
 	const byId = new Map(lines.map((l) => [l.id, l]))
 	let storyIds: number[]
 	// The oldest row the unit may hold: runs and yields never pull an older one in.
 	let floor: number
 	let oneMessage = false
 
-	if (opts.includePersonLines && at === null && (await backStepOf(db, sessionId)) === "message") {
+	if (opts.includePersonLines && at === null && (await reads.backStep()) === "message") {
 		// One message per press (`history.back: 'message'`), and no floor: the
 		// newest live line on the story lane whatever it is, with the rows
 		// after it. A greeting takes no turn, so the replay leaves it out and
@@ -406,7 +451,7 @@ async function buildTurnUnit(
 			if (!row) return refuse("not-a-turn", NOT_A_TURN)
 			if (row.role === "user") return refuse("own-line", REWIND_REFUSALS.ownLine)
 		}
-		const reply = await replyRunOf(db, headId)
+		const reply = await reads.replyRun(headId)
 		if (reply.kind === "none") return refuse("not-a-turn", NOT_A_TURN)
 		if (reply.kind === "action")
 			return refuse("action", `The newest message came from ${reply.name}. Regenerate it from its own menu.`)
@@ -437,7 +482,7 @@ async function buildTurnUnit(
 	let opening: typeof schema.pipelineRuns.$inferSelect | null = null
 	for (const r of storyRows) {
 		if (r.role === "user") continue
-		const reply = await replyRunOf(db, r.id)
+		const reply = await reads.replyRun(r.id)
 		if (reply.kind === "run") {
 			opening = reply.run
 			break
@@ -459,12 +504,12 @@ async function buildTurnUnit(
 		add([{ runId: opening.id, runUuid: opening.runId }])
 		creators.add(opening.id)
 	}
-	for (const r of await unitRuns(db, [...ids], floor)) {
+	for (const r of await unitRuns(db, [...ids], floor, reads)) {
 		add([r])
 		if (r.created) creators.add(r.runId)
 	}
 	for (const p of planIds) {
-		const by = await creatingRunOf(db, p)
+		const by = await reads.creatingRun(p)
 		if (by && !by.isPreview) {
 			add([{ runId: by.id, runUuid: by.runId }])
 			creators.add(by.id)
@@ -478,9 +523,9 @@ async function buildTurnUnit(
 	// Under one-message Back the opening run is floored too: a run that wrote
 	// a narrator line and then the character's keeps the older one.
 	for (const runId of creators)
-		for (const row of await turnYieldOf(db, runId))
+		for (const row of await reads.turnYield(runId))
 			if ((runId === opening?.id && !oneMessage) || row.messageId >= floor) ids.add(row.messageId)
-	for (const r of await unitRuns(db, [...ids], floor)) add([r])
+	for (const r of await unitRuns(db, [...ids], floor, reads)) add([r])
 
 	// And every table row anchored to one of them.
 	const anchored = await db
@@ -512,15 +557,15 @@ async function buildTurnUnit(
 	if (!found.length) return refuse("nothing", REWIND_REFUSALS.nothing)
 	const firstId = found[0]!.id
 
-	if ((await sessionHistorySettle(db, sessionId)) === "on-write")
+	if ((await reads.historySettle()) === "on-write")
 		return refuse("every-turn-kept", REWIND_REFUSALS.everyTurnKept)
-	const line = await settledLineOf(db, sessionId)
+	const line = await reads.settledLine()
 	if (line !== null && firstId <= line) return refuse("settled", REWIND_REFUSALS.settled)
 
-	const naming = await rowNaming(db, sessionId)
+	const naming = await reads.namingOf(sessionId)
 	const characterIds = found.flatMap((r) => (r.characterId != null ? [r.characterId] : []))
 	const cardNames = characterIds.length
-		? await cardsNowAsSeatsRead(db, sessionId, characterIds)
+		? await reads.cards(characterIds)
 		: new Map<number, { name: string }>()
 	const rows: TurnYieldRow[] = found
 		.filter((r) => r.role !== "user")
@@ -558,7 +603,8 @@ const NOT_A_TURN = "The newest message did not come from a turn, so there is no 
 async function unitRuns(
 	db: Db,
 	ids: number[],
-	floor: number
+	floor: number,
+	reads: TurnUnitReads
 ): Promise<Array<{ runId: number; runUuid: string; created: boolean }>> {
 	if (!ids.length) return []
 	const rows = await db
@@ -587,20 +633,19 @@ async function unitRuns(
 	// create run wrote (a greeting, an opening line) is taken back. The row
 	// itself, and what is anchored to it, still goes by the per-row retraction.
 	const kept: Array<{ runId: number; runUuid: string; created: boolean }> = []
-	for (const run of out.values()) if (!(await isCreateRun(db, run.runId))) kept.push(run)
+	for (const run of out.values()) if (!(await reads.createRun(run.runId))) kept.push(run)
 	return kept
 }
 
 /** Is this run a create pipeline's (`taxonomy.role: 'create'`), the test `replyRunOf` makes? */
-async function isCreateRun(db: Db, runId: number): Promise<boolean> {
+async function isCreateRun(db: Db, runId: number, published: PublishedRead): Promise<boolean> {
 	const [run] = await db
 		.select({ specSlug: schema.pipelineRuns.specSlug })
 		.from(schema.pipelineRuns)
 		.where(eq(schema.pipelineRuns.id, runId))
 		.limit(1)
 	if (!run?.specSlug) return false
-	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
-	const doc = await loadPublished(db, run.specSlug).catch(() => null)
+	const doc = await published(run.specSlug)
 	return ((doc as { taxonomy?: { role?: unknown } } | null)?.taxonomy ?? {}).role === "create"
 }
 
@@ -657,6 +702,7 @@ export async function rewindTurn(
 	const { StoryClockRefusal } = await import("$lib/server/state/clockMoves")
 	let taken: { ids: number[]; ordinal: number }
 	const seatChanges: SeatChange[] = []
+	const stayed: string[] = []
 	try {
 		taken = await db.transaction(async (tx) => {
 			const t = tx as unknown as Db
@@ -694,6 +740,7 @@ export async function rewindTurn(
 				const undone = await retractStateAnchoredTo(t, id, "leaves", { leavingWith: unit.ids })
 				states.set(id, undone.taken)
 				seatChanges.push(...undone.seatChanges)
+				stayed.push(...undone.stayed)
 			}
 			const { updateLegacy } = await import("$lib/server/messages/store")
 			for (const id of unit.ids) {
@@ -736,7 +783,7 @@ export async function rewindTurn(
 		const { clearReplyFailed } = await import("$lib/server/utils/generationStatus")
 		await clearReplyFailed(opts.sessionId, id).catch(() => undefined)
 	}
-	return { ok: true, messageIds: taken.ids, ahead: taken.ordinal }
+	return { ok: true, messageIds: taken.ids, ahead: taken.ordinal, ...(stayed.length ? { stayed } : {}) }
 }
 
 /**

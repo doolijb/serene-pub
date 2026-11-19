@@ -285,6 +285,13 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 			)
 			.filter((t) => !query.sinceDate || (t.date !== null && compareDates(t.date, query.sinceDate) >= 0))
 			.map((t) => t.point)
+		// No timeline: the date is not delivered, mapped after the order and the filter above.
+		if (reading.timelineOff) {
+			const { timelessNull } = await import("$lib/server/state/storyTime")
+			timeline = timeline.map((p) =>
+				"date" in p.anchor ? { ...p, anchor: { ...p.anchor, date: timelessNull(true, p.anchor.date) } } : p
+			)
+		}
 		// A message cut in `both`: the whole timeline precedes the session.
 		if (mode === "both" && typeof query.sinceMessageId === "number") timeline = []
 	}

@@ -63,9 +63,25 @@ const shared = {
 	setupFiles: ["./vitest.setup.ts"]
 }
 
+/**
+ * 🚧 Evidence for tuning the suite: set `SERENE_PUB_TEST_REPORT` to a file path
+ * and the run also writes Vitest's json report there (per-file start and end,
+ * per-test durations) and prints the slowest imports. Unset, a run reports as
+ * it always has.
+ */
+const evidencePath = process.env.SERENE_PUB_TEST_REPORT
+const evidence = evidencePath
+	? {
+			reporters: ["default", "json"],
+			outputFile: { json: evidencePath },
+			experimental: { importDurations: { print: true, limit: 60 } }
+		}
+	: {}
+
 export default defineConfig({
 	plugins: [sveltekit()],
 	test: {
+		...evidence,
 		/**
 		 * Remove what an earlier run could not.
 		 *
@@ -77,7 +93,10 @@ export default defineConfig({
 		 * pass runs once, before any file, and only touches leftovers old
 		 * enough that no run in progress can be inside them.
 		 */
-		globalSetup: ["./scripts/testTempDirs.ts"],
+		globalSetup: [
+			"./scripts/testTempDirs.ts",
+			"./scripts/testDbTemplate.ts"
+		],
 		projects: [
 			{
 				extends: true,

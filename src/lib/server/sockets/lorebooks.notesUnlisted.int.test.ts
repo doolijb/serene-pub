@@ -23,11 +23,11 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
-	return { ...actual, db }
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
+	return testDbModule(await createTestDb())
 })
 
 beforeAll(async () => {
@@ -93,6 +93,22 @@ describe("lorebooks:sessionNotes", () => {
 		expect((byId.get(filled.notes.id) as any).sessionName).toBe(
 			"Renamed tale"
 		)
+	})
+
+	test("every row names its session in sessionId and readBy, as the page reads them", async () => {
+		const user = await mkUser()
+		const { session, notes } = await mkNotesSession(user.id)
+		const { lorebooksSessionNotesHandler } = await import(
+			"$lib/server/sockets/lorebooks"
+		)
+		const res = await (lorebooksSessionNotesHandler as any).handler(
+			socketOf(user.id),
+			{},
+			async () => {}
+		)
+		const row = res.books.find((b: any) => b.id === notes.id)
+		expect(row.sessionId).toBe(session.id)
+		expect(row.readBy).toEqual([{ id: session.id, name: session.name }])
 	})
 })
 

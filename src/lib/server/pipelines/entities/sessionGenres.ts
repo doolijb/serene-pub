@@ -16,6 +16,7 @@
  * place the shape's meaning is interpreted.
  */
 
+import { STANDARD_GENRE_ID } from "$lib/shared/sessions/standardGenre"
 import {
 	actionsOf,
 	DEFAULT_ACTION_AUDIENCE,
@@ -65,9 +66,8 @@ import {
 	storedPlayerLabel
 } from "$lib/shared/sessions/playerLabel"
 
-/** The F29 floor: always present, the default and the backfill (24 §3). */
-/** The genre a session with none is read as — **Story** since 2026-10-19 (was Chat, which is the assistant now). */
-export const STANDARD_GENRE_ID = "core:genre/story"
+/** The F29 floor: always present, the default and the backfill (24 §3). Defined once in the shared file; re-exported for existing importers. */
+export { STANDARD_GENRE_ID }
 
 /** The spellings the floor wore before 24 §3; read-compat only. */
 export const LEGACY_STANDARD_GENRE_IDS = [

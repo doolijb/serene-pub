@@ -34,13 +34,12 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 })
 let testDb: TestDb
 let dataDir: string
 
-vi.mock("$lib/server/db", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("$lib/server/db")>()
-	const { createTestDb } = await import("$lib/server/utils/testDb")
-	const db = await createTestDb()
+vi.mock("$lib/server/db", async () => {
+	const { createTestDb, testDbModule } = await import(
+		"$lib/server/utils/testDb"
+	)
 	return {
-		...actual,
-		db,
+		...testDbModule(await createTestDb()),
 		getCryptoSecretKey: () => "seat-cast-test-secret"
 	}
 })
@@ -486,12 +485,39 @@ describe("sessions:create seats a card and its cast member together", () => {
 		const p = await providedBook()
 		const mine = await card(p.admin.id, "Admin own")
 		const before = await membersOf(p.book.id)
-		const { res } = await make(
-			p.admin.id,
-			{ lorebookId: p.book.id, characterIds: [mine.id, p.plain.id] },
-			true
-		)
-		expect(res.error).toBeUndefined()
+		// A session that reads the provided book (a new session starts on a copy
+		// instead): its rows built directly, its seats written as a create writes them.
+		const [reading] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: p.admin.id,
+				isGroup: true,
+				genreId: PLAIN,
+				lorebookId: p.book.id,
+				name: "S"
+			})
+			.returning()
+		const { insertOwnBook } = await import("$lib/server/lorebooks/ownBook")
+		await insertOwnBook(testDb as unknown as Db, {
+			sessionId: reading.id,
+			userId: p.admin.id,
+			name: reading.name,
+			overlayOf: p.book.id,
+			primaryRuleset: reading.primaryRuleset,
+			rulesetVersion: reading.rulesetVersion ?? null
+		})
+		const { seatCast } = await import("$lib/server/sessions/seats")
+		for (const [position, cardId] of [mine.id, p.plain.id].entries()) {
+			const seat = await seatCast(testDb as unknown as Db, {
+				sessionId: reading.id,
+				cardId,
+				position,
+				secondCard: "allow",
+				seatedBy: p.admin.id
+			})
+			expect(seat.ok).toBe(true)
+		}
+		const res = { session: { id: reading.id } }
 		expect(await membersOf(p.book.id)).toHaveLength(before.length)
 		const seats = await characterSeats(res.session.id)
 		const seatOf = (cardId: number) =>

@@ -39,7 +39,8 @@ const overview = (castLiftCount: number) => ({
 	pipelines: {
 		published: 1,
 		enabled: 1,
-		runs24h: { ok: 0, failed: 0, total: 0 }
+		runs24h: { ok: 0, failed: 0, total: 0 },
+		stepTimeLimitsOff: false
 	},
 	network: {
 		tunnelAvailable: true,

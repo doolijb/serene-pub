@@ -17,6 +17,7 @@
 import { and, desc, eq, sql } from "drizzle-orm"
 import type { AuthorsNoteV1, AuthorsNoteValueV1 } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { writeGenreFields } from "$lib/server/sessions/settingsWrite"
 import {
 	STANDARD_GENRE_ID,
 	genreFieldsFor,
@@ -160,22 +161,12 @@ export async function writeSessionAuthorsNote(
 		throw new AuthorsNoteRefusal("This kind of session has no author's note.")
 	const note = readAuthorsNoteValue(value)
 	if (!note) throw new AuthorsNoteRefusal("The author's note was not readable.")
-	const { changed, genreFields } = await db.transaction(async (tx) => {
-		const [current] = await tx
-			.select({ genreFields: schema.sessions.genreFields })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-			.limit(1)
-		const stored = (current?.genreFields ?? {}) as Record<string, unknown>
-		const before = readAuthorsNoteValue(stored.authorsNote)
-		if (JSON.stringify(before) === JSON.stringify(note))
-			return { changed: false, genreFields: stored }
-		const next = { ...stored, authorsNote: note }
-		await tx
-			.update(schema.sessions)
-			.set({ genreFields: next, updatedAt: new Date() })
-			.where(eq(schema.sessions.id, sessionId))
-		return { changed: true, genreFields: next }
-	})
-	return { answer: await readSessionAuthorsNote(db, sessionId, userId), changed, genreFields }
+	const { written, genreFields } = await db.transaction((tx) =>
+		writeGenreFields(tx, sessionId, (cur) => {
+			const before = readAuthorsNoteValue(cur.authorsNote)
+			if (JSON.stringify(before) === JSON.stringify(note)) return null
+			return { ...cur, authorsNote: note }
+		})
+	)
+	return { answer: await readSessionAuthorsNote(db, sessionId, userId), changed: written, genreFields }
 }

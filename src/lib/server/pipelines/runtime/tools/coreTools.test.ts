@@ -102,6 +102,28 @@ describe("search_entries", () => {
 		await expect(getEntry.run({ id: 5 }, ctx as any)).rejects.toBeInstanceOf(ToolError)
 	})
 
+	it("asks the host for what the speaking card knows: knownToSpeaker and the run's card", async () => {
+		const asked: any[] = []
+		const ctx = {
+			sessionId: 1,
+			currentCharacterId: 7,
+			async read(table: string, query: any) {
+				asked.push({ table, query })
+				return table === "lorebook_entries" ? ENTRIES : []
+			}
+		}
+		await searchEntries.run({ query: "vell" }, ctx as any)
+		await getEntry.run({ id: 1 }, ctx as any)
+		await readSummary.run({ kind: "world" }, ctx as any)
+		const lore = asked.filter((a) => a.table === "lorebook_entries")
+		expect(lore).toHaveLength(3)
+		for (const a of lore)
+			expect(a.query).toMatchObject({
+				knownToSpeaker: true,
+				currentCharacterId: 7
+			})
+	})
+
 	it("reads a key list as one line of keys", async () => {
 		const ctx = {
 			sessionId: 1,

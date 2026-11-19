@@ -27,6 +27,8 @@ import { eq } from "drizzle-orm"
 import { sessionEvents, type DeletionAskedPayload } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
+import { receiptHaltFor } from "$lib/server/pipelines/runtime/haltExplanation"
+import type { ConnectionSubject } from "$lib/server/connections/visibility"
 
 /** The sentence when nothing in the session deletes a message — member copy. */
 export const DELETION_OFF =
@@ -71,6 +73,8 @@ export async function askDeletion(
 		messageId: number
 		userId: number
 		io?: SessionIo
+		/** Who is told why a deletion refused (`socket.user`): an administrator reads the reason itself. */
+		reader?: ConnectionSubject | null
 		timeoutMs?: number
 	}
 ): Promise<DeletionOutcome> {
@@ -151,15 +155,21 @@ export async function askDeletion(
 	if (!dispatched) return { deleted: false, refused: DELETION_OFF }
 	if (dispatched.refused) return { deleted: false, refused: dispatched.refused, runId }
 	if (dispatched.paused) return { deleted: false, refused: "The deletion is waiting for the session's owner.", runId }
-	return { deleted: false, refused: refusalSentence(dispatched.receipt), runId }
+	return { deleted: false, refused: refusalSentence(dispatched.receipt, ask.reader), runId }
 }
 
-/** Why a finished deletion run left the message, as the person reads it. */
-function refusalSentence(receipt: import("@serene-pub/sdk").Receipt | undefined): string {
+/**
+ * Why a finished deletion run left the message, as `reader` reads it: a
+ * refusal marked for people as written, an administrator the reason, anyone
+ * else the deletion's plain sentence and the suggestion.
+ */
+function refusalSentence(
+	receipt: import("@serene-pub/sdk").Receipt | undefined,
+	reader: ConnectionSubject | null | undefined
+): string {
 	if (!receipt) return NOT_DELETED
 	if (receipt.outcome === "cancelled") return "The deletion was stopped, so the message was not deleted."
 	const failed = receipt.nodes?.find((n) => n.result !== "ok" && n.reason)
-	const raw = receipt.haltReason ?? failed?.reason ?? ""
-	// A host refusal names the node it was raised at (`delete: …`).
-	return raw.replace(/^[a-z][\w-]*: /i, "").trim() || NOT_DELETED
+	const raw = (receipt.haltReason ?? failed?.reason ?? "").trim()
+	return receiptHaltFor(reader, "delete", receipt, raw || NOT_DELETED)
 }

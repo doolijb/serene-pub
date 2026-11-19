@@ -169,6 +169,55 @@ describe("earlierScenesOf", () => {
 		expect(undated.openedStoryClock).toBeNull()
 	}, 60_000)
 
+	it("timeless: a lorebook that keeps no timeline gives no opened clock, whatever is stored; switched on again it is back", async () => {
+		const session = await makeSession()
+		await addScene(session.id, 10, {
+			name: "Stale",
+			openedStoryClockYear: 412,
+			openedStoryClockMonth: 3,
+			openedStoryClockDay: 5
+		})
+		await testDb
+			.update(schema.lorebooks)
+			.set({ timelineEnabled: false })
+			.where(eq(schema.lorebooks.id, session.lorebookId))
+		const [off] = await read(session.id)
+		expect(off.openedStoryClock).toBeNull()
+		await testDb
+			.update(schema.lorebooks)
+			.set({ timelineEnabled: true })
+			.where(eq(schema.lorebooks.id, session.lorebookId))
+		const [on] = await read(session.id)
+		expect(on.openedStoryClock).toMatchObject({ year: 412, month: 3, day: 5 })
+	}, 60_000)
+
+	it("timeless: a compiled scene is back with its own summary and no date; switched on again it is out (its day arrives as history)", async () => {
+		const session = await makeSession()
+		const [day] = await testDb
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.lorebookId, session.lorebookId))
+			.limit(1)
+		const open = await addScene(session.id, 10, { name: "Open" })
+		const compiled = await addScene(session.id, 20, {
+			name: "Compiled",
+			historyEntryId: day.id,
+			openedStoryClockYear: 5
+		})
+		const setTimeline = (timelineEnabled: boolean) =>
+			testDb
+				.update(schema.lorebooks)
+				.set({ timelineEnabled })
+				.where(eq(schema.lorebooks.id, session.lorebookId))
+		expect((await read(session.id)).map((x) => x.sceneId)).toEqual([open.id])
+		await setTimeline(false)
+		const off = await read(session.id)
+		expect(off.map((x) => x.sceneId)).toEqual([open.id, compiled.id])
+		expect(off[1]).toMatchObject({ summary: "Summary from 20.", openedStoryClock: null })
+		await setTimeline(true)
+		expect((await read(session.id)).map((x) => x.sceneId)).toEqual([open.id])
+	}, 60_000)
+
 	it("shows a default name as numbered on its lane, not as stored", async () => {
 		const session = await makeSession()
 		await addScene(session.id, 10, { name: "Scene 7", nameIsDefault: true })

@@ -25,6 +25,8 @@
  * run's signal and a pulse that does nothing — exactly the old behaviour.
  */
 import type { CallHandles } from "@serene-pub/sdk"
+import { eq } from "drizzle-orm"
+import * as schema from "$lib/server/db/schema"
 
 /**
  * How often an in-flight request says it is alive. Well inside the shortest
@@ -97,5 +99,23 @@ export function tether(
 				clearInterval(beat)
 			}
 		}
+	}
+}
+
+/**
+ * 🚧 Whether the diagnostic switch *Turn off step time limits* is on (Admin › Diagnostics; lane dbg-1, owner
+ * 2026-11-15). The one function every caller uses: nobody reads the column themselves. Read once as a run starts and
+ * passed to the executor as `stepTimeLimitsOff`. A missing row or a failed read is `false` (limits on); never throws.
+ */
+export async function stepTimeLimitsOff(db: Db): Promise<boolean> {
+	try {
+		const [settings] = await db
+			.select({ off: schema.systemSettings.stepTimeLimitsOff })
+			.from(schema.systemSettings)
+			.where(eq(schema.systemSettings.id, 1))
+			.limit(1)
+		return settings?.off === true
+	} catch {
+		return false
 	}
 }

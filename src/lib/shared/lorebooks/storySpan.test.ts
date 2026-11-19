@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { StoryCalendar } from "@serene-pub/sdk"
 import { storyDateDeltaOf } from "./storySpan"
+import { compareDates, type StoryClock } from "./storyDate"
 
 const odd: StoryCalendar = {
 	months: [
@@ -190,4 +191,73 @@ describe("storyDateDeltaOf", () => {
 			storyDateDeltaOf({} as { year: number }, { year: 1 }, null)
 		).toBeNull()
 	})
+
+	it("a date the calendar cannot place is read free-form, for the whole delta", () => {
+		// Day 200 of a four-month calendar does not land.
+		expect(
+			storyDateDeltaOf(
+				{ year: 412, month: 1, day: 200 },
+				{ year: 412, month: 2, day: 1 },
+				odd
+			)
+		).toEqual({ sign: -1, year: 0, month: 0, day: null, time: null })
+	})
+})
+
+describe("storyDateDeltaOf, over a spread of dates", () => {
+	const twelve: StoryCalendar = {
+		months: Array.from({ length: 12 }, (_, i) => ({ name: `T${i + 1}`, days: 30 }))
+	}
+	const calendars: Array<[string, StoryCalendar | null]> = [
+		["free-form", null],
+		["four months, leap", { ...odd, leap: { every: 4, month: 3 } }],
+		["twelve months", twelve]
+	]
+	const dates: StoryClock[] = []
+	for (const year of [411, 412]) {
+		dates.push({ year })
+		for (const month of [1, 3, 4, 13]) {
+			dates.push({ year, month })
+			for (const day of [1, 20, 31, 200]) {
+				dates.push({ year, month, day })
+				for (const [hour, minute] of [
+					[0, 0],
+					[23, 59]
+				])
+					dates.push({ year, month, day, hour, minute })
+			}
+		}
+	}
+	// A date at mixed precision against a finer one is covered by the pairs.
+
+	for (const [label, calendar] of calendars)
+		it(`never has a negative part, and its sign is the order (${label})`, () => {
+			let checked = 0
+			for (const a of dates)
+				for (const b of dates) {
+					const delta = storyDateDeltaOf(a, b, calendar)!
+					const at = `${JSON.stringify(a)} -> ${JSON.stringify(b)}`
+					for (const part of [
+						delta.year,
+						delta.month,
+						delta.day,
+						delta.time?.hour ?? null,
+						delta.time?.minute ?? null
+					])
+						expect(part === null || part >= 0, at).toBe(true)
+					const monthed = a.month != null && b.month != null
+					const dayed = monthed && a.day != null && b.day != null
+					const timed = dayed && a.hour != null && b.hour != null
+					const cut = (d: StoryClock): StoryClock => ({
+						year: d.year,
+						month: monthed ? d.month : null,
+						day: dayed ? d.day : null,
+						hour: timed ? d.hour : null,
+						minute: timed ? (d.minute ?? 0) : null
+					})
+					expect(delta.sign, at).toBe(Math.sign(compareDates(cut(a), cut(b))))
+					checked++
+				}
+			expect(checked).toBe(dates.length * dates.length)
+		})
 })

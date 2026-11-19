@@ -27,7 +27,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, asc, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -634,6 +634,11 @@ describe("the Lair, rewritten: a walk", () => {
 		const { createHost } = await import("$lib/server/pipelines/runtime/host")
 		const host = createHost(db as any, { sessionId, userId: ownerId })
 		const node = { key: "change", definitionId: "core:outlet/update-lore-entry" } as any
+		// A new session now starts at today's date; this case is the undated one, so clear the clock.
+		await db
+			.update(schema.sessions)
+			.set({ storyClockYear: null, storyClockMonth: null, storyClockDay: null, storyClockHour: null, storyClockMinute: null })
+			.where(eq(schema.sessions.id, sessionId))
 		const out: any = await host.commit!({ entry: "The Vault", content: "A treasury, its seal broken.", fields: { category: "Vaults" } }, node)
 		expect(out.entryId).toBe(rooms["The Vault"])
 		// Under Full, an undated session's change to an existing entry is written in place in the lorebook, imprinted.
@@ -664,6 +669,48 @@ describe("the Lair, rewritten: a walk", () => {
 		// `null` clears a field.
 		await host.commit!({ entry: rooms["The Vault"], fields: { category: null } }, node)
 		expect((await readVault()).category ?? null).toBeNull()
+	})
+
+	test("update-lore-entry@1 on a new session writes a dated version at that session's own story day, the base row untouched", async () => {
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const walkSessionId = sessionId
+		try {
+			await startOn(lorebookId, "core-lair-default", "The dated walk")
+			const host = createHost(db as any, { sessionId, userId: ownerId })
+			const node = { key: "change", definitionId: "core:outlet/update-lore-entry" } as any
+			const [s] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId))
+			expect(s!.storyClockYear).not.toBeNull()
+			const [before] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, rooms["The Vault"]!))
+			const out: any = await host.commit!({ entry: "The Vault", content: "A treasury, dated." }, node)
+			expect(out.entryId).toBe(rooms["The Vault"])
+			const [after] = await db.select().from(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, rooms["The Vault"]!))
+			expect(after!.content).toBe(before!.content)
+			const versions = await db
+				.select()
+				.from(schema.entryAmendments)
+				.where(
+					and(
+						eq(schema.entryAmendments.lorebookId, lorebookId),
+						eq(schema.entryAmendments.entryId, rooms["The Vault"]!),
+						isNull(schema.entryAmendments.base)
+					)
+				)
+			expect(versions).toHaveLength(1)
+			expect(versions[0]).toMatchObject({
+				year: s!.storyClockYear,
+				month: s!.storyClockMonth,
+				day: s!.storyClockDay,
+				fields: { content: "A treasury, dated." }
+			})
+			const { sessionReadingOf } = await import("$lib/server/state/reading")
+			const { entryOverlaysFor, entryAt } = await import("$lib/server/state/entriesOnReading")
+			const { toEntryRow } = await import("$lib/server/utils/lorebookEntries")
+			const reading = (await sessionReadingOf(db as any, sessionId))!
+			const overlays = await entryOverlaysFor(db as any, after!.lorebookId, reading, [after!.id])
+			expect((entryAt(toEntryRow(after!), overlays, reading) as any).content).toBe("A treasury, dated.")
+		} finally {
+			sessionId = walkSessionId
+		}
 	})
 
 	test("Regenerate the last turn takes the roll forms and the dice with it", async () => {

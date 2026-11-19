@@ -13,13 +13,14 @@
  *
  * The output is a **proposal**, and nothing here writes.
  *
- * 🚧 **Not wired yet.** The plan is for it to pre-fill the Review & Save screen
- * with its evidence visible, a person accepting, editing or dropping each row
- * before anything is written (PLAN-scene-cast-and-suggestions §2, §3, §5.1).
- * Today NOTHING calls it outside its tests: `scenes:process` still takes its
- * cast from the summarize pipeline's LLM `extract-cast` node (`scenes.ts`, the
- * `cast` node output). Wiring it is its own piece of work — an SDK node type,
- * surfacing the evidence, and icing the LLM step — not a one-line swap.
+ * 🚧 **Core's live compiler calls it** (`scenes/liveScenes.ts`
+ * `readCastProposal`) and keeps the **sender** tier for a scene's stored cast,
+ * plus a member a narrator line's **speech-tag** evidence names
+ * (`narratorTagged`), minus those their place rules out (`castSpeakersOf`):
+ * the roster tier and a vocative or a plain mention make no stored
+ * participant there. Their evidence stays computed here for the words a
+ * review shows ("named twice").
+ * A genre or plugin may compile a scene's cast differently.
  *
  * ## Two tiers that fail in opposite directions
  *

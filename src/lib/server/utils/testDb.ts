@@ -1,6 +1,8 @@
 /**
  * Test-only helper — not used by the running app. Spins up a fresh
- * in-memory PGlite database with the real Drizzle migrations applied, for
+ * in-memory PGlite database with the real Drizzle migrations applied (built
+ * once per run by replaying them, then loaded as a copy of that result;
+ * `migratedTestDb` replays them itself), for
  * integration tests that need to exercise actual DB-backed handler logic
  * (uuid dedup, conflict resolution, cascading restores) rather than mocking
  * $lib/server/db out entirely, which the codebase's other `*.int.test.ts`
@@ -11,17 +13,32 @@ import { PGlite } from "@electric-sql/pglite"
 import { and, eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 import { migrate } from "drizzle-orm/pglite/migrator"
+import { createHash } from "crypto"
 import os from "os"
 import path from "path"
 import fsp from "fs/promises"
+import { inject, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
 import { guardTransactions } from "$lib/server/db/transactionGuard"
 import { driverErrorOf } from "$lib/server/db/errors"
+import { compareVersions } from "$lib/shared/utils/releaseChannel"
+
+declare module "vitest" {
+	export interface ProvidedContext {
+		/** Where this run's test database template lives; set by `scripts/testDbTemplate.ts`. */
+		testDbTemplateDir: string
+	}
+}
 
 export type TestDb = ReturnType<typeof drizzle<typeof schema, PGlite>>
 
-/** Call once per test file (eg. in beforeAll) — migrations take real time (PGlite WASM startup). */
-export async function createTestDb(opts?: {
+/**
+ * 🚧 A test database built by replaying every migration, never from the
+ * template. For a test that must see the migrations run (and the seed steps
+ * after them) rather than their result; `createTestDb` calls it to build the
+ * template and for the options that change the seed.
+ */
+export async function migratedTestDb(opts?: {
 	/**
 	 * Leave `pipeline_definition_registry` empty.
 	 *
@@ -105,6 +122,126 @@ export async function createTestDb(opts?: {
 		await syncDefinitionRegistry(db, allEntryTypes(), { release: "test" })
 	}
 
+	return db
+}
+
+type TemplateFs = typeof import("node:fs")
+
+let templateKey: string | undefined
+
+/**
+ * What the template was built from: the migration journal and every migration
+ * file, the two seed modules' sources, and each linked SDK package's version
+ * and built entry file (size and modified time, which a rebuild moves). A
+ * different key is a different file name, so a template is never read for
+ * inputs it was not built from — in watch mode too, where one run's directory
+ * outlives an `sdk:build`.
+ */
+function templateFileKey(fs: TemplateFs): string {
+	if (templateKey) return templateKey
+	const hash = createHash("sha256")
+	const root = path.resolve(process.cwd(), "drizzle")
+	hash.update(fs.readFileSync(path.join(root, "meta/_journal.json")))
+	for (const name of fs
+		.readdirSync(root)
+		.filter((n) => n.endsWith(".sql"))
+		.sort())
+		hash.update(name).update(fs.readFileSync(path.join(root, name)))
+	for (const pkg of ["sdk", "contracts", "core-catalog"]) {
+		const file = path.resolve(
+			process.cwd(),
+			"node_modules/@serene-pub",
+			pkg,
+			"package.json"
+		)
+		const manifest = JSON.parse(fs.readFileSync(file, "utf8"))
+		hash.update(String(manifest.version))
+		const entry = path.resolve(path.dirname(file), String(manifest.main ?? "dist/index.js"))
+		const built = fs.statSync(entry, { throwIfNoEntry: false })
+		hash.update(built ? `${built.size}:${built.mtimeMs}` : "unbuilt")
+	}
+	for (const source of [
+		"src/lib/server/db/seedCompletionTemplates.ts",
+		"src/lib/server/pipelines/boot/registrySync.ts"
+	])
+		hash.update(source).update(fs.readFileSync(path.resolve(process.cwd(), source)))
+	return (templateKey = hash.digest("hex"))
+}
+
+/** This run's template directory, when the run provides one. */
+function providedTemplateDir(): string | undefined {
+	try {
+		return inject("testDbTemplateDir")
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * The imports the migrated build performs, without its database work:
+ * importing the catalog registers its definitions in the SDK registry, which a
+ * test may rely on `createTestDb` having done.
+ */
+async function importSeedModules(): Promise<void> {
+	await import("$lib/server/db/seedCompletionTemplates")
+	await import("$lib/server/pipelines/boot/registrySync")
+	await import("@serene-pub/sdk")
+	await import("@serene-pub/core-catalog")
+}
+
+/** Whether this test file replaced a function the seed calls. */
+async function seedIsMocked(): Promise<boolean> {
+	const sdk = await import("@serene-pub/sdk")
+	const registry = await import("$lib/server/pipelines/boot/registrySync")
+	const templates = await import("$lib/server/db/seedCompletionTemplates")
+	return (
+		vi.isMockFunction(sdk.allEntryTypes) ||
+		vi.isMockFunction(registry.syncDefinitionRegistry) ||
+		vi.isMockFunction(templates.seedCompletionTemplates)
+	)
+}
+
+/**
+ * Call once per test file (eg. in beforeAll).
+ *
+ * The database comes from a template: the first call of a run replays every
+ * migration (`migratedTestDb`) and writes the result into the run's template
+ * directory (`scripts/testDbTemplate.ts`); every later call, in any worker,
+ * loads that file. The same database either way. Without a provided directory
+ * (a config that does not run the global setup) or with `skipEntryTypes` (the
+ * template holds the entry types) it is `migratedTestDb`.
+ */
+export async function createTestDb(opts?: {
+	/** Leave `pipeline_definition_registry` empty; see `migratedTestDb`. */
+	skipEntryTypes?: boolean
+}): Promise<TestDb> {
+	const dir = providedTemplateDir()
+	if (opts?.skipEntryTypes || !dir) return migratedTestDb(opts)
+	// Through the builtin, so a test that mocks `fs` cannot break set-up.
+	const fs = process.getBuiltinModule("fs")
+	const file = path.join(dir, `${templateFileKey(fs)}.tar`)
+	if (fs.existsSync(file)) {
+		const client = new PGlite({
+			loadDataDir: new Blob([fs.readFileSync(file)])
+		})
+		await client.waitReady
+		guardTransactions(client, "throw")
+		const db = drizzle(client, { schema })
+		await importSeedModules()
+		return db
+	}
+	const db = await migratedTestDb(opts)
+	// A file that mocks what the seed reads builds its own database and shares
+	// none of it: every other file's template must come from the real modules.
+	if (await seedIsMocked()) return db
+	// A checkpoint first: without one the copy replays the log on load, and replay
+	// moves every sequence on to the value the log reserved ahead of it.
+	await db.$client.query("CHECKPOINT")
+	const dump = await db.$client.dumpDataDir("none")
+	const partial = `${file}.${process.pid}.tmp`
+	fs.writeFileSync(partial, Buffer.from(await dump.arrayBuffer()))
+	// A rename, so a reader never sees a partial file; racing writers write the same bytes.
+	fs.renameSync(partial, file)
 	return db
 }
 
@@ -364,13 +501,29 @@ export async function createTestUser(db: TestDb, username?: string) {
 }
 
 /**
+ * 🚧 The `$lib/server/db` module surface around a test's own database, for
+ * `vi.mock("$lib/server/db", …)`. Never loads the real module: importing it
+ * opens, migrates and seeds a second database on disk.
+ */
+export function testDbModule(db?: TestDb) {
+	return {
+		db,
+		schema,
+		dbReady: Promise.resolve(),
+		closeDatabase: async () => {},
+		getCryptoSecretKey: () => "test-crypto-secret-key",
+		compareVersions
+	}
+}
+
+/**
  * Tear down a temp data directory a test pointed `SERENE_PUB_DATA_DIR` at.
  *
  * ⚠ Only call this from a file that has already loaded `$lib/server/db` — every
- * caller mocks it with `importOriginal`, so the dynamic import below resolves to
- * that file's own mock. From a file that never touched the module it would
- * *open* the real database in the directory being deleted, which is the
- * opposite of the point.
+ * caller mocks it (`testDbModule`, or the real module for a data-directory
+ * test), so the dynamic import below resolves to that file's own module. From
+ * a file that never touched the module it would *open* the real database in
+ * the directory being deleted, which is the opposite of the point.
  *
  * Why it exists: the real module runs a lock heartbeat that writes `meta.json`
  * every four seconds. Deleting the directory under a live timer meant the file

@@ -606,6 +606,7 @@
 						scope={variable.scope as TemplateScope}
 						{engine}
 						{readonly}
+						variableLayout
 						rows={16}
 						label="Source"
 						oninput={(v) => (source = v)}

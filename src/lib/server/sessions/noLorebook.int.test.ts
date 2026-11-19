@@ -45,6 +45,7 @@ async function world() {
 		userId: user.id,
 		name: session.name,
 		overlayOf: null,
+		timelineEnabled: true, // states its timeline
 		primaryRuleset: session.primaryRuleset,
 		rulesetVersion: session.rulesetVersion ?? null
 	})

@@ -38,10 +38,16 @@ function picture(): string {
 const imageCalls: any[] = []
 /** The fake pair's pictures per call: 1 loops, more packs a batch. */
 let perCall = 1
+/** Set to make the fake server refuse the next call. */
+let failImage = false
 class FakeImageAdapter {
 	constructor(public connection: any) {}
 	async generateImage(req: any, opts?: any) {
 		imageCalls.push(req)
+		if (failImage) {
+			failImage = false
+			throw new Error("http://image.internal refused the request")
+		}
 		// What a queued backend says of itself (the Horde: a position, a wait).
 		opts?.onProgress?.({
 			stage: "queued",
@@ -368,6 +374,55 @@ describe("the dialog's preview", () => {
 		await running
 		expect(reports.some((r) => r.message === "In the Horde's queue at position 3")).toBe(true)
 		expect(reports.at(-1)).toMatchObject({ phase: "done" })
+	})
+
+	test("a failed run tells its presser by what they are: marked refusals as written, anything else the reason for an administrator and the plain sentence for the rest", async () => {
+		const { runPortrait } = await import("./portrait")
+		const { pendingReviewsFor, resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const { ADMINISTRATOR_SUGGESTION } = await import("$lib/server/utils/administratorSuggestion")
+		const press = async (userId: number, isAdmin: boolean, runId: string) => {
+			const reports: any[] = []
+			const running = runPortrait(db, {
+				characterId,
+				count: 1,
+				userId,
+				reader: { isAdmin },
+				runId,
+				report: (p) => reports.push(p)
+			})
+			for (let i = 0; i < 400; i++) {
+				const [card] = pendingReviewsFor(userId)
+				if (card) {
+					resolveReview(card.id, userId, "approve")
+					break
+				}
+				await new Promise((r) => setTimeout(r, 25))
+			}
+			await running
+			return reports.at(-1)
+		}
+		// A picture refusal (picture ownership) is a sentence for people.
+		const marked = [
+			await press(strangerId, false, "portrait-marked-member"),
+			await press(strangerId, true, "portrait-marked-admin")
+		]
+		for (const last of marked) {
+			expect(last).toMatchObject({ phase: "failed" })
+			expect(last.error).not.toContain(ADMINISTRATOR_SUGGESTION)
+			expect(last.error).toMatch(/only the card's owner or an admin can add pictures/)
+		}
+		expect(marked[0].error).toBe(marked[1].error)
+		// Anything else: the reason is an administrator's.
+		failImage = true
+		const member = await press(ownerId, false, "portrait-unmarked-member")
+		expect(member).toMatchObject({ phase: "failed" })
+		expect(member.error).toBe(`The action could not finish. ${ADMINISTRATOR_SUGGESTION}`)
+		failImage = true
+		const admin = await press(ownerId, true, "portrait-unmarked-admin")
+		expect(admin.error).toContain("refused the request")
+		expect(admin.error).not.toContain(ADMINISTRATOR_SUGGESTION)
 	})
 
 	test("a card with no likeness is refused — preview and run — not drawn from the tail alone", async () => {

@@ -122,8 +122,9 @@ function readableBookSql(
 }
 
 /**
- * S: the own books (notes) of the sessions the asker owns or is a guest of —
- * the membership `ownBookAccessFor` checks — as one set predicate.
+ * S: the own books (notes) of the sessions the asker owns — the access
+ * `ownBookAccessFor` gives (a guest has none: owner ruling G2, 2026-11-16) —
+ * as one set predicate.
  */
 function storyBookSql(col: SQL | unknown, askerId: number): SQL {
 	const L = schema.lorebooks
@@ -132,8 +133,6 @@ function storyBookSql(col: SQL | unknown, askerId: number): SQL {
 		WHERE ${L.sessionId} IS NOT NULL AND ${shownLorebook()}
 		AND ${L.sessionId} IN (
 			SELECT ${schema.sessions.id} FROM ${schema.sessions} WHERE ${schema.sessions.userId} = ${askerId}
-			UNION
-			SELECT ${schema.sessionGuests.sessionId} FROM ${schema.sessionGuests} WHERE ${schema.sessionGuests.userId} = ${askerId}
 		)
 	)`
 }

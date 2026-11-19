@@ -69,6 +69,8 @@
 		manager: SurfaceManager
 		sessionId: number | null
 		session?: unknown
+		/** False while the session's book keeps no timeline: the conversation draws no story date. */
+		storyDates?: boolean
 		/**
 		 * The session's action venues — the one source, threaded to EVERY
 		 * widget mount here (the conversation's own host, every `Panel`) so
@@ -93,6 +95,7 @@
 		manager,
 		sessionId,
 		session,
+		storyDates = true,
 		actions,
 		actionDispatch,
 		onFrameAction
@@ -214,6 +217,7 @@
 				props={{ widgetId: id, title: r.title }}
 				settings={r.settings}
 				reads={mount.reads}
+				{storyDates}
 				{placement}
 				source={manager}
 				{actions}
@@ -238,6 +242,7 @@
 				{manager}
 				{sessionId}
 				{session}
+				{storyDates}
 				{placement}
 				chrome="zone"
 				hideHeader={bare || p.role === "primary"}

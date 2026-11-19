@@ -72,6 +72,7 @@ let dataDir: string
 let sessionId: number
 let userId: number
 let speakerCharacterId: number
+let bookId: number
 
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
@@ -91,6 +92,7 @@ beforeAll(async () => {
 		.insert(schema.lorebooks)
 		.values({ userId, name: "Ashfall" })
 		.returning()
+	bookId = book.id
 	const [session] = await db
 		.insert(schema.sessions)
 		.values({ userId, isGroup: true, lorebookId: book.id })
@@ -517,5 +519,32 @@ describe("a session clock after the dated changes (year 12)", () => {
 		expect(await loreLinks()).toEqual([
 			["Warden Ashe", "watches over", "The gate"]
 		])
+	})
+})
+
+describe("the lorebook's timeline switched off, a clock and dated history still stored (lane tl-2e)", () => {
+	let text = ""
+	let onText = ""
+	beforeAll(async () => {
+		await setClock(12)
+		onText = await prompt()
+		await db.update(schema.lorebooks).set({ timelineEnabled: false }).where(eq(schema.lorebooks.id, bookId))
+		text = await prompt()
+	})
+	afterAll(async () => {
+		await db.update(schema.lorebooks).set({ timelineEnabled: true }).where(eq(schema.lorebooks.id, bookId))
+	})
+
+	it("the session is told no date: not its stale clock, not the newest history entry", () => {
+		expect(text).not.toMatch(/current date in the story/i)
+	})
+
+	it("history entries are left out of the prompt while the timeline is off, and dated again when it is on", () => {
+		expect(text).not.toContain("Story history:")
+		expect(text).not.toContain("The bridge fell.")
+		// The control: the same world with its timeline on sends them, dated.
+		expect(historyBlock(onText)).toMatch(/"date":"[^"]/)
+		expect(onText).toContain("The bridge fell.")
+		expect(onText).toContain("The current date in the story is 12.")
 	})
 })

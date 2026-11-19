@@ -2434,9 +2434,32 @@ async function whoFor(
 	const personas = links.cast
 		.filter((c) => c.isPersona)
 		.sort((a, b) => a.position - b.position)
-	// The session owner voices the first persona seated; a guest's own persona
-	// is `who.user`, which is why the two are separate keys rather than one.
-	const owner = memberFormOn() ? entryOfLink(personas[0]) : entry(personas[0]?.characterId)
+	// The session owner voices their own persona (the seat they are the person
+	// of); with none, the first persona seated that names nobody. A guest's
+	// persona is `who.user`, which is why the two are separate keys rather
+	// than one.
+	let ownerLink: CastMemberLink | undefined
+	if (session && personas.length) {
+		const own = await personaOf(db, sessionId, session.userId, personas)
+		ownerLink = personas.find((p) => p.characterId === own)
+		if (!ownerLink) {
+			const named = new Set(
+				(
+					await db
+						.select({ id: schema.sessionPersonas.personaId })
+						.from(schema.sessionPersonas)
+						.where(
+							and(
+								eq(schema.sessionPersonas.sessionId, sessionId),
+								isNull(schema.sessionPersonas.userId)
+							)
+						)
+				).map((r) => r.id)
+			)
+			ownerLink = personas.find((p) => named.has(p.characterId))
+		}
+	}
+	const owner = memberFormOn() ? entryOfLink(ownerLink) : entry(ownerLink?.characterId)
 	if (owner) who.owner = owner
 	const asking = opts.userId
 		? await personaOf(db, sessionId, opts.userId, personas)
@@ -2468,11 +2491,11 @@ async function whoFor(
 }
 
 /**
- * Which persona an asking user is voicing in this session.
- *
- * A persona belongs to an account (`characters.user_id`), so "the guest's own
- * persona" is a join and not a guess. Absent when they have none seated, which
- * is the ordinary case for a spectator.
+ * Which persona an asking user is voicing in this session: the first of
+ * `personas`, in their order, whose seat here has the asker as its person —
+ * the seat's `user_id`, or on a row from before that column the card's owner.
+ * Absent when they have none seated, which is the ordinary case for a
+ * spectator.
  */
 async function personaOf(
 	db: Db,
@@ -2482,14 +2505,25 @@ async function personaOf(
 ): Promise<number | undefined> {
 	if (!personas.length) return undefined
 	const rows = await db
-		.select({ id: schema.characters.id })
-		.from(schema.characters)
+		.select({ id: schema.sessionPersonas.personaId })
+		.from(schema.sessionPersonas)
+		.innerJoin(
+			schema.characters,
+			eq(schema.characters.id, schema.sessionPersonas.personaId)
+		)
 		.where(
 			and(
-				eq(schema.characters.userId, userId),
+				eq(schema.sessionPersonas.sessionId, sessionId),
 				inArray(
-					schema.characters.id,
+					schema.sessionPersonas.personaId,
 					personas.map((p) => p.characterId)
+				),
+				or(
+					eq(schema.sessionPersonas.userId, userId),
+					and(
+						isNull(schema.sessionPersonas.userId),
+						eq(schema.characters.userId, userId)
+					)
 				)
 			)
 		)

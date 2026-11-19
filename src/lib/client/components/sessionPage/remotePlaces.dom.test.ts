@@ -21,6 +21,9 @@ const CORE_CATALOG = BUILT.replace(/\/dist\/components\/places\.js$/, "")
 const DECL = CORE_WIDGETS.find((w) => w.id === "places")!
 
 const VIEWER: ViewerV1 = { userId: 10, isAdmin: false, isGuest: false }
+const GUEST: ViewerV1 = { userId: 11, isAdmin: false, isGuest: true }
+/** An administrator in someone else's session: the host fills `isGuest` from the session's owner, so they are a guest. */
+const ADMIN_GUEST: ViewerV1 = { userId: 1, isAdmin: true, isGuest: true }
 const LOC = "core:slot/location@1"
 
 const ANSWER: SessionPlacesV1 = {
@@ -144,6 +147,7 @@ async function mountPlaces(
 		settings?: Record<string, unknown>
 		state?: SessionStateV1
 		refuse?: Record<string, string>
+		viewer?: ViewerV1
 		grants?: ("lore" | "session:state")[]
 	} = {}
 ) {
@@ -158,7 +162,7 @@ async function mountPlaces(
 		...(o.grants ? { grants: o.grants } : {}),
 		context: {
 			settings: o.settings ?? {},
-			viewer: VIEWER,
+			viewer: o.viewer ?? VIEWER,
 			scoped: { session_state: o.state ?? STATE }
 		},
 		requests: (kind, params) => {
@@ -263,6 +267,54 @@ describe("core's remote Places", () => {
 				kind: "open-lore",
 				params: { lorebookId: 4, scope: "places", entryId: 3 }
 			})
+		}
+	)
+
+	test(
+		"a guest (an administrator in another's session too) reads the places as text: no Open in lorebook, no Open entry",
+		{ timeout: 120_000 },
+		async () => {
+			for (const viewer of [GUEST, ADMIN_GUEST]) {
+				const list = await mountPlaces({ viewer })
+				const rows = list.view.queryAll(part("row"))
+				expect(rows).toHaveLength(3)
+				expect(
+					rows.map((r) => text(r.querySelector(part("name")))).sort()
+				).toEqual(["The Crypt", "The Drowned Hall", "The Guardroom"])
+				for (const open of list.view.queryAll(part("row-open")))
+					expect(open.tagName).not.toBe("BUTTON")
+				expect(list.view.query("button[title='Open in lorebook']")).toBeNull()
+				expect(list.asked.map((a) => a.kind)).not.toContain("open-lore")
+
+				const map = await mountPlaces({ viewer, settings: { view: "map" } })
+				const node = map.view.query(
+					'[data-widget-part~="map-canvas.node"][data-node-id="place:3"]'
+				)!
+				await map.view.click(node)
+				await map.view.settle()
+				expect(map.view.query(part("open"))).toBeNull()
+				expect(text(map.view.query(part("detail")))).toMatch(/The Crypt/)
+				expect(map.view.errors).toEqual([])
+			}
+		}
+	)
+
+	test(
+		"the owner sees the openers: a row's button and the detail's Open entry",
+		{ timeout: 120_000 },
+		async () => {
+			const list = await mountPlaces()
+			expect(
+				list.view.queryAll(`button${part("row-open")}`)
+			).toHaveLength(3)
+			const map = await mountPlaces({ settings: { view: "map" } })
+			await map.view.click(
+				map.view.query(
+					'[data-widget-part~="map-canvas.node"][data-node-id="place:3"]'
+				)!
+			)
+			await map.view.settle()
+			expect(map.view.query(part("open"))).not.toBeNull()
 		}
 	)
 

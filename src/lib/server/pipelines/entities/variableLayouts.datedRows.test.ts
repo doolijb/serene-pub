@@ -16,6 +16,7 @@ import {
 } from "./variableLayouts"
 import { LIQUID_LAYOUTS } from "$lib/server/pipelines/prompt/liquidParity.fixtures"
 import { storyDateValueOf } from "$lib/shared/lorebooks/storyDate"
+import { storyDateDeltaOf } from "$lib/shared/lorebooks/storySpan"
 
 const HISTORY = "core:var/history@1"
 const CURRENT_DATE = "core:var/current-date@1"
@@ -98,6 +99,53 @@ describe("the Current date layout", () => {
 	})
 })
 
+describe("the Current date layout for a date the calendar cannot place", () => {
+	const calendar: StoryCalendar = {
+		months: [
+			{ name: "Thaw", days: 30 },
+			{ name: "Bloom", days: 31 }
+		],
+		yearLabel: "Year"
+	}
+	const cases: Array<[string, any, string]> = [
+		["without a clock", { year: 412, month: 13, day: 5 }, "Year 412, Mo. 13, Day 5"],
+		[
+			"with a clock",
+			{ year: 412, month: 13, day: 5, hour: 22, minute: 30 },
+			"Year 412, Mo. 13, Day 5, 22:30"
+		]
+	]
+	for (const [label, time, expected] of cases)
+		it(`prints formatStoryTime's fallback ${label}, in both engines and the floor`, async () => {
+			expect(formatStoryTime(time, calendar)).toBe(expected)
+			const value = storyDateValueOf(time, calendar)
+			expect(
+				await through(CURRENT_DATE, "currentDate", row("currentDate").source, value)
+			).toBe(expected)
+			expect(row("currentDate").codeDefault(value)).toBe(expected)
+			expect(
+				await through(
+					CURRENT_DATE,
+					"currentDate",
+					LIQUID_LAYOUTS["currentDate/content"]!,
+					value,
+					CORE_LIQUID_ENGINE
+				)
+			).toBe(expected)
+		})
+
+	it("a free-form date and a landing date print as they did", async () => {
+		const free = storyDateValueOf({ year: 412, month: 3, day: 5 }, null)
+		expect(
+			await through(CURRENT_DATE, "currentDate", row("currentDate").source, free)
+		).toBe("412-03-05")
+		const landing = { year: 412, month: 2, day: 5 }
+		expect(
+			row("currentDate").codeDefault(storyDateValueOf(landing, calendar))
+		).toBe(formatStoryTime(landing, calendar))
+	})
+})
+
 describe("the History layout", () => {
 	const rows = [
 		{
@@ -108,19 +156,85 @@ describe("the History layout", () => {
 		{ date: date(412, 1), dateDelta: null, content: "Earlier." }
 	]
 
-	it("keys a row by its date and its delta, and the bare date without one", async () => {
+	it("prints a list of row objects, the delta only on a row that has one", async () => {
 		const out = await through(HISTORY, "history", row("history").source, rows)
 		expect(out).toBe(
-			'{"412-03-03 (-0y 0m 2d)":"Two days back.","412-01":"Earlier."}'
+			'[{"date":"412-03-03","dateDelta":"-0y 0m 2d","content":"Two days back."},{"date":"412-01","content":"Earlier."}]'
 		)
 		expect(row("history").codeDefault(rows)).toBe(out)
+		expect(
+			await through(
+				HISTORY,
+				"history",
+				LIQUID_LAYOUTS["history/content"]!,
+				rows,
+				CORE_LIQUID_ENGINE
+			)
+		).toBe(out)
 	})
 
-	it("keeps two rows on one date as two keys", async () => {
-		const twice = [rows[1]!, { ...rows[1]!, content: "Again." }]
+	it("keeps two rows on one date as two objects, in the value's order", async () => {
+		const twice = [
+			{ ...rows[1]!, content: "Again." },
+			rows[1]!
+		]
+		const out = await through(HISTORY, "history", row("history").source, twice)
+		expect(JSON.parse(out)).toEqual([
+			{ date: "412-01", content: "Again." },
+			{ date: "412-01", content: "Earlier." }
+		])
+		expect(row("history").codeDefault(twice)).toBe(out)
+	})
+
+	it("a row with no date prints an empty date, in every engine and the floor", async () => {
+		const undated = [{ date: null, dateDelta: null, content: "Whenever." }]
+		const out = await through(HISTORY, "history", row("history").source, undated)
+		expect(out).toBe('[{"date":"","content":"Whenever."}]')
+		expect(row("history").codeDefault(undated)).toBe(out)
 		expect(
-			await through(HISTORY, "history", row("history").source, twice)
-		).toBe('{"412-01":"Earlier.","412-01":"Again."}')
+			await through(
+				HISTORY,
+				"history",
+				LIQUID_LAYOUTS["history/content"]!,
+				undated,
+				CORE_LIQUID_ENGINE
+			)
+		).toBe(out)
+	})
+
+	it("a calendar name holding a quote and a backslash prints valid JSON, in both engines and the floor", async () => {
+		const calendar: StoryCalendar = {
+			months: [
+				{ name: 'Th"aw\\', days: 30 },
+				{ name: "Bloom", days: 31 }
+			],
+			yearLabel: 'Yr"\\'
+		}
+		const now = { year: 412, month: 2, day: 5 }
+		const at = { year: 412, month: 1, day: 3 }
+		const value = [
+			{
+				date: storyDateValueOf(at, calendar),
+				dateDelta: storyDateDeltaOf(at, now, calendar),
+				content: 'He said "no".'
+			}
+		]
+		const hbs = await through(HISTORY, "history", row("history").source, value)
+		const liquid = await through(
+			HISTORY,
+			"history",
+			LIQUID_LAYOUTS["history/content"]!,
+			value,
+			CORE_LIQUID_ENGINE
+		)
+		const floor = row("history").codeDefault(value)
+		expect(liquid).toBe(hbs)
+		expect(floor).toBe(hbs)
+		const parsed = JSON.parse(hbs)
+		expect(parsed).toHaveLength(1)
+		expect(parsed[0].date).toBe(formatStoryTime(at, calendar))
+		expect(parsed[0].date).toContain('Th"aw\\')
+		expect(parsed[0].content).toBe('He said "no".')
 	})
 
 	it("prints the same date text through the helper and the filter", async () => {
@@ -237,7 +351,7 @@ describe("the Story calendar layout", () => {
 })
 
 describe("the render-time scope guard", () => {
-	it("writes a flat string out as written and reports it, never through the layout", async () => {
+	it("prints nothing for a flat string handed to History, and the receipt says so", async () => {
 		const lines: string[] = []
 		const out = await through(
 			HISTORY,
@@ -247,13 +361,40 @@ describe("the render-time scope guard", () => {
 			CORE_TEMPLATE_ENGINE,
 			(l) => lines.push(l)
 		)
-		expect(out).toBe("a flat string")
+		expect(out).toBe("")
 		expect(lines).toHaveLength(1)
 		expect(lines[0]).toContain("layout: 'history' (core:var/history@1)")
 		expect(lines[0]).toContain("a string where its variable declares a list")
+		expect(lines[0]).toContain(
+			"nothing was printed, because its plain default could not render it either"
+		)
+		expect(lines[0]).toContain("should hand down the declared shape")
 	})
 
-	it("writes an object handed where a list is declared as minified JSON", async () => {
+	it("prints the variable's floor, heading included, for a value the floor can render, and says so", async () => {
+		const lines: string[] = []
+		const out = await renderVariable(
+			{
+				scenario: {
+					variableId: "core:var/scenario@1",
+					engine: CORE_TEMPLATE_ENGINE,
+					source: "never used"
+				}
+			},
+			"scenario",
+			42,
+			undefined,
+			(l) => lines.push(l)
+		)
+		expect(out).toBe('Scenario:\n"""\n42\n"""')
+		expect(lines).toHaveLength(1)
+		expect(lines[0]).toContain("a number where its variable declares a string")
+		expect(lines[0]).toContain(
+			"it was rendered with its plain default instead of its layout"
+		)
+	})
+
+	it("an object handed where a list is declared prints nothing from History's floor", async () => {
 		const lines: string[] = []
 		const out = await through(
 			HISTORY,
@@ -263,8 +404,29 @@ describe("the render-time scope guard", () => {
 			CORE_TEMPLATE_ENGINE,
 			(l) => lines.push(l)
 		)
-		expect(out).toBe('{"412-03":"keyed"}')
+		expect(out).toBe("")
 		expect(lines[0]).toContain("an object where its variable declares a list")
+		expect(lines[0]).toContain("nothing was printed")
+	})
+
+	it("a plugin variable's floor is minified JSON, and the receipt says so", async () => {
+		defineVariable({
+			id: "acme:var/stringy@1",
+			scope: { stringy: { type: "string" } },
+			sample: "x"
+		} as never)
+		const lines: string[] = []
+		const out = await through(
+			"acme:var/stringy@1",
+			"stringy",
+			"<{{{stringy}}}>",
+			{ a: 1 },
+			CORE_TEMPLATE_ENGINE,
+			(l) => lines.push(l)
+		)
+		expect(out).toBe('{"a":1}')
+		expect(lines[0]).toContain("an object where its variable declares a string")
+		expect(lines[0]).toContain("rendered with its plain default")
 	})
 
 	it("reports nothing for a correctly shaped value", async () => {
